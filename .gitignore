@@ -1,0 +1,113 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+pip-wheel-metadata/
+.eggs/
+build/
+dist/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+virtualenv/
+.virtualenv/
+
+# Node / React / Vite
+node_modules/
+.vite/
+.turbo/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+.eslintcache
+
+# Frontend build output
+apps/web/dist/
+apps/web/build/
+dist/
+build/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/
+!.yarn/releases/
+!.yarn/plugins/
+!.yarn/sdks/
+!.yarn/versions/
+
+# Docker and local service volumes
+postgres-data/
+pgadmin-data/
+n8n-data/
+pgdata/
+database/postgres-data/
+database/pgadmin-data/
+database/n8n-data/
+infra/postgres-data/
+infra/pgadmin-data/
+postgres-data*/
+pgadmin-data*/
+n8n-data*/
+docker/volumes/
+volumes/
+
+# Local database and backup files
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+
+# Logs and runtime files
+logs/
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
