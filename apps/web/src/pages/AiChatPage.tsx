@@ -15,6 +15,11 @@ type ChatMessage = {
   actionTaken?: string;
 };
 
+type ChatHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 type AskAIResponse = {
   ai_reply: string;
   action_taken: string;
@@ -23,6 +28,12 @@ type AskAIResponse = {
 };
 
 const actionableIntents = new Set(["production_entry", "sales_entry", "expense_entry"]);
+const chatMessagesStorageKey = "ai-erp-chat-messages";
+const welcomeMessage: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  text: "Tell me production, sales, or expense updates in natural language. I will post the entry and refresh the factory dashboard."
+};
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -42,13 +53,7 @@ function getSessionId() {
 }
 
 export default function AiChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "Tell me production, sales, or expense updates in natural language. I will post the entry and refresh the factory dashboard."
-    }
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredMessages());
   const [inputValue, setInputValue] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const { triggerDataRefresh } = useDataRefresh();
@@ -59,6 +64,10 @@ export default function AiChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, isThinking]);
 
+  useEffect(() => {
+    window.localStorage.setItem(chatMessagesStorageKey, JSON.stringify(messages));
+  }, [messages]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -66,6 +75,8 @@ export default function AiChatPage() {
     if (!messageText || isThinking) {
       return;
     }
+
+    const chatHistory = toChatHistory(messages).slice(-10);
 
     setInputValue("");
     setMessages((currentMessages) => [
@@ -81,7 +92,8 @@ export default function AiChatPage() {
     try {
       const response = await api.post<AskAIResponse>("/ask-ai", {
         message: messageText,
-        session_id: sessionId
+        session_id: sessionId,
+        chat_history: chatHistory
       });
 
       const aiResponse = response.data;
@@ -170,6 +182,34 @@ export default function AiChatPage() {
       </form>
     </div>
   );
+}
+
+function loadStoredMessages() {
+  const storedMessages = window.localStorage.getItem(chatMessagesStorageKey);
+  if (!storedMessages) {
+    return [welcomeMessage];
+  }
+
+  try {
+    const parsedMessages = JSON.parse(storedMessages) as ChatMessage[];
+    if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) {
+      return [welcomeMessage];
+    }
+    return parsedMessages;
+  } catch {
+    return [welcomeMessage];
+  }
+}
+
+function toChatHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
+  return messages
+    .filter((message): message is ChatMessage & { role: "user" | "assistant" } => (
+      (message.role === "user" || message.role === "assistant") && message.id !== "welcome"
+    ))
+    .map((message) => ({
+      role: message.role,
+      content: message.text
+    }));
 }
 
 function ChatBubble({ message }: { message: ChatMessage }) {

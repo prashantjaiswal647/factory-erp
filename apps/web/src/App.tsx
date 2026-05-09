@@ -4,12 +4,14 @@ import Layout from "./components/Layout";
 import PrivateRoute from "./components/PrivateRoute";
 import { useAuth } from "./context/AuthContext";
 import AiChatPage from "./pages/AiChatPage";
+import CalculatorPage from "./pages/CalculatorPage";
 import CustomersPage from "./pages/CustomersPage";
-import CustomerStorefrontPage from "./pages/CustomerStorefrontPage";
 import DashboardPage from "./pages/DashboardPage";
 import InventoryPage from "./pages/InventoryPage";
 import LoginPage from "./pages/LoginPage";
+import OnboardingPage from "./pages/OnboardingPage";
 import ProductionPage from "./pages/ProductionPage";
+import StorefrontPage from "./pages/StorefrontPage";
 import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
 
 function RoleLanding() {
@@ -26,8 +28,10 @@ export default function App() {
   return (
     <Routes>
       <Route path="login" element={<LoginPage />} />
-      <Route path="store/:storeToken" element={<CustomerStorefrontPage />} />
+      <Route path="store/:storeToken" element={<StorefrontPage />} />
       <Route path="store/:storeToken/success" element={<StorefrontSuccessPage />} />
+      <Route path="storefront/:storeToken" element={<StorefrontPage />} />
+      <Route path="storefront/:storeToken/success" element={<StorefrontSuccessPage />} />
       <Route
         element={
           <PrivateRoute>
@@ -50,6 +54,22 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner"]}>
               <CustomersPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="onboarding"
+          element={
+            <PrivateRoute allowedRoles={["Owner"]}>
+              <OnboardingPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="calculator"
+          element={
+            <PrivateRoute allowedRoles={["Owner"]}>
+              <CalculatorPage />
             </PrivateRoute>
           }
         />

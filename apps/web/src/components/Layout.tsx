@@ -1,4 +1,4 @@
-import { Bot, Boxes, Factory, Gauge, LogOut, Menu, Search, UsersRound, X } from "lucide-react";
+import { Bot, Boxes, Calculator, ClipboardList, Factory, Gauge, LogOut, Menu, Search, UsersRound, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
@@ -7,9 +7,11 @@ import { useAuth } from "../context/AuthContext";
 const navigation = [
   { label: "Dashboard", href: "/", icon: Gauge, roles: ["Owner"] },
   { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner"] },
+  { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner"] },
+  { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner"] },
   { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Operator"] },
   { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner"] },
-  { label: "AI Supervisor", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Operator"] }
+  { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Operator"] }
 ];
 
 export default function Layout() {
