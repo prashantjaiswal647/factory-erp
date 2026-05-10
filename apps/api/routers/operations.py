@@ -87,7 +87,14 @@ def create_daily_production(
             .first()
         )
         if blank_stock is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blank stock not found")
+            blank_stock = BlankStock(
+                factory_id=factory_id,
+                blank_size_ml=product_size_ml,
+                linked_bottom_size_mm=machine.bottom_size_mm,
+                total_qty_kg=Decimal("0.000"),
+            )
+            db.add(blank_stock)
+            db.flush()
 
         bottom_stock = (
             db.query(BottomStock)
@@ -97,14 +104,16 @@ def create_daily_production(
             .first()
         )
         if bottom_stock is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bottom stock not found")
+            bottom_stock = BottomStock(
+                factory_id=factory_id,
+                bottom_size_mm=machine.bottom_size_mm,
+                total_qty_kg=Decimal("0.000"),
+            )
+            db.add(bottom_stock)
+            db.flush()
 
         blank_after = to_qty(blank_stock.total_qty_kg) - to_qty(payload.blank_used_kg)
         bottom_after = to_qty(bottom_stock.total_qty_kg) - to_qty(payload.bottom_used_kg)
-        if blank_after < 0:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Insufficient blank stock")
-        if bottom_after < 0:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Insufficient bottom stock")
 
         final_stock = (
             db.query(FinalProductStock)
@@ -142,11 +151,15 @@ def create_daily_production(
             .first()
         )
         if box_stock is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Box stock not found")
+            box_stock = BoxStock(
+                factory_id=factory_id,
+                packaging_size_name=payload.packaging_size_name.strip(),
+                total_boxes=0,
+            )
+            db.add(box_stock)
+            db.flush()
 
         box_stock_after = (box_stock.total_boxes or 0) - boxes_packed_this_entry
-        if box_stock_after < 0:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Insufficient box stock")
 
         blank_stock.total_qty_kg = blank_after
         bottom_stock.total_qty_kg = bottom_after

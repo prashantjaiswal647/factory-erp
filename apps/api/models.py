@@ -661,7 +661,6 @@ class BlankStock(TenantMixin, Base):
         UniqueConstraint("factory_id", "blank_size_ml", name="uq_blank_stock_factory_size"),
         CheckConstraint("blank_size_ml > 0", name="ck_blank_stock_size_positive"),
         CheckConstraint("linked_bottom_size_mm > 0", name="ck_blank_stock_bottom_size_positive"),
-        CheckConstraint("total_qty_kg >= 0", name="ck_blank_stock_qty_non_negative"),
     )
 
 
@@ -676,7 +675,6 @@ class BottomStock(TenantMixin, Base):
     __table_args__ = (
         UniqueConstraint("factory_id", "bottom_size_mm", name="uq_bottom_stock_factory_size"),
         CheckConstraint("bottom_size_mm > 0", name="ck_bottom_stock_size_positive"),
-        CheckConstraint("total_qty_kg >= 0", name="ck_bottom_stock_qty_non_negative"),
     )
 
 
@@ -690,7 +688,6 @@ class BoxStock(TenantMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("factory_id", "packaging_size_name", name="uq_box_stock_factory_size"),
-        CheckConstraint("total_boxes >= 0", name="ck_box_stock_total_non_negative"),
     )
 
 

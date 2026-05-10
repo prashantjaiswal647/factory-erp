@@ -9,10 +9,14 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_owner
 from db import get_db
 from models import (
+    BlankStock,
+    BottomStock,
+    BoxStock,
     CostingMaster,
     Customer,
     Employee,
     Factory,
+    FinalProductStock,
     FinishedGoodsStock,
     Inventory,
     Machine,
@@ -41,7 +45,9 @@ from schemas import (
     Step3RawMaterialMetricItem,
     Step3Request,
     Step3Response,
+    WorkerCreate,
     WorkerPayload,
+    WorkerResponse,
 )
 
 
@@ -86,6 +92,27 @@ def onboarding_step1(
         factory_id=factory.id,
         factory_name=factory.name,
     )
+
+
+@router.post("/step1/workers", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED)
+def onboarding_step1_create_worker(
+    payload: WorkerCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    worker = Worker(
+        factory_id=current_user.factory_id,
+        name=payload.name.strip(),
+        daily_wages=payload.daily_wages,
+        duty_hours=payload.duty_hours,
+        daily_salary=payload.daily_wages,
+        salary=payload.daily_wages,
+        shift_hours=payload.duty_hours,
+    )
+    db.add(worker)
+    db.commit()
+    db.refresh(worker)
+    return worker
 
 
 # =============================================================================
@@ -166,6 +193,37 @@ def onboarding_step3_materials(
 
         metric.weight_per_sack_kg = item.weight_per_sack_kg
         metric.pieces_per_sack = item.pieces_per_sack
+        if item.material_type == "Blank":
+            stock = (
+                db.query(BlankStock)
+                .filter(BlankStock.factory_id == factory_id)
+                .filter(BlankStock.blank_size_ml == item.size_ml_or_mm)
+                .first()
+            )
+            if stock is None:
+                db.add(
+                    BlankStock(
+                        factory_id=factory_id,
+                        blank_size_ml=item.size_ml_or_mm,
+                        linked_bottom_size_mm=item.size_ml_or_mm,
+                        total_qty_kg=Decimal("0.000"),
+                    )
+                )
+        elif item.material_type == "Bottom":
+            stock = (
+                db.query(BottomStock)
+                .filter(BottomStock.factory_id == factory_id)
+                .filter(BottomStock.bottom_size_mm == item.size_ml_or_mm)
+                .first()
+            )
+            if stock is None:
+                db.add(
+                    BottomStock(
+                        factory_id=factory_id,
+                        bottom_size_mm=item.size_ml_or_mm,
+                        total_qty_kg=Decimal("0.000"),
+                    )
+                )
         raw_saved += 1
 
     pack_saved = 0
@@ -185,6 +243,40 @@ def onboarding_step3_materials(
 
         metric.kg_per_box = item.kg_per_box
         metric.cups_per_box = item.cups_per_box
+        packaging_size_name = f"{item.cup_size_ml}ml Standard Box"
+        box_stock = (
+            db.query(BoxStock)
+            .filter(BoxStock.factory_id == factory_id)
+            .filter(sql_func.lower(BoxStock.packaging_size_name) == packaging_size_name.lower())
+            .first()
+        )
+        if box_stock is None:
+            db.add(
+                BoxStock(
+                    factory_id=factory_id,
+                    packaging_size_name=packaging_size_name,
+                    total_boxes=0,
+                )
+            )
+
+        final_stock = (
+            db.query(FinalProductStock)
+            .filter(FinalProductStock.factory_id == factory_id)
+            .filter(FinalProductStock.product_size_ml == item.cup_size_ml)
+            .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
+            .first()
+        )
+        if final_stock is None:
+            db.add(
+                FinalProductStock(
+                    factory_id=factory_id,
+                    product_size_ml=item.cup_size_ml,
+                    packaging_size_name=packaging_size_name,
+                    total_boxes=0,
+                    loose_packets=0,
+                    packets_per_box_limit=item.cups_per_box,
+                )
+            )
         pack_saved += 1
 
     db.commit()

@@ -1093,6 +1093,9 @@ def ensure_runtime_schema():
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         ),
+        "ALTER TABLE blank_stock DROP CONSTRAINT IF EXISTS ck_blank_stock_qty_non_negative",
+        "ALTER TABLE bottom_stock DROP CONSTRAINT IF EXISTS ck_bottom_stock_qty_non_negative",
+        "ALTER TABLE box_stock DROP CONSTRAINT IF EXISTS ck_box_stock_total_non_negative",
     ]
     default_factory_id_sql = f"(SELECT id FROM factories WHERE name = '{default_factory_name}')"
     for table_name in tenant_tables:
