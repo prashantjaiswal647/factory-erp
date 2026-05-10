@@ -1,213 +1,297 @@
+import json
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
+from ai_agent import initialize_groq_llm
+from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
-from models import (
-    CostingMaster,
-    CostingOutputMaster,
-    FactorySettings,
-    Machine,
-    MaterialYield,
-    PackagingMetrics,
-    RawMaterialMetrics,
-    User,
-)
-from schemas import CalculateCostRequest, CalculateCostResponse, DailyCapacityResponse
+from models import DailyProduction, FinalProductStock, User
 
 
 router = APIRouter(prefix="/api/calculator", tags=["calculator"])
 
-WASTAGE_FACTOR = Decimal("1.02")
 MONEY_QUANT = Decimal("0.01")
 PIECE_QUANT = Decimal("0.0001")
 
 
-def to_money(value) -> Decimal:
-    return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+def money(value: Decimal) -> Decimal:
+    return Decimal(value).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
 
-def to_piece(value) -> Decimal:
-    return Decimal(str(value or 0)).quantize(PIECE_QUANT, rounding=ROUND_HALF_UP)
+def piece(value: Decimal) -> Decimal:
+    return Decimal(value).quantize(PIECE_QUANT, rounding=ROUND_HALF_UP)
 
 
-# =============================================================================
-# LEGACY PROFIT CALCULATOR (Backward Compatible)
-# =============================================================================
+def resolve_box_cost(
+    direct_value: Optional[Decimal],
+    per_piece_value: Optional[Decimal],
+    pieces_per_box: int,
+    label: str,
+) -> Decimal:
+    if direct_value is not None:
+        return money(direct_value)
+    if per_piece_value is not None:
+        return money(per_piece_value * Decimal(pieces_per_box))
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Provide either {label}_price_per_box or {label}_cost_per_piece",
+    )
 
-class ProfitCalculatorRequest:
-    pass
+
+class IdealCostRequest(BaseModel):
+    blank_size_ml: int = Field(..., gt=0)
+    pieces_per_box: int = Field(default=1000, gt=0)
+    yield_pieces_per_kg_blank: Decimal = Field(..., gt=0)
+    blank_price_per_kg: Decimal = Field(..., ge=0)
+    bottom_price_per_kg: Optional[Decimal] = Field(default=None, ge=0)
+    bottom_yield_pieces_per_kg: Optional[Decimal] = Field(default=None, gt=0)
+    direct_bottom_cost_per_cup: Optional[Decimal] = Field(default=None, ge=0)
+    daily_labor_cost: Decimal = Field(..., ge=0)
+    expected_daily_production_pieces: Decimal = Field(..., gt=0)
+    packaging_box_price: Optional[Decimal] = Field(default=None, ge=0)
+    packaging_cost_per_piece: Optional[Decimal] = Field(default=None, ge=0)
+    plastic_price_per_box: Optional[Decimal] = Field(default=None, ge=0)
+    plastic_price_per_piece: Optional[Decimal] = Field(default=None, ge=0)
+    electricity_flat_cost_per_box: Optional[Decimal] = Field(default=None, ge=0)
+    electricity_cost_per_piece: Optional[Decimal] = Field(default=None, ge=0)
+    desired_profit_per_box: Decimal = Field(..., ge=0)
 
 
-@router.post("/profit")
-def calculate_profit_legacy():
-    # Placeholder to avoid breaking imports; actual legacy endpoint is in main.py
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Use /api/calculator/calculate-cost")
+class IdealCostResponse(BaseModel):
+    blank_size_ml: int
+    pieces_per_box: int
+    per_piece_blank_cost: Decimal
+    per_piece_bottom_cost: Decimal
+    labor_cost_per_piece: Decimal
+    total_raw_cost_per_box: Decimal
+    packaging_box_price: Decimal
+    plastic_price_per_box: Decimal
+    electricity_flat_cost_per_box: Decimal
+    final_cost_per_box: Decimal
+    desired_profit_per_box: Decimal
+    suggested_selling_price: Decimal
+    profit_margin_percent: Decimal
+    breakdown: Dict[str, Decimal]
 
 
-# =============================================================================
-# LEVEL 4 — MASTER COSTING CALCULATOR
-# =============================================================================
+class ComparisonRow(BaseModel):
+    metric: str
+    ideal_value: str
+    actual_value: str
+    difference: str
 
-@router.post("/calculate-cost", response_model=CalculateCostResponse)
-def calculate_cost(
-    payload: CalculateCostRequest,
-    current_user: User = Depends(get_current_user),
+
+class AiCompareRequest(BaseModel):
+    ideal_calculation_results: Dict[str, Any]
+    actual_monthly_data: Optional[Dict[str, Any]] = None
+
+
+class AiCompareResponse(BaseModel):
+    ai_insights: str
+    comparison_table_data: List[ComparisonRow]
+    actual_monthly_data: Dict[str, Any]
+
+
+@router.post("/ideal-cost", response_model=IdealCostResponse)
+def calculate_ideal_cost(
+    payload: IdealCostRequest,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+):
+    per_piece_blank_cost = piece(payload.blank_price_per_kg / payload.yield_pieces_per_kg_blank)
+    if payload.direct_bottom_cost_per_cup is not None:
+        per_piece_bottom_cost = piece(payload.direct_bottom_cost_per_cup)
+    else:
+        if payload.bottom_price_per_kg is None or payload.bottom_yield_pieces_per_kg is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Provide either direct_bottom_cost_per_cup or both bottom_price_per_kg and bottom_yield_pieces_per_kg",
+            )
+        per_piece_bottom_cost = piece(payload.bottom_price_per_kg / payload.bottom_yield_pieces_per_kg)
+    packaging_box_price = resolve_box_cost(
+        direct_value=payload.packaging_box_price,
+        per_piece_value=payload.packaging_cost_per_piece,
+        pieces_per_box=payload.pieces_per_box,
+        label="packaging",
+    )
+    plastic_price_per_box = resolve_box_cost(
+        direct_value=payload.plastic_price_per_box,
+        per_piece_value=payload.plastic_price_per_piece,
+        pieces_per_box=payload.pieces_per_box,
+        label="plastic",
+    )
+    electricity_cost_per_box = resolve_box_cost(
+        direct_value=payload.electricity_flat_cost_per_box,
+        per_piece_value=payload.electricity_cost_per_piece,
+        pieces_per_box=payload.pieces_per_box,
+        label="electricity",
+    )
+    labor_cost_per_piece = piece(payload.daily_labor_cost / payload.expected_daily_production_pieces)
+    total_raw_cost_per_box = money(
+        (per_piece_blank_cost + per_piece_bottom_cost + labor_cost_per_piece)
+        * Decimal(payload.pieces_per_box)
+    )
+    final_cost_per_box = money(
+        total_raw_cost_per_box
+        + packaging_box_price
+        + plastic_price_per_box
+        + electricity_cost_per_box
+    )
+    suggested_selling_price = money(final_cost_per_box + payload.desired_profit_per_box)
+    profit_margin_percent = Decimal("0.00")
+    if suggested_selling_price > 0:
+        profit_margin_percent = money((payload.desired_profit_per_box / suggested_selling_price) * Decimal("100"))
+
+    return IdealCostResponse(
+        blank_size_ml=payload.blank_size_ml,
+        pieces_per_box=payload.pieces_per_box,
+        per_piece_blank_cost=per_piece_blank_cost,
+        per_piece_bottom_cost=per_piece_bottom_cost,
+        labor_cost_per_piece=labor_cost_per_piece,
+        total_raw_cost_per_box=total_raw_cost_per_box,
+        packaging_box_price=money(packaging_box_price),
+        plastic_price_per_box=money(plastic_price_per_box),
+        electricity_flat_cost_per_box=money(electricity_cost_per_box),
+        final_cost_per_box=final_cost_per_box,
+        desired_profit_per_box=money(payload.desired_profit_per_box),
+        suggested_selling_price=suggested_selling_price,
+        profit_margin_percent=profit_margin_percent,
+        breakdown={
+            "blank_cost_per_box": money(per_piece_blank_cost * Decimal(payload.pieces_per_box)),
+            "bottom_cost_per_box": money(per_piece_bottom_cost * Decimal(payload.pieces_per_box)),
+            "labor_cost_per_box": money(labor_cost_per_piece * Decimal(payload.pieces_per_box)),
+            "packaging_box_price": money(packaging_box_price),
+            "plastic_price_per_box": money(plastic_price_per_box),
+            "electricity_flat_cost_per_box": money(electricity_cost_per_box),
+        },
+    )
+
+
+@router.post("/ai-compare", response_model=AiCompareResponse)
+def compare_ideal_vs_actual(
+    payload: AiCompareRequest,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_id = current_user.factory_id
-
-    blank_metric = (
-        db.query(RawMaterialMetrics)
-        .filter(RawMaterialMetrics.factory_id == factory_id)
-        .filter(RawMaterialMetrics.id == payload.blank_metric_id)
-        .first()
-    )
-    if blank_metric is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blank metric not found")
-
-    bottom_metric = (
-        db.query(RawMaterialMetrics)
-        .filter(RawMaterialMetrics.factory_id == factory_id)
-        .filter(RawMaterialMetrics.id == payload.bottom_metric_id)
-        .first()
-    )
-    if bottom_metric is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bottom metric not found")
-
-    packaging_metric = (
-        db.query(PackagingMetrics)
-        .filter(PackagingMetrics.factory_id == factory_id)
-        .filter(PackagingMetrics.id == payload.packaging_metric_id)
-        .first()
-    )
-    if packaging_metric is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Packaging metric not found")
-
-    costing = db.query(CostingMaster).filter(CostingMaster.factory_id == factory_id).first()
-    if costing is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Costing master is not configured for this factory",
-        )
-
-    # ----- Cost Calculations -----
-    blank_weight_per_piece = Decimal(blank_metric.weight_per_sack_kg) / Decimal(blank_metric.pieces_per_sack)
-    bottom_weight_per_piece = Decimal(bottom_metric.weight_per_sack_kg) / Decimal(bottom_metric.pieces_per_sack)
-
-    blank_cost_per_piece = to_money(Decimal(costing.paper_price_per_kg) * blank_weight_per_piece)
-    bottom_cost_per_piece = to_money(Decimal(costing.bottom_roll_price_per_kg) * bottom_weight_per_piece)
-
-    # Apply generic wastage factor to raw material
-    material_cost_per_piece = (blank_cost_per_piece + bottom_cost_per_piece) * WASTAGE_FACTOR
-
-    cups_per_box = packaging_metric.cups_per_box
-    raw_material_cost_per_box = to_money(material_cost_per_piece * Decimal(cups_per_box))
-
-    labour_electricity_per_box = to_money(costing.labour_cost_per_box + costing.electricity_cost_per_box)
-    total_cost_price_per_box = to_money(raw_material_cost_per_box + labour_electricity_per_box)
-
-    cost_per_piece = to_piece(total_cost_price_per_box / Decimal(cups_per_box))
-    selling_price_per_box = to_money(payload.selling_price_per_box)
-    selling_price_per_piece = to_piece(selling_price_per_box / Decimal(cups_per_box))
-    profit_per_box = to_money(selling_price_per_box - total_cost_price_per_box)
-    profit_per_piece = to_piece(profit_per_box / Decimal(cups_per_box))
-
-    # ----- Persist Snapshot -----
-    snapshot = CostingOutputMaster(
-        factory_id=factory_id,
-        product_cup_size_ml=packaging_metric.cup_size_ml,
-        selected_blank_metric_id=blank_metric.id,
-        selected_bottom_metric_id=bottom_metric.id,
-        selected_packaging_metric_id=packaging_metric.id,
-        total_cost_price_per_box=total_cost_price_per_box,
-        cost_per_piece=cost_per_piece,
-        selling_price_per_box=selling_price_per_box,
-        selling_price_per_piece=selling_price_per_piece,
-        profit_per_box=profit_per_box,
-        profit_per_piece=profit_per_piece,
-    )
-    db.add(snapshot)
-    db.commit()
-    db.refresh(snapshot)
-
-    return CalculateCostResponse(
-        id=snapshot.id,
-        factory_id=snapshot.factory_id,
-        product_cup_size_ml=snapshot.product_cup_size_ml,
-        total_cost_price_per_box=snapshot.total_cost_price_per_box,
-        cost_per_piece=snapshot.cost_per_piece,
-        selling_price_per_box=snapshot.selling_price_per_box,
-        selling_price_per_piece=snapshot.selling_price_per_piece,
-        profit_per_box=snapshot.profit_per_box,
-        profit_per_piece=snapshot.profit_per_piece,
+    actual_data = payload.actual_monthly_data or build_actual_monthly_data(db, factory_id)
+    ideal = payload.ideal_calculation_results
+    comparison_rows = build_comparison_rows(ideal, actual_data)
+    ai_insights = generate_ai_insights(ideal, actual_data, comparison_rows)
+    return AiCompareResponse(
+        ai_insights=ai_insights,
+        comparison_table_data=comparison_rows,
+        actual_monthly_data=actual_data,
     )
 
 
-# =============================================================================
-# UTILITY: Daily Capacity Estimator
-# =============================================================================
-
-def calculate_daily_capacity(
-    db: Session,
-    machine_id: int,
-    factory_id: int,
-) -> DailyCapacityResponse:
-    machine = (
-        db.query(Machine)
-        .filter(Machine.factory_id == factory_id)
-        .filter(Machine.id == machine_id)
-        .first()
-    )
-    if machine is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
-
-    settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory_id).first()
-    shift_hours = settings.default_shift_hours if settings else 8.0
-
-    total_cups = int(machine.speed_cups_per_minute * 60 * shift_hours)
-
-    blank_metric = (
-        db.query(RawMaterialMetrics)
-        .filter(RawMaterialMetrics.factory_id == factory_id)
-        .filter(RawMaterialMetrics.material_type == "Blank")
-        .filter(RawMaterialMetrics.size_ml_or_mm == machine.cup_size_ml)
-        .first()
-    )
-    bottom_metric = (
-        db.query(RawMaterialMetrics)
-        .filter(RawMaterialMetrics.factory_id == factory_id)
-        .filter(RawMaterialMetrics.material_type == "Bottom")
-        .filter(RawMaterialMetrics.size_ml_or_mm == machine.bottom_size_mm)
-        .first()
-    )
-
-    blank_sacks = Decimal("0")
-    if blank_metric and blank_metric.pieces_per_sack:
-        blank_sacks = Decimal(total_cups) / Decimal(blank_metric.pieces_per_sack)
-
-    bottom_sacks = Decimal("0")
-    if bottom_metric and bottom_metric.pieces_per_sack:
-        bottom_sacks = Decimal(total_cups) / Decimal(bottom_metric.pieces_per_sack)
-
-    return DailyCapacityResponse(
-        machine_id=machine.id,
-        machine_sequence_number=machine.machine_sequence_number or "N/A",
-        speed_cups_per_minute=machine.speed_cups_per_minute,
-        shift_hours=shift_hours,
-        total_cups_per_day=total_cups,
-        estimated_blank_sacks_needed=blank_sacks.quantize(Decimal("0.01")),
-        estimated_bottom_sacks_needed=bottom_sacks.quantize(Decimal("0.01")),
-    )
-
-
-@router.get("/daily-capacity/{machine_id}", response_model=DailyCapacityResponse)
-def get_daily_capacity(
-    machine_id: int,
-    current_user: User = Depends(get_current_user),
+@router.get("/actual-monthly")
+def get_actual_monthly_data(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    return calculate_daily_capacity(db, machine_id, current_user.factory_id)
+    return build_actual_monthly_data(db, current_user.factory_id)
+
+
+def build_actual_monthly_data(db: Session, factory_id: int) -> Dict[str, Any]:
+    month_start = date.today().replace(day=1)
+    production_rows = (
+        db.query(DailyProduction)
+        .filter(DailyProduction.factory_id == factory_id)
+        .filter(DailyProduction.date >= month_start)
+        .all()
+    )
+    total_boxes = sum(row.total_boxes_made or 0 for row in production_rows)
+    total_loose_packets = sum(row.loose_packets_made or 0 for row in production_rows)
+    boxes_from_loose = sum(row.boxes_from_loose or 0 for row in production_rows)
+    blank_used_kg = sum(Decimal(row.blank_used_kg or 0) for row in production_rows)
+    bottom_used_kg = sum(Decimal(row.bottom_used_kg or 0) for row in production_rows)
+    estimated_pieces = sum(
+        Decimal((row.total_boxes_made or 0) * (row.packets_per_box_limit or 0) + (row.loose_packets_made or 0))
+        for row in production_rows
+    )
+    final_stock_boxes = (
+        db.query(sql_func.coalesce(sql_func.sum(FinalProductStock.total_boxes), 0))
+        .filter(FinalProductStock.factory_id == factory_id)
+        .scalar()
+        or 0
+    )
+
+    actual_blank_kg_per_box = Decimal("0")
+    actual_bottom_kg_per_box = Decimal("0")
+    if total_boxes > 0:
+        actual_blank_kg_per_box = blank_used_kg / Decimal(total_boxes)
+        actual_bottom_kg_per_box = bottom_used_kg / Decimal(total_boxes)
+
+    return {
+        "month_start": month_start.isoformat(),
+        "production_entries": len(production_rows),
+        "actual_boxes_made": total_boxes,
+        "loose_packets_made": total_loose_packets,
+        "boxes_from_loose": boxes_from_loose,
+        "estimated_pieces_made": int(estimated_pieces),
+        "blank_used_kg": float(blank_used_kg),
+        "bottom_used_kg": float(bottom_used_kg),
+        "actual_blank_kg_per_box": float(actual_blank_kg_per_box.quantize(Decimal("0.001"))),
+        "actual_bottom_kg_per_box": float(actual_bottom_kg_per_box.quantize(Decimal("0.001"))),
+        "final_stock_boxes": int(final_stock_boxes),
+    }
+
+
+def build_comparison_rows(ideal: Dict[str, Any], actual: Dict[str, Any]) -> List[ComparisonRow]:
+    final_cost = Decimal(str(ideal.get("final_cost_per_box", 0)))
+    suggested_price = Decimal(str(ideal.get("suggested_selling_price", 0)))
+    desired_profit = Decimal(str(ideal.get("desired_profit_per_box", 0)))
+    boxes = Decimal(str(actual.get("actual_boxes_made", 0)))
+    blank_kg_per_box = Decimal(str(actual.get("actual_blank_kg_per_box", 0)))
+    bottom_kg_per_box = Decimal(str(actual.get("actual_bottom_kg_per_box", 0)))
+
+    return [
+        ComparisonRow(metric="Cost per box", ideal_value=f"₹{final_cost}", actual_value="Needs sales costing data", difference="Track via monthly sale rates"),
+        ComparisonRow(metric="Selling price per box", ideal_value=f"₹{suggested_price}", actual_value="Not available in production table", difference="Connect sales average next"),
+        ComparisonRow(metric="Profit per box", ideal_value=f"₹{desired_profit}", actual_value="Not available", difference="Depends on actual sale price"),
+        ComparisonRow(metric="Monthly boxes made", ideal_value="As per production plan", actual_value=str(int(boxes)), difference=f"{int(boxes)} boxes recorded"),
+        ComparisonRow(metric="Blank usage per box", ideal_value="Ideal yield based", actual_value=f"{blank_kg_per_box} kg/box", difference="Higher value means blank wastage or low yield"),
+        ComparisonRow(metric="Bottom usage per box", ideal_value="Ideal yield based", actual_value=f"{bottom_kg_per_box} kg/box", difference="Higher value means bottom wastage"),
+    ]
+
+
+def generate_ai_insights(ideal: Dict[str, Any], actual: Dict[str, Any], rows: List[ComparisonRow]) -> str:
+    fallback = (
+        "Ideal cost aur actual production data compare karne par primary focus raw material usage per box, "
+        "monthly boxes output, aur actual selling rate tracking par hona chahiye. Agar blank/bottom kg per box "
+        "ideal se upar ja raha hai to wastage, machine setting, ya operator handling review karein. Sales average "
+        "rate connect karne ke baad exact profit leakage aur recovery clear dikhegi."
+    )
+    llm = initialize_groq_llm()
+    if llm is None:
+        return fallback
+
+    prompt = (
+        "You are a Factory Financial Analyst. Compare the theoretical ideal cost per box with the actual monthly "
+        "production data. Highlight where we lost money, such as high wastage or low speed, or gained profit. "
+        "Keep it strictly professional, in Hinglish. Return only one concise paragraph.\n\n"
+        f"Ideal calculation JSON:\n{json.dumps(ideal, default=str)}\n\n"
+        f"Actual monthly data JSON:\n{json.dumps(actual, default=str)}\n\n"
+        f"Comparison rows JSON:\n{json.dumps([row.model_dump() for row in rows], default=str)}"
+    )
+    try:
+        response = llm.invoke(prompt)
+        return str(getattr(response, "content", response)).strip() or fallback
+    except Exception as exc:
+        print(f"AI COMPARE ERROR: {exc}")
+        return fallback
+
+
+def calculate_daily_capacity(*_args, **_kwargs):
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="Daily capacity calculator has moved to production planning.")
+
+
+@router.get("/daily-capacity/{machine_id}")
+def get_daily_capacity(machine_id: int):
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="Daily capacity calculator has moved to production planning.")

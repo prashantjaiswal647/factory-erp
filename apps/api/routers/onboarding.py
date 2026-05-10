@@ -2,11 +2,12 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import get_current_user, require_owner
+from auth import require_owner
+from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
 from models import (
     BlankStock,
@@ -25,6 +26,7 @@ from models import (
     RawMaterial,
     RawMaterialMetrics,
     PackagingMetrics,
+    PlasticStock,
     User,
     Worker,
 )
@@ -45,6 +47,8 @@ from schemas import (
     Step3RawMaterialMetricItem,
     Step3Request,
     Step3Response,
+    BoxStockCreate,
+    PlasticStockCreate,
     WorkerCreate,
     WorkerPayload,
     WorkerResponse,
@@ -54,6 +58,410 @@ from schemas import (
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 
+class OnboardingWorkerSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    daily_wages: Decimal
+    duty_hours: float
+
+
+class OnboardingMachineSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    machine_type: str
+    machine_number: Optional[str] = None
+    mould_size_ml: Optional[int] = None
+    bottom_size_mm: Optional[int] = None
+    speed_per_minute: int
+
+
+class OnboardingRawMetricSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    material_type: str
+    size_ml_or_mm: int
+    weight_per_sack_kg: Decimal
+    pieces_per_sack: int
+
+
+class OnboardingPackagingMetricSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cup_size_ml: int
+    kg_per_box: Decimal
+    cups_per_box: int
+
+
+class OnboardingOverviewResponse(BaseModel):
+    workers: List[OnboardingWorkerSummary]
+    machines: List[OnboardingMachineSummary]
+    raw_material_metrics: List[OnboardingRawMetricSummary]
+    packaging_metrics: List[OnboardingPackagingMetricSummary]
+
+
+class OnboardingCustomerSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    phone: Optional[str] = None
+    total_due: Decimal
+
+
+class BottomStockCreate(BaseModel):
+    bottom_size_mm: int = Field(..., gt=0)
+    bag_weight_kg: Optional[Decimal] = Field(default=None, ge=0)
+    rolls_per_bag: Optional[int] = Field(default=None, ge=0)
+    total_bags: Optional[int] = Field(default=None, ge=0)
+    total_rolls: Optional[int] = Field(default=None, ge=0)
+    total_weight_kg: Optional[Decimal] = Field(default=None, ge=0)
+
+
+class BlankStockCreate(BaseModel):
+    material_name: str = Field(default="Blank", max_length=100)
+    size_ml: int = Field(..., gt=0)
+    kg_per_sack: Decimal = Field(..., gt=0)
+    total_sacks: Decimal = Field(..., ge=0)
+
+
+@router.get("/overview", response_model=OnboardingOverviewResponse)
+def onboarding_overview(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    return OnboardingOverviewResponse(
+        workers=(
+            db.query(Worker)
+            .filter(Worker.factory_id == factory_id)
+            .filter(Worker.is_active.is_(True))
+            .order_by(Worker.name.asc())
+            .all()
+        ),
+        machines=(
+            db.query(Machine)
+            .filter(Machine.factory_id == factory_id)
+            .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
+            .all()
+        ),
+        raw_material_metrics=(
+            db.query(RawMaterialMetrics)
+            .filter(RawMaterialMetrics.factory_id == factory_id)
+            .order_by(RawMaterialMetrics.material_type.asc(), RawMaterialMetrics.size_ml_or_mm.asc())
+            .all()
+        ),
+        packaging_metrics=(
+            db.query(PackagingMetrics)
+            .filter(PackagingMetrics.factory_id == factory_id)
+            .order_by(PackagingMetrics.cup_size_ml.asc())
+            .all()
+        ),
+    )
+
+
+@router.get("/workers", response_model=List[OnboardingWorkerSummary])
+def list_onboarding_workers(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(Worker)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(Worker.is_active.is_(True))
+        .order_by(Worker.name.asc())
+        .all()
+    )
+
+
+@router.get("/machines", response_model=List[OnboardingMachineSummary])
+def list_onboarding_machines(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(Machine)
+        .filter(Machine.factory_id == current_user.factory_id)
+        .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
+        .all()
+    )
+
+
+@router.get("/materials")
+def list_onboarding_materials(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    return {
+        "raw_material_metrics": (
+            db.query(RawMaterialMetrics)
+            .filter(RawMaterialMetrics.factory_id == factory_id)
+            .order_by(RawMaterialMetrics.material_type.asc(), RawMaterialMetrics.size_ml_or_mm.asc())
+            .all()
+        ),
+        "packaging_metrics": (
+            db.query(PackagingMetrics)
+            .filter(PackagingMetrics.factory_id == factory_id)
+            .order_by(PackagingMetrics.cup_size_ml.asc())
+            .all()
+        ),
+    }
+
+
+@router.get("/customers", response_model=List[OnboardingCustomerSummary])
+def list_onboarding_customers(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(Customer)
+        .filter(Customer.factory_id == current_user.factory_id)
+        .order_by(Customer.name.asc())
+        .all()
+    )
+
+
+@router.post("/raw-material/blank", status_code=status.HTTP_201_CREATED)
+def create_blank_stock(
+    payload: BlankStockCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    total_weight_kg = payload.kg_per_sack * payload.total_sacks
+    stock = (
+        db.query(BlankStock)
+        .filter(BlankStock.factory_id == factory_id)
+        .filter(BlankStock.blank_size_ml == payload.size_ml)
+        .first()
+    )
+    if stock is None:
+        stock = BlankStock(
+            factory_id=factory_id,
+            blank_size_ml=payload.size_ml,
+            linked_bottom_size_mm=payload.size_ml,
+        )
+        db.add(stock)
+
+    stock.weight_per_bora_kg = payload.kg_per_sack
+    stock.total_boras = payload.total_sacks
+    stock.total_qty_kg = total_weight_kg
+    db.commit()
+    db.refresh(stock)
+    return {
+        "id": stock.id,
+        "material_name": payload.material_name,
+        "size_ml": stock.blank_size_ml,
+        "kg_per_sack": payload.kg_per_sack,
+        "total_sacks": payload.total_sacks,
+        "total_weight_kg": stock.total_qty_kg,
+    }
+
+
+@router.post("/raw-material/bottom", status_code=status.HTTP_201_CREATED)
+def create_bottom_stock(
+    payload: BottomStockCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    calculated_rolls = (payload.rolls_per_bag or 0) * (payload.total_bags or 0)
+    calculated_weight_kg = (payload.bag_weight_kg or Decimal("0.000")) * Decimal(payload.total_bags or 0)
+    total_rolls = payload.total_rolls if payload.total_rolls is not None else calculated_rolls
+    total_weight_kg = payload.total_weight_kg if payload.total_weight_kg is not None else calculated_weight_kg
+    stock = (
+        db.query(BottomStock)
+        .filter(BottomStock.factory_id == factory_id)
+        .filter(BottomStock.bottom_size_mm == payload.bottom_size_mm)
+        .first()
+    )
+    if stock is None:
+        stock = BottomStock(factory_id=factory_id, bottom_size_mm=payload.bottom_size_mm)
+        db.add(stock)
+
+    stock.bag_weight_kg = payload.bag_weight_kg
+    stock.rolls_per_bag = payload.rolls_per_bag
+    stock.total_bags = payload.total_bags
+    stock.total_rolls = total_rolls
+    stock.total_weight_kg = total_weight_kg
+    stock.total_qty_kg = total_weight_kg
+
+    db.commit()
+    db.refresh(stock)
+    return {
+        "id": stock.id,
+        "bottom_size_mm": stock.bottom_size_mm,
+        "bag_weight_kg": stock.bag_weight_kg,
+        "rolls_per_bag": stock.rolls_per_bag,
+        "total_bags": stock.total_bags,
+        "total_rolls": stock.total_rolls,
+        "total_weight_kg": stock.total_weight_kg,
+    }
+
+
+@router.post("/raw-material/box", status_code=status.HTTP_201_CREATED)
+def create_box_stock(
+    payload: BoxStockCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    stock = (
+        db.query(BoxStock)
+        .filter(BoxStock.factory_id == factory_id)
+        .filter(sql_func.lower(BoxStock.packaging_size_name) == payload.box_type.lower())
+        .first()
+    )
+    if stock is None:
+        stock = BoxStock(factory_id=factory_id, packaging_size_name=payload.box_type)
+        db.add(stock)
+
+    stock.box_type = payload.box_type
+    stock.quantity = payload.quantity
+    stock.total_boxes = payload.quantity
+    stock.price_per_box = payload.price_per_box
+    db.commit()
+    db.refresh(stock)
+    return {
+        "id": stock.id,
+        "box_type": stock.box_type or stock.packaging_size_name,
+        "quantity": stock.quantity,
+        "price_per_box": stock.price_per_box,
+    }
+
+
+@router.post("/raw-material/plastic", status_code=status.HTTP_201_CREATED)
+def create_plastic_stock(
+    payload: PlasticStockCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    stock = (
+        db.query(PlasticStock)
+        .filter(PlasticStock.factory_id == factory_id)
+        .filter(sql_func.lower(PlasticStock.plastic_size_name) == payload.plastic_size_name.lower())
+        .filter(PlasticStock.cup_size_ml == payload.cup_size_ml)
+        .first()
+    )
+    if stock is None:
+        stock = PlasticStock(
+            factory_id=factory_id,
+            plastic_size_name=payload.plastic_size_name.strip(),
+            cup_size_ml=payload.cup_size_ml,
+        )
+        db.add(stock)
+
+    stock.total_boras = payload.total_boras
+    stock.weight_per_bora_kg = payload.weight_per_bora_kg
+    stock.price_per_kg = payload.price_per_kg
+    db.commit()
+    db.refresh(stock)
+    return {
+        "id": stock.id,
+        "plastic_size_name": stock.plastic_size_name,
+        "cup_size_ml": stock.cup_size_ml,
+        "total_boras": stock.total_boras,
+        "weight_per_bora_kg": stock.weight_per_bora_kg,
+        "total_plastic_kg": stock.total_boras * stock.weight_per_bora_kg,
+        "price_per_kg": stock.price_per_kg,
+    }
+
+
+@router.delete("/worker/{worker_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_onboarding_worker(
+    worker_id: int,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    can_cleanup_null_factory = (current_user.role or "").lower() in {"admin", "owner"}
+    worker = (
+        db.query(Worker)
+        .filter(Worker.id == worker_id)
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+
+    if worker.factory_id != current_user.factory_id:
+        if not (worker.factory_id is None and can_cleanup_null_factory):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+
+    try:
+        worker.is_active = False
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"DELETE ERROR: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Worker delete karte waqt error aaya.",
+        ) from e
+    return None
+
+
+@router.delete("/machine/{machine_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_onboarding_machine(
+    machine_id: int,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    machine = (
+        db.query(Machine)
+        .filter(Machine.factory_id == current_user.factory_id)
+        .filter(Machine.id == machine_id)
+        .first()
+    )
+    if machine is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    db.delete(machine)
+    db.commit()
+    return None
+
+
+@router.delete("/raw-material/{raw_material_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_onboarding_raw_material(
+    raw_material_id: int,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    metric = (
+        db.query(RawMaterialMetrics)
+        .filter(RawMaterialMetrics.factory_id == current_user.factory_id)
+        .filter(RawMaterialMetrics.id == raw_material_id)
+        .first()
+    )
+    if metric is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw material metric not found")
+    db.delete(metric)
+    db.commit()
+    return None
+
+
+@router.delete("/customer/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_onboarding_customer(
+    customer_id: int,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    customer = (
+        db.query(Customer)
+        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(Customer.id == customer_id)
+        .first()
+    )
+    if customer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+    db.delete(customer)
+    db.commit()
+    return None
+
+
 # =============================================================================
 # LEVEL 1 ONBOARDING — Factory & Owner
 # =============================================================================
@@ -61,13 +469,9 @@ router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 @router.post("/step1", response_model=Step1Response)
 def onboarding_step1(
     payload: Step1Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    if current_user.role not in ("Owner", "Operator"):
-        # Allow any verified user to create their factory for now
-        pass
-
     if current_user.factory_id and current_user.factory_id > 0:
         existing = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
         if existing:
@@ -100,16 +504,22 @@ def onboarding_step1_create_worker(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    worker = Worker(
-        factory_id=current_user.factory_id,
-        name=payload.name.strip(),
-        daily_wages=payload.daily_wages,
-        duty_hours=payload.duty_hours,
-        daily_salary=payload.daily_wages,
-        salary=payload.daily_wages,
-        shift_hours=payload.duty_hours,
+    worker = (
+        db.query(Worker)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(sql_func.lower(Worker.name) == payload.name.strip().lower())
+        .first()
     )
-    db.add(worker)
+    if worker is None:
+        worker = Worker(factory_id=current_user.factory_id, name=payload.name.strip())
+        db.add(worker)
+
+    worker.daily_wages = payload.daily_wages
+    worker.duty_hours = payload.duty_hours
+    worker.daily_salary = payload.daily_wages
+    worker.salary = payload.daily_wages
+    worker.shift_hours = payload.duty_hours
+    worker.is_active = True
     db.commit()
     db.refresh(worker)
     return worker
@@ -193,6 +603,7 @@ def onboarding_step3_materials(
 
         metric.weight_per_sack_kg = item.weight_per_sack_kg
         metric.pieces_per_sack = item.pieces_per_sack
+        total_weight_kg = item.total_weight_kg or (item.weight_per_sack_kg * item.total_sacks)
         if item.material_type == "Blank":
             stock = (
                 db.query(BlankStock)
@@ -201,15 +612,15 @@ def onboarding_step3_materials(
                 .first()
             )
             if stock is None:
-                db.add(
-                    BlankStock(
-                        factory_id=factory_id,
-                        blank_size_ml=item.size_ml_or_mm,
-                        linked_bottom_size_mm=item.size_ml_or_mm,
-                        total_qty_kg=Decimal("0.000"),
-                    )
+                stock = BlankStock(
+                    factory_id=factory_id,
+                    blank_size_ml=item.size_ml_or_mm,
+                    linked_bottom_size_mm=item.size_ml_or_mm,
+                    total_qty_kg=Decimal("0.000"),
                 )
-        elif item.material_type == "Bottom":
+                db.add(stock)
+            stock.total_qty_kg = total_weight_kg
+        if item.material_type == "Bottom":
             stock = (
                 db.query(BottomStock)
                 .filter(BottomStock.factory_id == factory_id)
@@ -217,13 +628,15 @@ def onboarding_step3_materials(
                 .first()
             )
             if stock is None:
-                db.add(
-                    BottomStock(
-                        factory_id=factory_id,
-                        bottom_size_mm=item.size_ml_or_mm,
-                        total_qty_kg=Decimal("0.000"),
-                    )
+                stock = BottomStock(
+                    factory_id=factory_id,
+                    bottom_size_mm=item.size_ml_or_mm,
+                    total_qty_kg=Decimal("0.000"),
+                    total_weight_kg=Decimal("0.000"),
                 )
+                db.add(stock)
+            stock.total_qty_kg = total_weight_kg
+            stock.total_weight_kg = total_weight_kg
         raw_saved += 1
 
     pack_saved = 0
@@ -506,6 +919,7 @@ def upsert_worker(db: Session, factory_id: int, payload: WorkerPayload) -> Worke
         worker = Worker(factory_id=factory_id, name=payload.name.strip())
         db.add(worker)
 
+    worker.is_active = True
     worker.daily_salary = payload.daily_salary
     worker.salary = payload.daily_salary
     worker.shift_type = payload.shift_type

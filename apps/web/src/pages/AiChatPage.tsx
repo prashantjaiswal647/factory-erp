@@ -27,13 +27,18 @@ type AskAIResponse = {
   error?: string | null;
 };
 
+type StoredUser = {
+  factory_id?: number;
+};
+
 const actionableIntents = new Set(["production_entry", "sales_entry", "expense_entry"]);
 const chatMessagesStorageKey = "ai-erp-chat-messages";
 const welcomeMessage: ChatMessage = {
   id: "welcome",
   role: "assistant",
-  text: "Tell me production, sales, or expense updates in natural language. I will post the entry and refresh the factory dashboard."
+  text: "I am your Factory Supervisor AI. I can use real-time inventory and production data to answer stock, production, and wastage questions."
 };
+const supervisorSystemPrompt = "You are a Factory Supervisor AI. You have access to real-time inventory and production data. Use it to give precise numbers.";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -56,6 +61,7 @@ export default function AiChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredMessages());
   const [inputValue, setInputValue] = useState("");
   const [isThinking, setIsThinking] = useState(false);
+  const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const { triggerDataRefresh } = useDataRefresh();
   const sessionId = useMemo(getSessionId, []);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -93,7 +99,9 @@ export default function AiChatPage() {
       const response = await api.post<AskAIResponse>("/ask-ai", {
         message: messageText,
         session_id: sessionId,
-        chat_history: chatHistory
+        chat_history: chatHistory,
+        factory_id: getStoredFactoryId(),
+        system_prompt: supervisorSystemPrompt
       });
 
       const aiResponse = response.data;
@@ -107,8 +115,12 @@ export default function AiChatPage() {
           actionTaken: aiResponse.action_taken
         }
       ]);
+      if (aiResponse.status !== "success" && aiResponse.error) {
+        setToast({ type: "error", message: aiResponse.error });
+      }
 
       if (aiResponse.status === "success" && actionableIntents.has(aiResponse.action_taken)) {
+        setToast({ type: "success", message: "ERP updated" });
         triggerDataRefresh();
       }
     } catch (error) {
@@ -131,6 +143,7 @@ export default function AiChatPage() {
           text: errorMessage
         }
       ]);
+      setToast({ type: "error", message: errorMessage });
     } finally {
       setIsThinking(false);
     }
@@ -138,6 +151,7 @@ export default function AiChatPage() {
 
   return (
     <div className="flex h-[calc(100vh-7.5rem)] min-h-[560px] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+      {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
       <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
@@ -182,6 +196,30 @@ export default function AiChatPage() {
       </form>
     </div>
   );
+}
+
+function Toast({ type, message, onClose }: { type: "success" | "error"; message: string; onClose: () => void }) {
+  return (
+    <button
+      className={`fixed right-5 top-20 z-50 rounded-md px-4 py-3 text-sm font-semibold text-white shadow-lg ${type === "success" ? "bg-emerald-600" : "bg-red-600"}`}
+      type="button"
+      onClick={onClose}
+    >
+      {message}
+    </button>
+  );
+}
+
+function getStoredFactoryId() {
+  const savedUser = window.localStorage.getItem("ai_erp_user");
+  if (!savedUser) {
+    return undefined;
+  }
+  try {
+    return (JSON.parse(savedUser) as StoredUser).factory_id;
+  } catch {
+    return undefined;
+  }
 }
 
 function loadStoredMessages() {

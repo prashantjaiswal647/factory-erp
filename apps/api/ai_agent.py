@@ -62,11 +62,14 @@ def initialize_groq_llm():
     if not groq_api_key or ChatGroq is None:
         return None
 
-    return ChatGroq(
-        model=os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant",
-        temperature=0,
-        api_key=groq_api_key,
-    )
+    try:
+        return ChatGroq(
+            model=os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant",
+            temperature=0,
+            api_key=groq_api_key,
+        )
+    except Exception:
+        return None
 
 
 def build_factory_supervisor_prompt(parser: PydanticOutputParser) -> ChatPromptTemplate:
@@ -74,6 +77,9 @@ def build_factory_supervisor_prompt(parser: PydanticOutputParser) -> ChatPromptT
         [
             (
                 "system",
+            "You are the Factory Supervisor. You have access to real-time database tools: "
+            "get_inventory, get_customers, and get_factory_machines. These tools are already bound to the logged-in factory_id. "
+            "If a user asks \"65ml ka kitna mal pada hai?\", call/use the inventory context first, then reply in Hindi/Hinglish.\n"
             "You are a friendly and intelligent Factory Supervisor Assistant for a paper cup factory ERP.\n"
             "Factory owners type messy natural language. Be forgiving and conversational.\n"
             "Extract structured data when enough information is present, but never invent missing facts.\n\n"
@@ -96,6 +102,7 @@ def build_factory_supervisor_prompt(parser: PydanticOutputParser) -> ChatPromptT
             "- record_sale(customer_name, product, quantity): deduct stock and create a sales entry.\n"
             "- log_production(product, quantity): add production to stock.\n"
             "Use the Product List below to match fuzzy product names before choosing a tool.\n\n"
+            "Real-time database tool context for this factory:\n{tool_context}\n\n"
             "Production logging uses loose form filling. Quantity/boxes produced is the most important field. "
             "Product name, cup size, packing profile, raw material used, machine speed, blank waste, bottom waste, "
             "and general wastage are optional and should be null or 0 when not mentioned.\n"
@@ -125,6 +132,7 @@ def parse_factory_intent_with_agent(
     fallback_parser: Callable[[str], IntentModel],
     product_catalog: str = "",
     chat_history: Optional[List[Dict[str, str]]] = None,
+    tool_context: str = "",
 ) -> Tuple[IntentModel, bool]:
     raw_intent, used_llm = _parse_with_llm_or_fallback(
         message,
@@ -133,6 +141,7 @@ def parse_factory_intent_with_agent(
         fallback_parser,
         product_catalog,
         chat_history,
+        tool_context,
     )
     return _apply_conversational_form_filling(
         message=message,
@@ -155,6 +164,7 @@ def _parse_with_llm_or_fallback(
     fallback_parser: Callable[[str], IntentModel],
     product_catalog: str,
     chat_history: Optional[List[Dict[str, str]]],
+    tool_context: str,
 ) -> Tuple[IntentModel, bool]:
     memory_messages = normalize_chat_history(chat_history)
     if not memory_messages:
@@ -172,6 +182,7 @@ def _parse_with_llm_or_fallback(
             {
                 "chat_history": memory_messages[-10:],
                 "product_catalog": product_catalog or "No products configured yet.",
+                "tool_context": tool_context or "No live database context loaded yet.",
                 "user_message": message,
             }
         ), True
@@ -346,3 +357,136 @@ def _extract_cup_size_ml(message: str) -> Optional[int]:
         return int(stripped)
 
     return None
+
+
+def get_inventory_status(db: Any, factory_id: int) -> Dict[str, Any]:
+    from models import BlankStock, BottomStock, BoxStock, FinalProductStock, Inventory
+
+    return {
+        "inventory": [
+            {
+                "item_name": item.item_name,
+                "category": item.category,
+                "quantity": float(item.quantity or 0),
+                "unit": item.unit,
+            }
+            for item in db.query(Inventory).filter(Inventory.factory_id == factory_id).order_by(Inventory.item_name.asc()).all()
+        ],
+        "blank_stock": [
+            {
+                "blank_size_ml": stock.blank_size_ml,
+                "linked_bottom_size_mm": stock.linked_bottom_size_mm,
+                "total_qty_kg": float(stock.total_qty_kg or 0),
+            }
+            for stock in db.query(BlankStock).filter(BlankStock.factory_id == factory_id).order_by(BlankStock.blank_size_ml.asc()).all()
+        ],
+        "bottom_stock": [
+            {
+                "bottom_size_mm": stock.bottom_size_mm,
+                "total_qty_kg": float(stock.total_qty_kg or 0),
+            }
+            for stock in db.query(BottomStock).filter(BottomStock.factory_id == factory_id).order_by(BottomStock.bottom_size_mm.asc()).all()
+        ],
+        "box_stock": [
+            {
+                "packaging_size_name": stock.packaging_size_name,
+                "total_boxes": int(stock.total_boxes or 0),
+            }
+            for stock in db.query(BoxStock).filter(BoxStock.factory_id == factory_id).order_by(BoxStock.packaging_size_name.asc()).all()
+        ],
+        "final_product_stock": [
+            {
+                "product_size_ml": stock.product_size_ml,
+                "packaging_size_name": stock.packaging_size_name,
+                "total_boxes": int(stock.total_boxes or 0),
+                "loose_packets": int(stock.loose_packets or 0),
+                "packets_per_box_limit": stock.packets_per_box_limit,
+            }
+            for stock in db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).order_by(FinalProductStock.product_size_ml.asc()).all()
+        ],
+    }
+
+
+def get_inventory(db: Any, factory_id: int) -> Dict[str, Any]:
+    return get_inventory_status(db, factory_id)
+
+
+def get_customer_ledger(db: Any, factory_id: int, name: str = "") -> Dict[str, Any]:
+    from sqlalchemy import func as sql_func
+    from models import Customer
+
+    query = db.query(Customer).filter(Customer.factory_id == factory_id)
+    if name:
+        query = query.filter(sql_func.lower(Customer.name).like(f"%{name.lower()}%"))
+    return {
+        "customers": [
+            {
+                "id": customer.id,
+                "name": customer.name,
+                "phone": customer.phone or customer.contact_number,
+                "previous_due": float(customer.previous_due or 0),
+                "total_due": float(customer.total_due or customer.balance_amount or 0),
+            }
+            for customer in query.order_by(Customer.name.asc()).limit(20).all()
+        ]
+    }
+
+
+def get_customers(db: Any, factory_id: int, name: str = "") -> Dict[str, Any]:
+    return get_customer_ledger(db, factory_id, name)
+
+
+def get_factory_config(db: Any, factory_id: int) -> Dict[str, Any]:
+    from models import Machine, PackagingMetrics, RawMaterialMetrics
+
+    raw_metrics = db.query(RawMaterialMetrics).filter(RawMaterialMetrics.factory_id == factory_id).all()
+    return {
+        "machines": [
+            {
+                "id": machine.id,
+                "machine_number": machine.machine_number or machine.machine_sequence_number or machine.name,
+                "machine_type": machine.machine_type,
+                "cup_size_ml": machine.mould_size_ml or machine.cup_size_ml,
+                "bottom_size_mm": machine.bottom_size_mm,
+                "speed_per_minute": machine.speed_per_minute,
+            }
+            for machine in db.query(Machine).filter(Machine.factory_id == factory_id).order_by(Machine.id.asc()).all()
+        ],
+        "raw_material_metrics": [
+            {
+                "material_type": metric.material_type,
+                "size_ml_or_mm": metric.size_ml_or_mm,
+                "weight_per_sack_kg": float(metric.weight_per_sack_kg or 0),
+                "pieces_per_sack": metric.pieces_per_sack,
+                "pieces_per_kg": (
+                    float(metric.pieces_per_sack) / float(metric.weight_per_sack_kg)
+                    if metric.weight_per_sack_kg
+                    else 0
+                ),
+            }
+            for metric in raw_metrics
+        ],
+        "packaging_metrics": [
+            {
+                "cup_size_ml": metric.cup_size_ml,
+                "kg_per_box": float(metric.kg_per_box or 0),
+                "cups_per_box": metric.cups_per_box,
+            }
+            for metric in db.query(PackagingMetrics).filter(PackagingMetrics.factory_id == factory_id).order_by(PackagingMetrics.cup_size_ml.asc()).all()
+        ],
+    }
+
+
+def get_factory_machines(db: Any, factory_id: int) -> Dict[str, Any]:
+    return {"machines": get_factory_config(db, factory_id).get("machines", [])}
+
+
+def build_ai_tool_context(db: Any, factory_id: int, customer_name: str = "") -> str:
+    context = {
+        "factory_id": factory_id,
+        "bound_tools": ["get_inventory", "get_customers", "get_factory_machines"],
+        "inventory_status": get_inventory(db, factory_id),
+        "customer_ledger": get_customers(db, factory_id, customer_name),
+        "factory_config": get_factory_config(db, factory_id),
+    }
+    return str(context)[:12000]

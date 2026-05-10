@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +71,28 @@ class Step2Response(BaseModel):
 
 class Step3RawMaterialMetricItem(BaseModel):
     material_type: str = Field(..., pattern="^(Blank|Bottom)$")
-    size_ml_or_mm: int = Field(..., gt=0)
-    weight_per_sack_kg: Decimal = Field(..., gt=0)
-    pieces_per_sack: int = Field(..., gt=0)
+    size: Optional[int] = Field(default=None, gt=0)
+    size_ml_or_mm: Optional[int] = Field(default=None, gt=0)
+    kg_per_sack: Optional[Decimal] = Field(default=None, gt=0)
+    weight_per_sack_kg: Optional[Decimal] = Field(default=None, gt=0)
+    total_sacks: Decimal = Field(default=Decimal("0"), ge=0)
+    total_weight_kg: Optional[Decimal] = Field(default=None, ge=0)
+    pieces_per_sack: int = Field(default=1, gt=0)
+
+    @model_validator(mode="after")
+    def normalize_material_fields(self):
+        if self.size_ml_or_mm is None:
+            self.size_ml_or_mm = self.size
+        if self.weight_per_sack_kg is None:
+            self.weight_per_sack_kg = self.kg_per_sack
+        if self.size_ml_or_mm is None:
+            raise ValueError("size is required")
+        if self.weight_per_sack_kg is None:
+            raise ValueError("kg_per_sack is required")
+        calculated_weight = self.weight_per_sack_kg * self.total_sacks
+        if self.total_weight_kg is None:
+            self.total_weight_kg = calculated_weight
+        return self
 
 
 class Step3PackagingMetricItem(BaseModel):
@@ -268,7 +287,12 @@ class BlankStockResponse(BaseModel):
 
 class BottomStockCreate(BaseModel):
     bottom_size_mm: int = Field(..., gt=0)
-    total_qty_kg: Decimal = Field(..., ge=0)
+    bag_weight_kg: Optional[float] = Field(default=None, ge=0)
+    rolls_per_bag: Optional[int] = Field(default=None, ge=0)
+    total_bags: Optional[int] = Field(default=None, ge=0)
+    total_rolls: Optional[int] = Field(default=None, ge=0)
+    total_weight_kg: Optional[float] = Field(default=None, ge=0)
+    total_qty_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
 
 
 class BottomStockResponse(BaseModel):
@@ -281,8 +305,17 @@ class BottomStockResponse(BaseModel):
 
 
 class BoxStockCreate(BaseModel):
-    packaging_size_name: str = Field(..., min_length=1, max_length=100)
-    total_boxes: int = Field(..., ge=0)
+    box_type: str = Field(..., pattern="^(Small Box|Big Box)$")
+    quantity: int = Field(..., ge=0)
+    price_per_box: float = Field(..., ge=0)
+
+
+class PlasticStockCreate(BaseModel):
+    plastic_size_name: str = Field(..., min_length=1, max_length=100)
+    cup_size_ml: int = Field(..., gt=0)
+    total_boras: int = Field(..., ge=0)
+    weight_per_bora_kg: float = Field(..., ge=0)
+    price_per_kg: float = Field(..., ge=0)
 
 
 class BoxStockResponse(BaseModel):
@@ -346,6 +379,9 @@ class FinalProductStockResponse(BaseModel):
 
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    phone_number: str = Field(..., min_length=1, max_length=50)
+    place: str = Field(..., min_length=1, max_length=255)
+    gst_number: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = None
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_due: Decimal = Field(default=Decimal("0.00"), ge=0)
@@ -358,6 +394,9 @@ class CustomerResponse(BaseModel):
     id: int
     factory_id: int
     name: str
+    phone_number: Optional[str] = None
+    place: Optional[str] = None
+    gst_number: Optional[str] = None
     address: Optional[str] = None
     phone: Optional[str] = None
     previous_due: Decimal
@@ -372,12 +411,17 @@ class DailyProductionCreate(BaseModel):
     date: date
     worker_id: int = Field(..., gt=0)
     machine_id: int = Field(..., gt=0)
+    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    pieces_per_packet: int = Field(default=1, gt=0)
     packets_per_box_limit: int = Field(..., gt=0)
     total_boxes_made: int = Field(..., ge=0)
     loose_packets_made: int = Field(..., ge=0)
-    blank_used_kg: Decimal = Field(..., ge=0)
-    bottom_used_kg: Decimal = Field(..., ge=0)
+    blank_used_bori: Decimal = Field(default=Decimal("0.000"), ge=0)
+    bottom_used_rolls: int = Field(default=0, ge=0)
+    blank_used_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
+    bottom_used_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
+    wastage_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
 
 
 class DailyProductionResponse(BaseModel):
@@ -391,10 +435,14 @@ class DailyProductionResponse(BaseModel):
     blank_stock_after_kg: Decimal
     bottom_stock_after_kg: Decimal
     box_stock_after: int
+    wastage_status: str = "NORMAL"
+    total_raw_material_kg: Decimal = Decimal("0.000")
+    production_cost: Decimal = Decimal("0.00")
 
 
 class DailySaleItemCreate(BaseModel):
     product_size_ml: int = Field(..., gt=0)
+    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
     boxes_sold: int = Field(default=0, ge=0)
     loose_packets_sold: int = Field(default=0, ge=0)

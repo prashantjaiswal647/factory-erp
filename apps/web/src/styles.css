@@ -16,3 +16,16 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   background: #f4f4f5;
 }
+
+@keyframes munshi-float {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-14px) scale(1.02);
+  }
+}
+
+.munshi-float {
+  animation: munshi-float 5s ease-in-out infinite;
+}

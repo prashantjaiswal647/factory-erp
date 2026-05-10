@@ -3,8 +3,13 @@ import { Navigate, useLocation } from "react-router-dom";
 
 import LoadingState from "./LoadingState";
 import { useAuth } from "../context/AuthContext";
+import type { UserRole } from "../context/AuthContext";
 
-type UserRole = "Owner" | "Operator";
+export function roleHomePath(role: UserRole) {
+  if (role === "Owner") return "/dashboard";
+  if (role === "Supervisor") return "/production";
+  return "/inventory";
+}
 
 export default function PrivateRoute({
   allowedRoles,
@@ -25,7 +30,7 @@ export default function PrivateRoute({
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to={user.role === "Operator" ? "/production" : "/"} replace />;
+    return <Navigate to="/unauthorized" replace />;
   }
 
   return <>{children}</>;

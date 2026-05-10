@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
+from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
 from models import (
     BlankStock,
@@ -57,7 +57,7 @@ def normalize_name(value: str) -> str:
 @router.post("/factory", response_model=FactoryInfoResponse, status_code=status.HTTP_201_CREATED)
 def create_or_update_factory_info(
     payload: FactoryInfoCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_name = normalize_name(payload.factory_name)
@@ -83,7 +83,7 @@ def create_or_update_factory_info(
 @router.post("/machines", response_model=MachineResponse, status_code=status.HTTP_201_CREATED)
 def create_machine(
     payload: MachineCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_id = current_user.factory_id
@@ -119,7 +119,7 @@ def create_machine(
 @router.post("/stock/blanks", response_model=List[BlankStockResponse])
 def upsert_blank_stock_batches(
     payload: BlankStockBatchCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     totals_by_size: Dict[int, Decimal] = {}
@@ -157,7 +157,7 @@ def upsert_blank_stock_batches(
 @router.post("/stock/bottoms", response_model=BottomStockResponse, status_code=status.HTTP_201_CREATED)
 def upsert_bottom_stock(
     payload: BottomStockCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     stock = (
@@ -179,7 +179,7 @@ def upsert_bottom_stock(
 @router.post("/stock/boxes", response_model=BoxStockResponse, status_code=status.HTTP_201_CREATED)
 def upsert_box_stock(
     payload: BoxStockCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     packaging_size_name = normalize_name(payload.packaging_size_name)
@@ -202,7 +202,7 @@ def upsert_box_stock(
 @router.post("/stock/polybags", response_model=PolybagStockResponse, status_code=status.HTTP_201_CREATED)
 def upsert_polybag_stock(
     payload: PolybagStockCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     packaging_size_name = normalize_name(payload.packaging_size_name)
@@ -225,7 +225,7 @@ def upsert_polybag_stock(
 @router.post("/workers", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED)
 def create_worker(
     payload: WorkerCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     worker = Worker(
@@ -246,7 +246,7 @@ def create_worker(
 @router.post("/stock/final-products", response_model=FinalProductStockResponse, status_code=status.HTTP_201_CREATED)
 def upsert_final_product_stock(
     payload: FinalProductStockCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     packaging_size_name = normalize_name(payload.packaging_size_name)
@@ -276,7 +276,7 @@ def upsert_final_product_stock(
 @router.post("/customers", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 def create_customer(
     payload: CustomerCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
     customer = Customer(

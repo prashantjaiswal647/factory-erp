@@ -1,585 +1,351 @@
-import {
-  BadgeCheck,
-  Boxes,
-  Building2,
-  Check,
-  ChevronDown,
-  Edit3,
-  Factory,
-  Plus,
-  Save,
-  Trash2,
-  UsersRound
-} from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
-import { useMemo, useState } from "react";
+import { Check, Factory, Plus, Settings, Trash2, UserRound } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { completeOnboarding } from "../lib/api";
-import type { OnboardingPayload } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker } from "../lib/api";
+import type { BoxPackagingStockCreate, MachineCreate, PlasticStockCreate, WorkerCreate } from "../lib/api";
+import ConfigurationOverview from "../components/ConfigurationOverview";
 
-type SectionKey = "factory" | "machines" | "materials" | "workers";
-type MaterialType = OnboardingPayload["raw_materials"][number]["type"];
-type MaterialUnit = OnboardingPayload["raw_materials"][number]["unit"];
-
-type FactoryInfo = {
-  factoryName: string;
-  primaryCupSize: number;
-  defaultGsm: number;
-  expectedShift: string;
-};
-
-const sectionOrder: SectionKey[] = ["factory", "machines", "materials", "workers"];
-
-const initialFactoryInfo: FactoryInfo = {
-  factoryName: "",
-  primaryCupSize: 210,
-  defaultGsm: 185,
-  expectedShift: "Day"
-};
-
-const initialPayload: OnboardingPayload = {
-  machines: [],
-  raw_materials: [],
-  packaging_profiles: [],
-  material_yields: [],
-  costing_master: {
-    paper_price_per_kg: 0,
-    bottom_roll_price_per_kg: 0,
-    polybag_price: 0,
-    carton_price: 0,
-    labour_cost_per_box: 0,
-    electricity_cost_per_box: 0
-  },
-  workers: [],
-  customers: []
-};
-
-const defaultMachine = {
-  name: "",
-  speed_bpm: 55,
-  current_mould_size: "",
-  current_bottom_size: "",
-  can_swap_moulds: true
-};
-
-const defaultMaterial = {
-  name: "",
-  type: "Paper Blank" as MaterialType,
-  size_ml: 210,
-  gsm: 185,
-  stock_quantity: 0,
-  price_per_unit: 0,
-  unit: "kg" as MaterialUnit
-};
-
-const defaultWorker = {
-  name: "",
-  daily_salary: 0,
-  shift_type: "Day"
+const todayWorker: WorkerCreate = { name: "", daily_wages: 0, duty_hours: 8 };
+const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20, total_sacks: 0 };
+const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
+const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", quantity: 0, price_per_box: 0 };
+const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
+const machineDraft: MachineCreate = {
+  machine_type: "Paper Cup",
+  machine_number: "",
+  mould_size_ml: 210,
+  bottom_size_mm: 68,
+  speed_per_minute: 55
 };
 
 export default function OnboardingPage() {
-  const [factoryInfo, setFactoryInfo] = useState<FactoryInfo>(initialFactoryInfo);
-  const [payload, setPayload] = useState<OnboardingPayload>(initialPayload);
-  const [openSection, setOpenSection] = useState<SectionKey>("factory");
-  const [completedSections, setCompletedSections] = useState<Record<SectionKey, boolean>>({
-    factory: false,
-    machines: false,
-    materials: false,
-    workers: false
-  });
-  const [machineDraft, setMachineDraft] = useState(defaultMachine);
-  const [materialDraft, setMaterialDraft] = useState(defaultMaterial);
-  const [workerDraft, setWorkerDraft] = useState(defaultWorker);
+  const [step, setStep] = useState(0);
+  const [toast, setToast] = useState("");
+  const [worker, setWorker] = useState<WorkerCreate>(todayWorker);
+  const [machine, setMachine] = useState<MachineCreate>(machineDraft);
+  const [machines, setMachines] = useState<MachineCreate[]>([]);
+  const [blankStock, setBlankStock] = useState(blankStockDraft);
+  const [bottomStock, setBottomStock] = useState(bottomStockDraft);
+  const [boxStock, setBoxStock] = useState<BoxPackagingStockCreate>(boxStockDraft);
+  const [plasticStock, setPlasticStock] = useState<PlasticStockCreate>(plasticStockDraft);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const completedCount = sectionOrder.filter((key) => completedSections[key]).length;
-  const canSave = completedCount === sectionOrder.length;
-  const progress = Math.round((completedCount / sectionOrder.length) * 100);
-
-  const validation = useMemo(
-    () => ({
-      factory: factoryInfo.factoryName.trim().length > 1 && factoryInfo.primaryCupSize > 0 && factoryInfo.defaultGsm > 0,
-      machines: payload.machines.length > 0,
-      materials:
-        payload.raw_materials.length > 0 &&
-        payload.packaging_profiles.length > 0 &&
-        payload.material_yields.length >= 2 &&
-        payload.costing_master.paper_price_per_kg > 0 &&
-        payload.costing_master.bottom_roll_price_per_kg > 0,
-      workers: payload.workers.length > 0
-    }),
-    [factoryInfo, payload]
-  );
-
-  function completeSection(section: SectionKey) {
-    if (!validation[section]) {
-      return;
-    }
-
-    setCompletedSections((current) => ({ ...current, [section]: true }));
-    const nextSection = sectionOrder[sectionOrder.indexOf(section) + 1];
-    if (nextSection) {
-      window.setTimeout(() => setOpenSection(nextSection), 160);
-    }
-  }
-
-  function editSection(section: SectionKey) {
-    setCompletedSections((current) => ({ ...current, [section]: false }));
-    setOpenSection(section);
-  }
-
-  async function saveAll() {
-    if (!canSave) {
-      return;
-    }
-
+  async function saveWorker() {
+    if (!worker.name.trim()) return;
     setIsSaving(true);
-    setError(null);
-    try {
-      await completeOnboarding(payload);
-      navigate("/");
-    } catch {
-      setError("Onboarding could not be saved. Please check the entered setup data.");
-    } finally {
-      setIsSaving(false);
-    }
+    await createWorker(worker);
+    setToast("Worker saved");
+    setWorker(todayWorker);
+    setStep(1);
+    navigate("/");
+    setIsSaving(false);
+  }
+
+  async function saveMachines() {
+    if (machines.length === 0 && !machine.machine_number.trim()) return;
+    setIsSaving(true);
+    await createMachines(machines.length ? machines : [machine]);
+    setToast("Machines saved");
+    setStep(2);
+    navigate("/");
+    setIsSaving(false);
+  }
+
+  async function addBlankStock() {
+    setIsSaving(true);
+    await createBlankStock(blankStock);
+    setToast("Blank stock saved");
+    setBlankStock(blankStockDraft);
+    setIsSaving(false);
+  }
+
+  async function addBottomStock() {
+    setIsSaving(true);
+    await createBottomStock(bottomStock);
+    setToast("Bottom stock saved");
+    setBottomStock(bottomStockDraft);
+    setIsSaving(false);
+  }
+
+  async function addBoxStock() {
+    setIsSaving(true);
+    await createBoxPackagingStock(boxStock);
+    setToast("Box stock saved");
+    setBoxStock(boxStockDraft);
+    setIsSaving(false);
+  }
+
+  async function addPlasticStock() {
+    setIsSaving(true);
+    await createPlasticStock(plasticStock);
+    setToast("Plastic stock saved");
+    setPlasticStock(plasticStockDraft);
+    setIsSaving(false);
+  }
+
+  function updateBottomStock(patch: Partial<typeof bottomStockDraft>) {
+    const previousSuggestedRolls = (bottomStock.rolls_per_bag || 0) * (bottomStock.total_bags || 0);
+    const previousSuggestedWeight = Number(((bottomStock.bag_weight_kg || 0) * (bottomStock.total_bags || 0)).toFixed(3));
+    const next = { ...bottomStock, ...patch };
+    const nextSuggestedRolls = (next.rolls_per_bag || 0) * (next.total_bags || 0);
+    const nextSuggestedWeight = Number(((next.bag_weight_kg || 0) * (next.total_bags || 0)).toFixed(3));
+
+    setBottomStock({
+      ...next,
+      total_rolls:
+        next.total_rolls === null || next.total_rolls === previousSuggestedRolls
+          ? nextSuggestedRolls
+          : next.total_rolls,
+      total_weight_kg:
+        next.total_weight_kg === null || next.total_weight_kg === previousSuggestedWeight
+          ? nextSuggestedWeight
+          : next.total_weight_kg
+    });
   }
 
   return (
-    <div className="min-h-[calc(100vh-8rem)] bg-gray-50 pb-24">
-      <div className="mx-auto max-w-5xl px-4 py-6">
-        <header className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-md">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-start gap-4">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-brand-600 text-white shadow-md">
-                <Factory className="h-6 w-6" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-brand-700">Factory Setup</p>
-                <h1 className="mt-1 text-2xl font-semibold text-gray-950">Paper Cup Onboarding</h1>
-                <p className="mt-1 text-sm text-gray-500">Configure your factory workspace in one focused flow.</p>
-              </div>
-            </div>
-            <div className="min-w-48 rounded-xl bg-gray-50 p-3">
-              <div className="mb-2 flex items-center justify-between text-xs font-semibold text-gray-500">
-                <span>{completedCount}/{sectionOrder.length} complete</span>
-                <span>{progress}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-gray-200">
-                <div className="h-full rounded-full bg-brand-600 transition-all duration-300" style={{ width: `${progress}%` }} />
-              </div>
-            </div>
-          </div>
-        </header>
+    <div className="mx-auto max-w-5xl space-y-5">
+      {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
+      <header>
+        <h1 className="text-2xl font-semibold text-zinc-950">Onboarding Wizard</h1>
+        <p className="mt-1 text-sm text-zinc-500">Workers, machines, and material metrics.</p>
+      </header>
 
-        <main className="space-y-3">
-          <AccordionSection
-            icon={Building2}
-            title="1. Factory Info"
-            summary={factorySummary(factoryInfo)}
-            isOpen={openSection === "factory"}
-            isComplete={completedSections.factory}
-            onOpen={() => setOpenSection("factory")}
-            onEdit={() => editSection("factory")}
-          >
-            <div className="grid gap-4 md:grid-cols-4">
-              <TextField label="Factory Name" value={factoryInfo.factoryName} onChange={(value) => setFactoryInfo((draft) => ({ ...draft, factoryName: value }))} className="md:col-span-2" />
-              <NumberField label="Primary Cup Size" value={factoryInfo.primaryCupSize} onChange={(value) => {
-                setFactoryInfo((draft) => ({ ...draft, primaryCupSize: value }));
-                setMaterialDraft((draft) => ({ ...draft, size_ml: value }));
-              }} />
-              <NumberField label="Default GSM" value={factoryInfo.defaultGsm} onChange={(value) => {
-                setFactoryInfo((draft) => ({ ...draft, defaultGsm: value }));
-                setMaterialDraft((draft) => ({ ...draft, gsm: value }));
-              }} />
-            </div>
-            <div className="mt-5 flex justify-end">
-              <CompleteButton disabled={!validation.factory} onClick={() => completeSection("factory")} />
-            </div>
-          </AccordionSection>
+      <ConfigurationOverview />
 
-          <AccordionSection
-            icon={Factory}
-            title="2. Machines"
-            summary={`${payload.machines.length} machine${payload.machines.length === 1 ? "" : "s"} added`}
-            isOpen={openSection === "machines"}
-            isComplete={completedSections.machines}
-            onOpen={() => setOpenSection("machines")}
-            onEdit={() => editSection("machines")}
-          >
-            <QuickMachineRow draft={machineDraft} setDraft={setMachineDraft} onAdd={() => {
-              if (!machineDraft.name.trim()) {
-                return;
-              }
-              setPayload((draft) => ({ ...draft, machines: [...draft.machines, { ...machineDraft, name: machineDraft.name.trim() }] }));
-              setMachineDraft({ ...defaultMachine, name: `Machine ${payload.machines.length + 2}` });
-            }} />
-            <ChipGrid>
-              {payload.machines.map((machine, index) => (
-                <DataChip key={`${machine.name}-${index}`} title={machine.name} meta={`${machine.speed_bpm} BPM · ${machine.current_mould_size || "No mould"}`} onRemove={() => removeArrayItem(setPayload, "machines", index)} />
-              ))}
-            </ChipGrid>
-            <div className="mt-5 flex justify-end">
-              <CompleteButton disabled={!validation.machines} onClick={() => completeSection("machines")} />
-            </div>
-          </AccordionSection>
-
-          <AccordionSection
-            icon={Boxes}
-            title="3. Materials"
-            summary={`${payload.raw_materials.length} materials · ${payload.packaging_profiles.length} package profile${payload.packaging_profiles.length === 1 ? "" : "s"}`}
-            isOpen={openSection === "materials"}
-            isComplete={completedSections.materials}
-            onOpen={() => setOpenSection("materials")}
-            onEdit={() => editSection("materials")}
-          >
-            <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-              <div className="space-y-5">
-                <QuickMaterialRow draft={materialDraft} setDraft={setMaterialDraft} onAdd={() => {
-                  setPayload((draft) => ({ ...draft, raw_materials: [...draft.raw_materials, normalizeMaterial(materialDraft)] }));
-                  setMaterialDraft({ ...defaultMaterial, size_ml: factoryInfo.primaryCupSize, gsm: factoryInfo.defaultGsm });
-                }} />
-                <ChipGrid>
-                  {payload.raw_materials.map((material, index) => (
-                    <DataChip key={`${material.type}-${index}`} title={material.name || material.type} meta={`${material.size_ml || "-"}ml · ${material.stock_quantity} ${material.unit || ""}`} onRemove={() => removeArrayItem(setPayload, "raw_materials", index)} />
-                  ))}
-                </ChipGrid>
-              </div>
-
-              <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <h3 className="text-sm font-semibold text-gray-900">Default packaging and costing</h3>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <NumberField label="Cups/Polybag" value={payload.packaging_profiles[0]?.cups_per_polybag ?? 100} onChange={(value) => setPrimaryPackaging(setPayload, factoryInfo, "cups_per_polybag", value)} />
-                  <NumberField label="Polybags/Box" value={payload.packaging_profiles[0]?.polybags_per_box ?? 10} onChange={(value) => setPrimaryPackaging(setPayload, factoryInfo, "polybags_per_box", value)} />
-                  <NumberField label="Paper/kg" value={payload.costing_master.paper_price_per_kg} onChange={(value) => setCosting(setPayload, "paper_price_per_kg", value)} />
-                  <NumberField label="Bottom/kg" value={payload.costing_master.bottom_roll_price_per_kg} onChange={(value) => setCosting(setPayload, "bottom_roll_price_per_kg", value)} />
-                  <NumberField label="Polybag" value={payload.costing_master.polybag_price} onChange={(value) => setCosting(setPayload, "polybag_price", value)} />
-                  <NumberField label="Carton" value={payload.costing_master.carton_price} onChange={(value) => setCosting(setPayload, "carton_price", value)} />
-                  <NumberField label="Labour/Box" value={payload.costing_master.labour_cost_per_box} onChange={(value) => setCosting(setPayload, "labour_cost_per_box", value)} />
-                  <NumberField label="Electricity/Box" value={payload.costing_master.electricity_cost_per_box} onChange={(value) => setCosting(setPayload, "electricity_cost_per_box", value)} />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => seedMaterialYield(setPayload, factoryInfo)}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 shadow-sm transition hover:border-brand-200 hover:text-brand-700"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add default yield
-                </button>
-              </div>
-            </div>
-            <div className="mt-5 flex justify-end">
-              <CompleteButton disabled={!validation.materials} onClick={() => completeSection("materials")} />
-            </div>
-          </AccordionSection>
-
-          <AccordionSection
-            icon={UsersRound}
-            title="4. Workers"
-            summary={`${payload.workers.length} worker${payload.workers.length === 1 ? "" : "s"} added`}
-            isOpen={openSection === "workers"}
-            isComplete={completedSections.workers}
-            onOpen={() => setOpenSection("workers")}
-            onEdit={() => editSection("workers")}
-          >
-            <QuickWorkerRow draft={workerDraft} setDraft={setWorkerDraft} onAdd={() => {
-              if (!workerDraft.name.trim()) {
-                return;
-              }
-              setPayload((draft) => ({ ...draft, workers: [...draft.workers, { ...workerDraft, name: workerDraft.name.trim() }] }));
-              setWorkerDraft({ ...defaultWorker, shift_type: factoryInfo.expectedShift });
-            }} />
-            <ChipGrid>
-              {payload.workers.map((worker, index) => (
-                <DataChip key={`${worker.name}-${index}`} title={worker.name} meta={`${worker.shift_type || "Shift"} · ₹${worker.daily_salary}/day`} onRemove={() => removeArrayItem(setPayload, "workers", index)} />
-              ))}
-            </ChipGrid>
-            <div className="mt-5 flex justify-end">
-              <CompleteButton disabled={!validation.workers} onClick={() => completeSection("workers")} />
-            </div>
-          </AccordionSection>
-        </main>
-      </div>
-
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
-        <div className="mx-auto flex max-w-5xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Ready to save setup</p>
-            <p className="text-xs text-gray-500">All sections must be completed and collapsed before saving.</p>
-            {error ? <p className="mt-1 text-xs font-semibold text-red-600">{error}</p> : null}
-          </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {["Workers", "Machines", "Raw Materials"].map((label, index) => (
           <button
+            key={label}
+            className={`flex h-12 items-center justify-center rounded-md border text-sm font-semibold ${
+              step === index ? "border-brand-600 bg-brand-50 text-brand-700" : "border-zinc-200 bg-white text-zinc-600"
+            }`}
             type="button"
-            disabled={!canSave || isSaving}
-            onClick={saveAll}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 text-sm font-semibold text-white shadow-md transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
+            onClick={() => setStep(index)}
           >
-            <Save className="h-4 w-4" />
-            {isSaving ? "Saving..." : "Save All to Database"}
+            {label}
           </button>
-        </div>
+        ))}
       </div>
+
+      {step === 0 ? (
+        <Panel icon={UserRound} title="Worker">
+          <div className="grid gap-3 md:grid-cols-3">
+            <TextInput label="Name" value={worker.name} onChange={(name) => setWorker({ ...worker, name })} />
+            <NumberInput label="Daily wages" value={worker.daily_wages} onChange={(daily_wages) => setWorker({ ...worker, daily_wages })} />
+            <NumberInput label="Duty hours" value={worker.duty_hours} onChange={(duty_hours) => setWorker({ ...worker, duty_hours })} />
+          </div>
+          <SaveButton label="Save Worker" isSaving={isSaving} onClick={saveWorker} />
+        </Panel>
+      ) : null}
+
+      {step === 1 ? (
+        <Panel icon={Factory} title="Machines">
+          <div className="grid gap-3 md:grid-cols-5">
+            <TextInput label="Machine no." value={machine.machine_number} onChange={(machine_number) => setMachine({ ...machine, machine_number })} />
+            <SelectInput label="Type" value={machine.machine_type} options={["Paper Cup", "Dona", "Paper Bag"]} onChange={(machine_type) => setMachine({ ...machine, machine_type: machine_type as MachineCreate["machine_type"] })} />
+            <NumberInput label="Mould ml" value={machine.mould_size_ml} onChange={(mould_size_ml) => setMachine({ ...machine, mould_size_ml })} />
+            <NumberInput label="Bottom mm" value={machine.bottom_size_mm} onChange={(bottom_size_mm) => setMachine({ ...machine, bottom_size_mm })} />
+            <NumberInput label="Speed/min" value={machine.speed_per_minute} onChange={(speed_per_minute) => setMachine({ ...machine, speed_per_minute })} />
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700"
+              type="button"
+              onClick={() => {
+                if (!machine.machine_number.trim()) return;
+                setMachines([...machines, machine]);
+                setMachine({ ...machineDraft, machine_number: "" });
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              Add row
+            </button>
+            <SaveButton label="Save Machines" isSaving={isSaving} onClick={saveMachines} />
+          </div>
+          <List rows={machines.map((row) => `${row.machine_number} / ${row.mould_size_ml}ml / ${row.speed_per_minute} per min`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
+        </Panel>
+      ) : null}
+
+      {step === 2 ? (
+        <Panel icon={Settings} title="Raw Materials">
+          <div className="grid gap-5 xl:grid-cols-2">
+            <MaterialCard title="Blank Stock">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput label="Material Name" value={blankStock.material_name} onChange={(material_name) => setBlankStock({ ...blankStock, material_name })} />
+                <NumberInput label="Size (ml)" value={blankStock.size_ml} onChange={(size_ml) => setBlankStock({ ...blankStock, size_ml })} />
+                <NumberInput label="KG per Sack" value={blankStock.kg_per_sack} onChange={(kg_per_sack) => setBlankStock({ ...blankStock, kg_per_sack })} />
+                <NumberInput label="Total Sacks" value={blankStock.total_sacks} onChange={(total_sacks) => setBlankStock({ ...blankStock, total_sacks })} />
+              </div>
+              <Readout label="Total Weight (KG)" value={Number((blankStock.kg_per_sack * blankStock.total_sacks).toFixed(3))} />
+              <StockButton label="Add Blank Stock" color="green" isSaving={isSaving} onClick={addBlankStock} />
+            </MaterialCard>
+
+            <MaterialCard title="Bottom Stock">
+              <div className="mt-3 grid gap-3 md:grid-cols-4">
+                <NumberInput label="Bottom Size (mm)" value={bottomStock.bottom_size_mm} onChange={(bottom_size_mm) => updateBottomStock({ bottom_size_mm })} />
+                <OptionalNumberInput label="Bag Weight (kg)" value={bottomStock.bag_weight_kg} onChange={(bag_weight_kg) => updateBottomStock({ bag_weight_kg })} />
+                <OptionalNumberInput label="Individual Rolls per Bag" value={bottomStock.rolls_per_bag} onChange={(rolls_per_bag) => updateBottomStock({ rolls_per_bag })} />
+                <OptionalNumberInput label="Total Number of Bags" value={bottomStock.total_bags} onChange={(total_bags) => updateBottomStock({ total_bags })} />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <OptionalNumberInput label="Total Individual Rolls" value={bottomStock.total_rolls} onChange={(total_rolls) => setBottomStock({ ...bottomStock, total_rolls })} />
+                <OptionalNumberInput label="Total Weight (KG)" value={bottomStock.total_weight_kg} onChange={(total_weight_kg) => setBottomStock({ ...bottomStock, total_weight_kg })} />
+              </div>
+              <StockButton label="Add Bottom Stock" color="teal" isSaving={isSaving} onClick={addBottomStock} />
+            </MaterialCard>
+
+            <MaterialCard title="Box Packaging Stock">
+              <div className="grid gap-3 md:grid-cols-3">
+                <SelectInput label="Box Type" value={boxStock.box_type} options={["Small Box", "Big Box"]} onChange={(box_type) => setBoxStock({ ...boxStock, box_type: box_type as BoxPackagingStockCreate["box_type"] })} />
+                <NumberInput label="Box Quantity (Pieces)" value={boxStock.quantity} onChange={(quantity) => setBoxStock({ ...boxStock, quantity })} />
+                <NumberInput label="Price per Box (Rs)" value={boxStock.price_per_box} onChange={(price_per_box) => setBoxStock({ ...boxStock, price_per_box })} />
+              </div>
+              <StockButton label="Add Box Stock" color="blue" isSaving={isSaving} onClick={addBoxStock} />
+            </MaterialCard>
+
+            <MaterialCard title="PP Plastic Packaging Stock">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput label="Plastic Size/Type" value={plasticStock.plastic_size_name} onChange={(plastic_size_name) => setPlasticStock({ ...plasticStock, plastic_size_name })} />
+                <SelectInput label="Used for Cup Size (ml)" value={String(plasticStock.cup_size_ml)} options={["65", "100", "150", "210", "250"]} onChange={(cup_size_ml) => setPlasticStock({ ...plasticStock, cup_size_ml: Number(cup_size_ml) })} />
+                <NumberInput label="Total Boras (Sacks)" value={plasticStock.total_boras} onChange={(total_boras) => setPlasticStock({ ...plasticStock, total_boras })} />
+                <NumberInput label="Weight per Bora (KG)" value={plasticStock.weight_per_bora_kg} onChange={(weight_per_bora_kg) => setPlasticStock({ ...plasticStock, weight_per_bora_kg })} />
+                <NumberInput label="Price per KG (Rs)" value={plasticStock.price_per_kg} onChange={(price_per_kg) => setPlasticStock({ ...plasticStock, price_per_kg })} />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-1">
+                <Readout label="Total Plastic (KG)" value={Number((plasticStock.total_boras * plasticStock.weight_per_bora_kg).toFixed(3))} />
+              </div>
+              <StockButton label="Add Plastic Stock" color="purple" isSaving={isSaving} onClick={addPlasticStock} />
+            </MaterialCard>
+          </div>
+        </Panel>
+      ) : null}
     </div>
   );
+
 }
 
-function AccordionSection({
-  icon: Icon,
-  title,
-  summary,
-  isOpen,
-  isComplete,
-  onOpen,
-  onEdit,
-  children
-}: {
-  icon: typeof Factory;
-  title: string;
-  summary: string;
-  isOpen: boolean;
-  isComplete: boolean;
-  onOpen: () => void;
-  onEdit: () => void;
-  children: React.ReactNode;
-}) {
+function Panel({ icon: Icon, title, children }: { icon: typeof UserRound; title: string; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-md transition-all duration-300">
-      <button
-        type="button"
-        onClick={isComplete ? onEdit : onOpen}
-        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-      >
-        <span className="flex min-w-0 items-center gap-3">
-          <span className={["grid h-10 w-10 shrink-0 place-items-center rounded-xl", isComplete ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-700"].join(" ")}>
-            {isComplete ? <Check className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
-          </span>
-          <span className="min-w-0">
-            <span className="block text-base font-semibold text-gray-950">{title}</span>
-            <span className="block truncate text-sm text-gray-500">{isComplete ? summary : "Complete this section to continue"}</span>
-          </span>
+    <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+      <div className="mb-5 flex items-center gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
+          <Icon className="h-5 w-5" />
         </span>
-        <span className="flex shrink-0 items-center gap-2">
-          {isComplete ? (
-            <span className="inline-flex h-9 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700">
-              <BadgeCheck className="h-4 w-4" />
-              Done
-              <Edit3 className="h-4 w-4" />
-            </span>
-          ) : (
-            <ChevronDown className={["h-5 w-5 text-gray-400 transition-transform duration-300", isOpen ? "rotate-180" : ""].join(" ")} />
-          )}
-        </span>
-      </button>
-      <div className={["grid transition-all duration-300", isOpen && !isComplete ? "grid-rows-[1fr]" : "grid-rows-[0fr]"].join(" ")}>
-        <div className="overflow-hidden">
-          <div className="border-t border-gray-100 px-5 py-5">{children}</div>
-        </div>
+        <h2 className="text-lg font-semibold text-zinc-950">{title}</h2>
       </div>
+      {children}
     </section>
   );
 }
 
-function QuickMachineRow({
-  draft,
-  setDraft,
-  onAdd
-}: {
-  draft: typeof defaultMachine;
-  setDraft: Dispatch<SetStateAction<typeof defaultMachine>>;
-  onAdd: () => void;
-}) {
+function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-[1.2fr_0.8fr_1fr_1fr_auto]">
-      <TextField label="Machine" value={draft.name} onChange={(value) => setDraft((current) => ({ ...current, name: value }))} />
-      <NumberField label="BPM" value={draft.speed_bpm} onChange={(value) => setDraft((current) => ({ ...current, speed_bpm: value }))} />
-      <TextField label="Mould" value={draft.current_mould_size} onChange={(value) => setDraft((current) => ({ ...current, current_mould_size: value }))} />
-      <TextField label="Bottom" value={draft.current_bottom_size} onChange={(value) => setDraft((current) => ({ ...current, current_bottom_size: value }))} />
-      <AddButton onClick={onAdd} />
-    </div>
-  );
-}
-
-function QuickMaterialRow({
-  draft,
-  setDraft,
-  onAdd
-}: {
-  draft: typeof defaultMaterial;
-  setDraft: Dispatch<SetStateAction<typeof defaultMaterial>>;
-  onAdd: () => void;
-}) {
-  return (
-    <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-[1fr_0.7fr_0.7fr_0.8fr_0.8fr_auto]">
-      <label className="space-y-1 text-sm">
-        <span className="font-semibold text-gray-700">Type</span>
-        <select className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={draft.type} onChange={(event) => setDraft((current) => ({
-          ...current,
-          type: event.target.value as MaterialType,
-          unit: event.target.value === "Polybag" || event.target.value === "Carton Box" ? "pieces" : "kg"
-        }))}>
-          {["Paper Blank", "Bottom Roll", "Polybag", "Carton Box"].map((option) => <option key={option} value={option}>{option}</option>)}
-        </select>
-      </label>
-      <NumberField label="ML" value={draft.size_ml ?? 0} onChange={(value) => setDraft((current) => ({ ...current, size_ml: value }))} />
-      <NumberField label="GSM" value={draft.gsm ?? 0} onChange={(value) => setDraft((current) => ({ ...current, gsm: value }))} />
-      <NumberField label="Stock" value={draft.stock_quantity} onChange={(value) => setDraft((current) => ({ ...current, stock_quantity: value }))} />
-      <NumberField label="Price" value={draft.price_per_unit} onChange={(value) => setDraft((current) => ({ ...current, price_per_unit: value }))} />
-      <AddButton onClick={onAdd} />
-    </div>
-  );
-}
-
-function QuickWorkerRow({
-  draft,
-  setDraft,
-  onAdd
-}: {
-  draft: typeof defaultWorker;
-  setDraft: Dispatch<SetStateAction<typeof defaultWorker>>;
-  onAdd: () => void;
-}) {
-  return (
-    <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-[1.2fr_0.8fr_0.8fr_auto]">
-      <TextField label="Worker" value={draft.name} onChange={(value) => setDraft((current) => ({ ...current, name: value }))} />
-      <NumberField label="Daily Salary" value={draft.daily_salary} onChange={(value) => setDraft((current) => ({ ...current, daily_salary: value }))} />
-      <TextField label="Shift" value={draft.shift_type ?? ""} onChange={(value) => setDraft((current) => ({ ...current, shift_type: value }))} />
-      <AddButton onClick={onAdd} />
-    </div>
-  );
-}
-
-function TextField({ label, value, onChange, className = "" }: { label: string; value: string; onChange: (value: string) => void; className?: string }) {
-  return (
-    <label className={["space-y-1 text-sm", className].join(" ")}>
-      <span className="font-semibold text-gray-700">{label}</span>
-      <input className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value)} />
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
 
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, onChange, readOnly = false }: { label: string; value: number; onChange: (value: number) => void; readOnly?: boolean }) {
   return (
-    <label className="space-y-1 text-sm">
-      <span className="font-semibold text-gray-700">{label}</span>
-      <input className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100" min="0" type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    <label className="block text-sm">
+      {label ? <span className="font-medium text-zinc-700">{label}</span> : null}
+      <input className={`${label ? "mt-1" : ""} h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 read-only:bg-zinc-50 read-only:text-zinc-500`} type="number" value={value} readOnly={readOnly} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }
 
-function AddButton({ onClick }: { onClick: () => void }) {
+function OptionalNumberInput({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) {
   return (
-    <button type="button" onClick={onClick} className="mt-auto inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-gray-950 px-4 text-sm font-semibold text-white shadow-md transition hover:bg-gray-800">
-      <Plus className="h-4 w-4" />
-      Add
-    </button>
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <input
+        className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+        type="number"
+        value={value ?? ""}
+        onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+      />
+    </label>
   );
 }
 
-function CompleteButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+function SelectInput({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="inline-flex h-10 items-center gap-2 rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white shadow-md transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none">
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option key={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function SaveButton({ label, isSaving, onClick }: { label: string; isSaving: boolean; onClick: () => void }) {
+  return (
+    <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving} type="button" onClick={onClick}>
       <Check className="h-4 w-4" />
-      Complete Section
+      {isSaving ? "Saving..." : label}
     </button>
   );
 }
 
-function ChipGrid({ children }: { children: React.ReactNode }) {
-  return <div className="mt-4 flex flex-wrap gap-2">{children}</div>;
-}
-
-function DataChip({ title, meta, onRemove }: { title: string; meta: string; onRemove: () => void }) {
+function List({ rows, onRemove }: { rows: string[]; onRemove: (index: number) => void }) {
+  if (rows.length === 0) return null;
   return (
-    <span className="inline-flex max-w-full items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm">
-      <span className="min-w-0">
-        <span className="block truncate font-semibold text-gray-900">{title}</span>
-        <span className="block truncate text-xs text-gray-500">{meta}</span>
-      </span>
-      <button type="button" onClick={onRemove} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-gray-400 transition hover:bg-red-50 hover:text-red-600" aria-label={`Remove ${title}`}>
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </span>
+    <div className="mt-4 divide-y divide-zinc-100 rounded-md border border-zinc-200">
+      {rows.map((row, index) => (
+        <div key={`${row}-${index}`} className="flex items-center justify-between px-3 py-2 text-sm">
+          <span>{row}</span>
+          <button className="text-zinc-400 hover:text-red-600" type="button" onClick={() => onRemove(index)}>
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 
-function factorySummary(factoryInfo: FactoryInfo) {
-  if (!factoryInfo.factoryName.trim()) {
-    return "Factory details pending";
-  }
-  return `${factoryInfo.factoryName} · ${factoryInfo.primaryCupSize}ml · ${factoryInfo.defaultGsm}gsm`;
+function MaterialCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+      <h3 className="text-sm font-semibold text-zinc-950">{title}</h3>
+      <div className="mt-4 space-y-4">{children}</div>
+    </section>
+  );
 }
 
-function normalizeMaterial(material: typeof defaultMaterial) {
-  const name = [material.type, material.size_ml ? `${material.size_ml}ml` : "", material.gsm ? `${material.gsm}gsm` : ""]
-    .filter(Boolean)
-    .join(" ");
-  return {
-    ...material,
-    name,
-    size_ml: material.size_ml || null,
-    gsm: material.gsm || null
+function StockButton({ label, color, isSaving, onClick }: { label: string; color: "green" | "teal" | "blue" | "purple"; isSaving: boolean; onClick: () => void }) {
+  const colors = {
+    green: "bg-emerald-600 hover:bg-emerald-700",
+    teal: "bg-teal-600 hover:bg-teal-700",
+    blue: "bg-blue-600 hover:bg-blue-700",
+    purple: "bg-purple-600 hover:bg-purple-700"
   };
+  return (
+    <button className={`inline-flex h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white disabled:bg-zinc-300 ${colors[color]}`} disabled={isSaving} type="button" onClick={onClick}>
+      <Plus className="h-4 w-4" />
+      {isSaving ? "Saving..." : `+ ${label}`}
+    </button>
+  );
 }
 
-function seedMaterialYield(setPayload: Dispatch<SetStateAction<OnboardingPayload>>, factoryInfo: FactoryInfo) {
-  setPayload((draft) => ({
-    ...draft,
-    packaging_profiles: [
-      {
-        product_name_ml: factoryInfo.primaryCupSize,
-        cups_per_polybag: draft.packaging_profiles[0]?.cups_per_polybag ?? 100,
-        polybags_per_box: draft.packaging_profiles[0]?.polybags_per_box ?? 10,
-        box_size_name: `${factoryInfo.primaryCupSize}ml Carton`
-      }
-    ],
-    material_yields: [
-      { material_type: "Blank", size_ml: factoryInfo.primaryCupSize, gsm: factoryInfo.defaultGsm, pieces_per_kg: 380 },
-      { material_type: "Bottom", size_ml: factoryInfo.primaryCupSize, gsm: factoryInfo.defaultGsm, pieces_per_kg: 2500 }
-    ]
-  }));
+function Readout({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-zinc-50 p-3">
+      <p className="text-xs font-medium uppercase text-zinc-500">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-zinc-950">{value}</p>
+    </div>
+  );
 }
 
-function setPrimaryPackaging(
-  setPayload: Dispatch<SetStateAction<OnboardingPayload>>,
-  factoryInfo: FactoryInfo,
-  field: "cups_per_polybag" | "polybags_per_box",
-  value: number
-) {
-  setPayload((draft) => ({
-    ...draft,
-    packaging_profiles: [
-      {
-        product_name_ml: factoryInfo.primaryCupSize,
-        cups_per_polybag: field === "cups_per_polybag" ? value : draft.packaging_profiles[0]?.cups_per_polybag ?? 100,
-        polybags_per_box: field === "polybags_per_box" ? value : draft.packaging_profiles[0]?.polybags_per_box ?? 10,
-        box_size_name: draft.packaging_profiles[0]?.box_size_name ?? `${factoryInfo.primaryCupSize}ml Carton`
-      }
-    ]
-  }));
-}
-
-function setCosting<K extends keyof OnboardingPayload["costing_master"]>(
-  setPayload: Dispatch<SetStateAction<OnboardingPayload>>,
-  key: K,
-  value: number
-) {
-  setPayload((draft) => ({
-    ...draft,
-    costing_master: { ...draft.costing_master, [key]: value }
-  }));
-}
-
-function removeArrayItem<K extends keyof Pick<OnboardingPayload, "machines" | "raw_materials" | "workers">>(
-  setPayload: Dispatch<SetStateAction<OnboardingPayload>>,
-  key: K,
-  index: number
-) {
-  setPayload((draft) => ({
-    ...draft,
-    [key]: (draft[key] as unknown[]).filter((_, itemIndex) => itemIndex !== index)
-  }));
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <button className="fixed right-5 top-20 z-50 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
+      {message}
+    </button>
+  );
 }

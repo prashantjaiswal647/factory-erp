@@ -50,9 +50,11 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(36), nullable=True, unique=True, index=True)
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
     username = Column(String(100), nullable=False, unique=True, index=True)
     phone_number = Column(String(50), nullable=True, unique=True, index=True)
+    full_name = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="Operator", server_default="Operator", index=True)
     is_verified = Column(Boolean, nullable=False, default=False, server_default="false")
@@ -62,7 +64,7 @@ class User(Base):
     owned_factory = relationship("Factory", back_populates="owner", foreign_keys="Factory.owner_phone_number")
 
     __table_args__ = (
-        CheckConstraint("role IN ('Owner', 'Operator', 'Worker')", name="ck_users_role"),
+        CheckConstraint("role IN ('Owner', 'Supervisor', 'Operator')", name="ck_users_role"),
     )
 
 
@@ -142,6 +144,9 @@ class Customer(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
+    phone_number = Column(String(50), nullable=True, index=True)
+    place = Column(String(255), nullable=True, index=True)
+    gst_number = Column(String(50), nullable=True)
     address = Column(Text, nullable=True)
     phone = Column(String(50), nullable=True)
     previous_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
@@ -152,6 +157,7 @@ class Customer(TenantMixin, Base):
     is_portal_approved = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     portal_access_token = Column(String(255), nullable=True, unique=True, index=True)
     last_balance_update = Column(DateTime(timezone=True), nullable=True)
+    last_whatsapp_reminder_at = Column(DateTime(timezone=True), nullable=True)
     advance_discount_pct = Column(Float, nullable=False, default=5.0, server_default="5.0")
     balance_amount = Column(Numeric(14, 2), nullable=False, default=0)
     pending_dues = Column(Float, nullable=False, default=0.0, server_default="0")
@@ -172,6 +178,7 @@ class Customer(TenantMixin, Base):
             name="ck_customers_advance_discount_pct_range",
         ),
         UniqueConstraint("factory_id", "name", name="uq_customers_factory_name"),
+        UniqueConstraint("factory_id", "phone_number", name="uq_customers_factory_phone_number"),
     )
 
 
@@ -458,6 +465,7 @@ class Worker(TenantMixin, Base):
     shift_hours = Column(Float, nullable=False, default=8.0, server_default="8.0")
     shift_timing = Column(String(100), nullable=True)
     shift_type = Column(String(100), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
     __table_args__ = (
         CheckConstraint("daily_wages >= 0", name="ck_workers_daily_wages_non_negative"),
@@ -653,12 +661,15 @@ class BlankStock(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     blank_size_ml = Column(Integer, nullable=False, index=True)
+    variety = Column(String(100), nullable=False, default="Plain White", server_default="Plain White", index=True)
     linked_bottom_size_mm = Column(Integer, nullable=False, index=True)
+    weight_per_bora_kg = Column(Numeric(14, 3), nullable=True)
+    total_boras = Column(Numeric(14, 3), nullable=True)
     total_qty_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        UniqueConstraint("factory_id", "blank_size_ml", name="uq_blank_stock_factory_size"),
+        UniqueConstraint("factory_id", "blank_size_ml", "variety", name="uq_blank_stock_factory_size_variety"),
         CheckConstraint("blank_size_ml > 0", name="ck_blank_stock_size_positive"),
         CheckConstraint("linked_bottom_size_mm > 0", name="ck_blank_stock_bottom_size_positive"),
     )
@@ -669,12 +680,22 @@ class BottomStock(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     bottom_size_mm = Column(Integer, nullable=False, index=True)
+    variety = Column(String(100), nullable=False, default="Plain White", server_default="Plain White", index=True)
+    bag_weight_kg = Column(Numeric(14, 3), nullable=True)
+    rolls_per_bag = Column(Integer, nullable=True)
+    total_bags = Column(Integer, nullable=True)
+    total_rolls = Column(Integer, nullable=False, default=0, server_default="0")
+    total_weight_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     total_qty_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        UniqueConstraint("factory_id", "bottom_size_mm", name="uq_bottom_stock_factory_size"),
+        UniqueConstraint("factory_id", "bottom_size_mm", "variety", name="uq_bottom_stock_factory_size_variety"),
         CheckConstraint("bottom_size_mm > 0", name="ck_bottom_stock_size_positive"),
+        CheckConstraint("bag_weight_kg >= 0", name="ck_bottom_stock_bag_weight_non_negative"),
+        CheckConstraint("rolls_per_bag >= 0", name="ck_bottom_stock_rolls_per_bag_non_negative"),
+        CheckConstraint("total_bags >= 0", name="ck_bottom_stock_total_bags_non_negative"),
+        CheckConstraint("total_rolls >= 0", name="ck_bottom_stock_total_rolls_non_negative"),
     )
 
 
@@ -684,10 +705,35 @@ class BoxStock(TenantMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
     total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
+    box_type = Column(String(100), nullable=True, index=True)
+    quantity = Column(Integer, nullable=False, default=0, server_default="0")
+    price_per_box = Column(Float, nullable=False, default=0.0, server_default="0")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("factory_id", "packaging_size_name", name="uq_box_stock_factory_size"),
+        CheckConstraint("quantity >= 0", name="ck_box_stock_quantity_non_negative"),
+        CheckConstraint("price_per_box >= 0", name="ck_box_stock_price_non_negative"),
+    )
+
+
+class PlasticStock(TenantMixin, Base):
+    __tablename__ = "plastic_stock"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plastic_size_name = Column(String(100), nullable=False, index=True)
+    cup_size_ml = Column(Integer, nullable=False, index=True)
+    total_boras = Column(Integer, nullable=False, default=0, server_default="0")
+    weight_per_bora_kg = Column(Float, nullable=False, default=0.0, server_default="0")
+    price_per_kg = Column(Float, nullable=False, default=0.0, server_default="0")
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "plastic_size_name", "cup_size_ml", name="uq_plastic_stock_factory_size_cup"),
+        CheckConstraint("cup_size_ml > 0", name="ck_plastic_stock_cup_size_positive"),
+        CheckConstraint("total_boras >= 0", name="ck_plastic_stock_total_boras_non_negative"),
+        CheckConstraint("weight_per_bora_kg >= 0", name="ck_plastic_stock_weight_non_negative"),
+        CheckConstraint("price_per_kg >= 0", name="ck_plastic_stock_price_non_negative"),
     )
 
 
@@ -710,6 +756,7 @@ class FinalProductStock(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     product_size_ml = Column(Integer, nullable=False, index=True)
+    variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
     total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
     loose_packets = Column(Integer, nullable=False, default=0, server_default="0")
@@ -717,7 +764,7 @@ class FinalProductStock(TenantMixin, Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        UniqueConstraint("factory_id", "product_size_ml", "packaging_size_name", name="uq_final_product_factory_product_pack"),
+        UniqueConstraint("factory_id", "product_size_ml", "variety", "packaging_size_name", name="uq_final_product_factory_product_variety_pack"),
         CheckConstraint("product_size_ml > 0", name="ck_final_product_size_positive"),
         CheckConstraint("loose_packets >= 0", name="ck_final_product_loose_non_negative"),
         CheckConstraint("packets_per_box_limit > 0", name="ck_final_product_packets_limit_positive"),
@@ -732,6 +779,7 @@ class DailyProduction(TenantMixin, Base):
     worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
     machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False, index=True)
     product_size_ml = Column(Integer, nullable=False, index=True)
+    variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
     packets_per_box_limit = Column(Integer, nullable=False)
     total_boxes_made = Column(Integer, nullable=False, default=0, server_default="0")
@@ -739,6 +787,13 @@ class DailyProduction(TenantMixin, Base):
     boxes_from_loose = Column(Integer, nullable=False, default=0, server_default="0")
     blank_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     bottom_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    wastage_status = Column(String(50), nullable=False, default="NORMAL", server_default="NORMAL", index=True)
+    total_raw_material_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    raw_material_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    labor_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    electricity_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    production_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -748,6 +803,12 @@ class DailyProduction(TenantMixin, Base):
         CheckConstraint("loose_packets_made >= 0", name="ck_daily_productions_loose_non_negative"),
         CheckConstraint("blank_used_kg >= 0", name="ck_daily_productions_blank_used_non_negative"),
         CheckConstraint("bottom_used_kg >= 0", name="ck_daily_productions_bottom_used_non_negative"),
+        CheckConstraint("wastage_kg >= 0", name="ck_daily_productions_wastage_non_negative"),
+        CheckConstraint("total_raw_material_kg >= 0", name="ck_daily_productions_total_raw_non_negative"),
+        CheckConstraint("raw_material_cost >= 0", name="ck_daily_productions_raw_cost_non_negative"),
+        CheckConstraint("labor_cost >= 0", name="ck_daily_productions_labor_cost_non_negative"),
+        CheckConstraint("electricity_cost >= 0", name="ck_daily_productions_electricity_cost_non_negative"),
+        CheckConstraint("production_cost >= 0", name="ck_daily_productions_cost_non_negative"),
     )
 
 
@@ -758,6 +819,7 @@ class DailySale(TenantMixin, Base):
     date = Column(Date, nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
     product_size_ml = Column(Integer, nullable=False, index=True)
+    variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
     boxes_sold = Column(Integer, nullable=False, default=0, server_default="0")
     loose_packets_sold = Column(Integer, nullable=False, default=0, server_default="0")
@@ -765,6 +827,9 @@ class DailySale(TenantMixin, Base):
     rate_per_packet = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     total_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    customer_phone = Column(String(50), nullable=True, index=True)
+    total_bill = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    initial_payment = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -775,4 +840,23 @@ class DailySale(TenantMixin, Base):
         CheckConstraint("rate_per_packet >= 0", name="ck_daily_sales_rate_packet_non_negative"),
         CheckConstraint("total_amount >= 0", name="ck_daily_sales_total_amount_non_negative"),
         CheckConstraint("amount_paid >= 0", name="ck_daily_sales_amount_paid_non_negative"),
+        CheckConstraint("total_bill >= 0", name="ck_daily_sales_total_bill_non_negative"),
+        CheckConstraint("initial_payment >= 0", name="ck_daily_sales_initial_payment_non_negative"),
+    )
+
+
+class Payment(TenantMixin, Base):
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_phone = Column(String(50), nullable=False, index=True)
+    sale_id = Column(Integer, ForeignKey("daily_sales.id"), nullable=True, index=True)
+    amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    payment_mode = Column(String(20), nullable=False, default="Cash", server_default="Cash")
+    date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("amount_paid > 0", name="ck_payments_amount_paid_positive"),
+        CheckConstraint("payment_mode IN ('Cash', 'UPI', 'Bank Transfer')", name="ck_payments_mode_valid"),
     )

@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta, timezone
 import os
 import random
-from typing import Optional
+from typing import Callable, Optional
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
@@ -44,10 +45,11 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     return pwd_context.verify(plain_password, password_hash)
 
 
-def create_access_token(subject: str, role: str, factory_id: Optional[int]) -> str:
+def create_access_token(subject: str, role: str, factory_id: Optional[int], user_id: Optional[str] = None) -> str:
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": subject,
+        "user_id": user_id,
         "role": role,
         "factory_id": factory_id,
         "exp": expires_at,
@@ -90,6 +92,60 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
+class LoginRequest(BaseModel):
+    factory_id: int = Field(..., gt=0)
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1, max_length=255)
+
+
+class AuthUserProfile(BaseModel):
+    id: int
+    user_id: Optional[str] = None
+    factory_id: int
+    username: str
+    phone_number: Optional[str] = None
+    full_name: Optional[str] = None
+    role: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: AuthUserProfile
+
+
+def ensure_user_uuid(user: User, db: Session) -> str:
+    if not user.user_id:
+        user.user_id = str(uuid4())
+        db.commit()
+        db.refresh(user)
+    return user.user_id
+
+
+def build_login_response(user: User, db: Session) -> LoginResponse:
+    user_uuid = ensure_user_uuid(user, db)
+    subject = user.phone_number if user.phone_number else user.username
+    token = create_access_token(
+        subject=subject,
+        role=user.role,
+        factory_id=user.factory_id if user.factory_id > 0 else None,
+        user_id=user_uuid,
+    )
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        user=AuthUserProfile(
+            id=user.id,
+            user_id=user_uuid,
+            factory_id=user.factory_id,
+            username=user.username,
+            phone_number=user.phone_number,
+            full_name=user.full_name,
+            role=user.role,
+        ),
+    )
+
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -110,13 +166,35 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
-def require_owner(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "Owner":
+def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+    if getattr(current_user, "is_active", True) is False:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Owner role is required",
+            detail="Inactive user",
         )
     return current_user
+
+
+def normalize_role(role: str | None) -> str:
+    return (role or "").strip().lower()
+
+
+def check_permissions(allowed_roles: list[str]) -> Callable[[User], User]:
+    allowed = {normalize_role(role) for role in allowed_roles}
+
+    def dependency(current_user: User = Depends(get_current_active_user)) -> User:
+        if normalize_role(current_user.role) not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this resource",
+            )
+        return current_user
+
+    return dependency
+
+
+def require_owner(current_user: User = Depends(get_current_user)) -> User:
+    return check_permissions(["Owner"])(current_user)
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +306,10 @@ def verify_otp(
 
 
 @router.post("/token", response_model=TokenResponse)
+@router.post("/api/auth/token", response_model=TokenResponse, include_in_schema=False)
 def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
+    x_factory_id: Optional[int] = Header(default=None, alias="X-Factory-ID"),
     db: Session = Depends(get_db),
 ):
     user = authenticate_user(db, form_data.username, form_data.password)
@@ -239,12 +319,18 @@ def login_for_access_token(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if x_factory_id is not None and user.factory_id not in (None, 0, x_factory_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Factory access denied",
+        )
 
     subject = user.phone_number if user.phone_number else user.username
     token = create_access_token(
         subject=subject,
         role=user.role,
         factory_id=user.factory_id if user.factory_id > 0 else None,
+        user_id=ensure_user_uuid(user, db),
     )
 
     return TokenResponse(
@@ -254,3 +340,19 @@ def login_for_access_token(
         role=user.role,
         factory_id=user.factory_id if user.factory_id > 0 else None,
     )
+
+
+@router.post("/login", response_model=LoginResponse)
+def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.username, payload.password)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    if user.factory_id != payload.factory_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Factory access denied",
+        )
+    return build_login_response(user, db)

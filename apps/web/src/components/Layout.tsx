@@ -1,17 +1,29 @@
-import { Bot, Boxes, Calculator, ClipboardList, Factory, Gauge, LogOut, Menu, Search, UsersRound, X } from "lucide-react";
+import { Bot, Boxes, Calculator, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UsersRound, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import type { UserRole } from "../context/AuthContext";
 
-const navigation = [
-  { label: "Dashboard", href: "/", icon: Gauge, roles: ["Owner"] },
-  { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner"] },
+type NavigationItem = {
+  label: string;
+  href: string;
+  icon: typeof Gauge;
+  roles: UserRole[];
+  section?: string;
+};
+
+const navigation: NavigationItem[] = [
+  { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner"] },
+  { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Supervisor", "Operator"] },
   { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner"] },
   { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner"] },
-  { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Operator"] },
-  { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner"] },
-  { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Operator"] }
+  { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Supervisor", "Operator"] },
+  { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner"], section: "Revenue & Accounts" },
+  { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },
+  { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },
+  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner"], section: "Revenue & Accounts" },
+  { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Supervisor", "Operator"] }
 ];
 
 export default function Layout() {
@@ -20,25 +32,35 @@ export default function Layout() {
 
   const visibleNavigation = navigation.filter((item) => user && item.roles.includes(user.role));
 
-  const navItems = visibleNavigation.map((item) => (
-    <NavLink
-      key={item.href}
-      to={item.href}
-      end={item.href === "/"}
-      onClick={() => setIsMobileNavOpen(false)}
-      className={({ isActive }) =>
-        [
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
-          isActive
-            ? "bg-brand-50 text-brand-700"
-            : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
-        ].join(" ")
-      }
-    >
-      <item.icon className="h-4 w-4" aria-hidden="true" />
-      {item.label}
-    </NavLink>
-  ));
+  const navItems = visibleNavigation.map((item, index) => {
+    const showSection = item.section && visibleNavigation[index - 1]?.section !== item.section;
+
+    return (
+      <div key={item.href} className={showSection ? "pt-3" : undefined}>
+        {showSection ? (
+          <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+            {item.section}
+          </p>
+        ) : null}
+        <NavLink
+          to={item.href}
+          end={item.href === "/"}
+          onClick={() => setIsMobileNavOpen(false)}
+          className={({ isActive }) =>
+            [
+              "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
+              isActive
+                ? "bg-brand-50 text-brand-700"
+                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+            ].join(" ")
+          }
+        >
+          <item.icon className="h-4 w-4" aria-hidden="true" />
+          {item.label}
+        </NavLink>
+      </div>
+    );
+  });
 
   return (
     <div className="min-h-screen bg-zinc-100 text-zinc-950">

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func, text
 from sqlalchemy.orm import Session
 
-from ai_agent import parse_factory_intent_with_agent, save_agent_context
+from ai_agent import build_ai_tool_context, parse_factory_intent_with_agent, save_agent_context
 from auth import (
     authenticate_user,
     create_access_token,
@@ -32,20 +32,30 @@ from db import Base, engine, get_db
 from models import (
     AdvancePayment,
     AttendanceLog,
+    BlankStock,
+    BottomStock,
+    BoxStock,
     Customer,
     CustomerActivity,
+    DailyProduction,
     Employee,
     ExpenseLog,
     Factory,
+    FinalProductStock,
     FactoryInventory,
     FinishedGoodsStock,
     Inventory,
+    Machine,
     Order,
     OrderItem,
     PackagingProfile,
+    PackagingMetrics,
+    Payment,
     ProductionLog,
+    RawMaterialMetrics,
     SalesInvoice,
     User,
+    Worker,
 )
 from routers.onboarding import router as onboarding_router
 from routers.calculator import router as calculator_router
@@ -53,22 +63,30 @@ from routers.automation import router as automation_router
 from routers.phase1 import router as phase1_router
 from routers.operations import router as operations_router
 from routers import sales
+from routers import inventory
+from routers import payments
+from routers import dashboard
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(onboarding_router)
 app.include_router(calculator_router)
 app.include_router(automation_router)
 app.include_router(phase1_router)
 app.include_router(operations_router)
 app.include_router(sales.router, prefix="/api/sales", tags=["sales"])
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.include_router(sales.router, prefix="/api", tags=["customers"])
+app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"])
+app.include_router(payments.router)
+app.include_router(auth_router)
+app.include_router(dashboard.router)
 
 
 class InventoryCreate(BaseModel):
@@ -197,6 +215,8 @@ class AskAIRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str = Field(default="default", min_length=1, max_length=100)
     chat_history: Optional[List[Dict[str, str]]] = None
+    factory_id: Optional[int] = None
+    system_prompt: Optional[str] = None
 
 
 class BusinessExecutionResult(BaseModel):
@@ -829,6 +849,7 @@ def ensure_runtime_schema():
         "sales_invoices",
         "material_yields",
         "costing_master",
+        "payments",
     ]
     statements = [
         (
@@ -927,12 +948,16 @@ def ensure_runtime_schema():
             ")"
         ),
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) NOT NULL DEFAULT 'Operator'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_user_id ON users (user_id) WHERE user_id IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_id ON users (telegram_id) WHERE telegram_id IS NOT NULL",
         "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role",
-        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Operator', 'Worker'))",
+        "UPDATE users SET role = 'Operator' WHERE role = 'Worker'",
+        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Supervisor', 'Operator'))",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_type VARCHAR(50) NOT NULL DEFAULT 'Paper Cup'",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_number VARCHAR(50)",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS mould_size_ml INTEGER",
@@ -954,6 +979,7 @@ def ensure_runtime_schema():
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_portal_approved BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS portal_access_token VARCHAR(255)",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_balance_update TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_whatsapp_reminder_at TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS advance_discount_pct DOUBLE PRECISION NOT NULL DEFAULT 5.0",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_dues DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_balance NUMERIC(14, 2) NOT NULL DEFAULT 0",
@@ -1016,6 +1042,7 @@ def ensure_runtime_schema():
             "id SERIAL PRIMARY KEY, "
             "factory_id INTEGER NOT NULL REFERENCES factories(id), "
             "blank_size_ml INTEGER NOT NULL, "
+            "variety VARCHAR(100) NOT NULL DEFAULT 'Plain White', "
             "linked_bottom_size_mm INTEGER NOT NULL, "
             "total_qty_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
             "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
@@ -1026,6 +1053,7 @@ def ensure_runtime_schema():
             "id SERIAL PRIMARY KEY, "
             "factory_id INTEGER NOT NULL REFERENCES factories(id), "
             "bottom_size_mm INTEGER NOT NULL, "
+            "variety VARCHAR(100) NOT NULL DEFAULT 'Plain White', "
             "total_qty_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
             "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
@@ -1075,6 +1103,13 @@ def ensure_runtime_schema():
             "boxes_from_loose INTEGER NOT NULL DEFAULT 0, "
             "blank_used_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
             "bottom_used_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "wastage_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "wastage_status VARCHAR(50) NOT NULL DEFAULT 'NORMAL', "
+            "total_raw_material_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "raw_material_cost NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "labor_cost NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "electricity_cost NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "production_cost NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         ),
@@ -1092,13 +1127,41 @@ def ensure_runtime_schema():
             "rate_per_packet NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "total_amount NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "customer_phone VARCHAR(50), "
+            "total_bill NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "initial_payment NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         ),
+        (
+            "CREATE TABLE IF NOT EXISTS payments ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "customer_phone VARCHAR(50) NOT NULL, "
+            "sale_id INTEGER NULL REFERENCES daily_sales(id), "
+            "amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "payment_mode VARCHAR(20) NOT NULL DEFAULT 'Cash', "
+            "date DATE NOT NULL, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        "ALTER TABLE daily_sales ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(50)",
+        "ALTER TABLE daily_sales ADD COLUMN IF NOT EXISTS total_bill NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_sales ADD COLUMN IF NOT EXISTS initial_payment NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "UPDATE daily_sales SET total_bill = total_amount WHERE total_bill = 0 AND total_amount IS NOT NULL",
         "ALTER TABLE blank_stock DROP CONSTRAINT IF EXISTS ck_blank_stock_qty_non_negative",
         "ALTER TABLE bottom_stock DROP CONSTRAINT IF EXISTS ck_bottom_stock_qty_non_negative",
         "ALTER TABLE box_stock DROP CONSTRAINT IF EXISTS ck_box_stock_total_non_negative",
         "ALTER TABLE final_product_stock DROP CONSTRAINT IF EXISTS ck_final_product_boxes_non_negative",
+        "ALTER TABLE blank_stock ADD COLUMN IF NOT EXISTS variety VARCHAR(100) NOT NULL DEFAULT 'Plain White'",
+        "ALTER TABLE bottom_stock ADD COLUMN IF NOT EXISTS variety VARCHAR(100) NOT NULL DEFAULT 'Plain White'",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS wastage_kg NUMERIC(14, 3) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS wastage_status VARCHAR(50) NOT NULL DEFAULT 'NORMAL'",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS total_raw_material_kg NUMERIC(14, 3) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS raw_material_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS labor_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS electricity_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS production_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
     ]
     default_factory_id_sql = f"(SELECT id FROM factories WHERE name = '{default_factory_name}')"
     for table_name in tenant_tables:
@@ -2173,8 +2236,10 @@ def health_check():
 
 
 @app.post("/token", response_model=TokenResponse)
+@app.post("/api/auth/token", response_model=TokenResponse)
 def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
+    x_factory_id: Optional[int] = Header(default=None, alias="X-Factory-ID"),
     db: Session = Depends(get_db),
 ):
     user = authenticate_user(db, form_data.username, form_data.password)
@@ -2183,6 +2248,11 @@ def login_for_access_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    if x_factory_id is not None and user.factory_id not in (None, 0, x_factory_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Factory access denied",
         )
 
     return TokenResponse(
@@ -2245,6 +2315,7 @@ def process_factory_message(
     parsed_intent: Optional[FactoryIntent] = None
     parser_warning: Optional[str] = None
     product_catalog = build_product_catalog(db, factory_id)
+    tool_context = build_ai_tool_context(db, factory_id)
 
     try:
         parsed_intent, used_llm = parse_factory_intent_with_agent(
@@ -2254,6 +2325,7 @@ def process_factory_message(
             fallback_parser=extract_factory_intent,
             product_catalog=product_catalog,
             chat_history=chat_history,
+            tool_context=tool_context,
         )
     except Exception as exc:
         parsed_intent = extract_factory_intent(message)
@@ -2309,14 +2381,200 @@ def ask_ai(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    chat_history = payload.chat_history or []
+    if payload.system_prompt:
+        chat_history = [{"role": "system", "content": payload.system_prompt}, *chat_history]
+
     return process_factory_message(
         message=payload.message,
         session_id=payload.session_id,
         factory_id=current_user.factory_id,
         db=db,
-        chat_history=payload.chat_history,
+        chat_history=chat_history,
         actor_role=current_user.role,
     )
+
+
+@app.get("/api/ai/context")
+def ai_context(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    recent_cutoff = date.today() - timedelta(days=7)
+
+    inventory_rows = [
+        {
+            "item_name": item.item_name,
+            "category": item.category,
+            "quantity": float(item.quantity or 0),
+            "unit": item.unit,
+            "price_per_unit": float(item.price_per_unit or 0),
+        }
+        for item in db.query(Inventory).filter(Inventory.factory_id == factory_id).order_by(Inventory.item_name.asc()).all()
+    ]
+    inventory_rows.extend(
+        {
+            "item_name": f"{stock.blank_size_ml}ml Blank",
+            "category": "Blank",
+            "quantity": float(stock.total_qty_kg or 0),
+            "unit": "kg",
+            "price_per_unit": 0,
+        }
+        for stock in db.query(BlankStock).filter(BlankStock.factory_id == factory_id).all()
+    )
+    inventory_rows.extend(
+        {
+            "item_name": f"{stock.bottom_size_mm}mm Bottom",
+            "category": "Bottom",
+            "quantity": float(stock.total_qty_kg or 0),
+            "unit": "kg",
+            "price_per_unit": 0,
+        }
+        for stock in db.query(BottomStock).filter(BottomStock.factory_id == factory_id).all()
+    )
+    inventory_rows.extend(
+        {
+            "item_name": stock.packaging_size_name,
+            "category": "Box",
+            "quantity": int(stock.total_boxes or 0),
+            "unit": "boxes",
+            "price_per_unit": 0,
+        }
+        for stock in db.query(BoxStock).filter(BoxStock.factory_id == factory_id).all()
+    )
+    inventory_rows.extend(
+        {
+            "item_name": f"{stock.product_size_ml}ml {stock.packaging_size_name}",
+            "category": "Final Product",
+            "quantity": int(stock.total_boxes or 0),
+            "loose_packets": int(stock.loose_packets or 0),
+            "unit": "boxes",
+            "price_per_unit": 0,
+        }
+        for stock in db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).all()
+    )
+
+    machines = [
+        {
+            "id": machine.id,
+            "machine_number": machine.machine_number or machine.machine_sequence_number or machine.name,
+            "machine_type": machine.machine_type,
+            "cup_size_ml": machine.mould_size_ml or machine.cup_size_ml,
+            "bottom_size_mm": machine.bottom_size_mm,
+            "speed_per_minute": machine.speed_per_minute,
+        }
+        for machine in db.query(Machine).filter(Machine.factory_id == factory_id).order_by(Machine.id.asc()).all()
+    ]
+
+    raw_material_metrics = [
+        {
+            "material_type": metric.material_type,
+            "size_ml_or_mm": metric.size_ml_or_mm,
+            "weight_per_sack_kg": float(metric.weight_per_sack_kg or 0),
+            "pieces_per_sack": metric.pieces_per_sack,
+            "pieces_per_kg": (
+                float(metric.pieces_per_sack) / float(metric.weight_per_sack_kg)
+                if metric.weight_per_sack_kg
+                else 0
+            ),
+        }
+        for metric in db.query(RawMaterialMetrics).filter(RawMaterialMetrics.factory_id == factory_id).all()
+    ]
+
+    production_rows = (
+        db.query(DailyProduction)
+        .filter(DailyProduction.factory_id == factory_id)
+        .filter(DailyProduction.date >= recent_cutoff)
+        .order_by(DailyProduction.date.desc(), DailyProduction.id.desc())
+        .limit(20)
+        .all()
+    )
+
+    return {
+        "factory_id": factory_id,
+        "system_prompt": (
+            "You are a Factory Supervisor AI. You have access to real-time inventory "
+            "and production data. Use it to give precise numbers."
+        ),
+        "current_stock": inventory_rows,
+        "machines": machines,
+        "raw_material_metrics": raw_material_metrics,
+        "recent_production": [
+            {
+                "date": row.date.isoformat(),
+                "machine_id": row.machine_id,
+                "worker_id": row.worker_id,
+                "product_size_ml": row.product_size_ml,
+                "packaging_size_name": row.packaging_size_name,
+                "total_boxes_made": row.total_boxes_made,
+                "loose_packets_made": row.loose_packets_made,
+                "boxes_from_loose": row.boxes_from_loose,
+                "blank_used_kg": float(row.blank_used_kg or 0),
+                "bottom_used_kg": float(row.bottom_used_kg or 0),
+            }
+            for row in production_rows
+        ],
+        "recent_production_totals": {
+            "boxes_made": sum(row.total_boxes_made or 0 for row in production_rows),
+            "loose_packets_made": sum(row.loose_packets_made or 0 for row in production_rows),
+            "blank_used_kg": float(sum(Decimal(row.blank_used_kg or 0) for row in production_rows)),
+            "bottom_used_kg": float(sum(Decimal(row.bottom_used_kg or 0) for row in production_rows)),
+        },
+    }
+
+
+@app.get("/api/debug/verify-stocks")
+def verify_stocks(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    return {
+        "factory_id": factory_id,
+        "blank_stock": [
+            {
+                "blank_size_ml": stock.blank_size_ml,
+                "linked_bottom_size_mm": stock.linked_bottom_size_mm,
+                "total_qty_kg": float(stock.total_qty_kg or 0),
+            }
+            for stock in db.query(BlankStock).filter(BlankStock.factory_id == factory_id).order_by(BlankStock.blank_size_ml.asc()).all()
+        ],
+        "bottom_stock": [
+            {
+                "bottom_size_mm": stock.bottom_size_mm,
+                "total_qty_kg": float(stock.total_qty_kg or 0),
+            }
+            for stock in db.query(BottomStock).filter(BottomStock.factory_id == factory_id).order_by(BottomStock.bottom_size_mm.asc()).all()
+        ],
+        "box_stock": [
+            {
+                "packaging_size_name": stock.packaging_size_name,
+                "total_boxes": int(stock.total_boxes or 0),
+            }
+            for stock in db.query(BoxStock).filter(BoxStock.factory_id == factory_id).order_by(BoxStock.packaging_size_name.asc()).all()
+        ],
+        "final_product_stock": [
+            {
+                "product_size_ml": stock.product_size_ml,
+                "packaging_size_name": stock.packaging_size_name,
+                "total_boxes": int(stock.total_boxes or 0),
+                "loose_packets": int(stock.loose_packets or 0),
+                "packets_per_box_limit": stock.packets_per_box_limit,
+            }
+            for stock in db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).order_by(FinalProductStock.product_size_ml.asc()).all()
+        ],
+        "customer_balances": [
+            {
+                "id": customer.id,
+                "name": customer.name,
+                "phone": customer.phone or customer.contact_number,
+                "previous_due": float(customer.previous_due or 0),
+                "total_due": float(customer.total_due or customer.balance_amount or 0),
+            }
+            for customer in db.query(Customer).filter(Customer.factory_id == factory_id).order_by(Customer.name.asc()).all()
+        ],
+    }
 
 
 @app.post("/webhook/external-chat", response_model=ExternalChatResponse)
@@ -2403,40 +2661,162 @@ def dashboard_stats(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
-    today = date.today()
-    month_start = today.replace(day=1)
-    monthly_revenue = sum_decimal(db, factory_id, SalesInvoice, SalesInvoice.total_amount, month_start, today)
-    monthly_production_cost = sum_decimal(
-        db,
-        factory_id,
-        ProductionLog,
-        ProductionLog.total_production_cost,
-        month_start,
-        today,
-    )
-    monthly_expenses = sum_decimal(db, factory_id, ExpenseLog, ExpenseLog.amount, month_start, today)
-    total_pending_recoveries = to_money(
-        db.query(sql_func.coalesce(sql_func.sum(Customer.balance_amount), 0))
-        .filter(Customer.factory_id == factory_id)
-        .scalar()
-    )
-    total_boxes_in_stock = int(
-        db.query(sql_func.coalesce(sql_func.sum(FinishedGoodsStock.boxes_available), 0))
-        .filter(FinishedGoodsStock.factory_id == factory_id)
-        .scalar()
-        or 0
-    )
-    wastage_mix = calculate_wastage_mix(db, factory_id)
+    try:
+        factory_id = current_user.factory_id
+        today = date.today()
+        month_start = today.replace(day=1)
+        monthly_revenue = sum_decimal(db, factory_id, SalesInvoice, SalesInvoice.total_amount, month_start, today)
+        monthly_production_cost = sum_decimal(
+            db,
+            factory_id,
+            ProductionLog,
+            ProductionLog.total_production_cost,
+            month_start,
+            today,
+        )
+        monthly_expenses = sum_decimal(db, factory_id, ExpenseLog, ExpenseLog.amount, month_start, today)
+        total_pending_recoveries = to_money(
+            db.query(sql_func.coalesce(sql_func.sum(Customer.balance_amount), 0))
+            .filter(Customer.factory_id == factory_id)
+            .scalar()
+        )
+        total_boxes_in_stock = int(
+            db.query(sql_func.coalesce(sql_func.sum(FinishedGoodsStock.boxes_available), 0))
+            .filter(FinishedGoodsStock.factory_id == factory_id)
+            .scalar()
+            or 0
+        )
+        wastage_mix = calculate_wastage_mix(db, factory_id)
 
-    return DashboardStats(
-        monthly_net_profit=to_money(monthly_revenue - monthly_production_cost - monthly_expenses),
-        total_pending_recoveries=total_pending_recoveries,
-        total_boxes_in_stock=total_boxes_in_stock,
-        overall_wastage_percent=calculate_wastage_percent(wastage_mix),
-        recent_7_days=build_recent_7_days(db, factory_id),
-        wastage_mix=wastage_mix,
+        return DashboardStats(
+            monthly_net_profit=to_money(monthly_revenue - monthly_production_cost - monthly_expenses),
+            total_pending_recoveries=total_pending_recoveries,
+            total_boxes_in_stock=total_boxes_in_stock,
+            overall_wastage_percent=calculate_wastage_percent(wastage_mix),
+            recent_7_days=build_recent_7_days(db, factory_id),
+            wastage_mix=wastage_mix,
+        )
+    except Exception:
+        today = date.today()
+        recent_7_days = [
+            DailyProductionSales(
+                date=today - timedelta(days=offset),
+                production_boxes=0,
+                sales_boxes=0,
+            )
+            for offset in range(6, -1, -1)
+        ]
+        return DashboardStats(
+            monthly_net_profit=Decimal("0.00"),
+            total_pending_recoveries=Decimal("0.00"),
+            total_boxes_in_stock=0,
+            overall_wastage_percent=Decimal("0.00"),
+            recent_7_days=recent_7_days,
+            wastage_mix=WastageMix(
+                good_production_pcs=0,
+                blank_waste_pcs=0,
+                bottom_waste_kg=Decimal("0.000"),
+            ),
     )
+
+
+@app.get("/api/onboarding/workers")
+def list_onboarding_workers_main(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    workers = (
+        db.query(Worker)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .order_by(Worker.name.asc())
+        .all()
+    )
+    if workers:
+        return [
+            {
+                "id": worker.id,
+                "name": worker.name,
+                "phone": None,
+                "shift_type": worker.shift_type,
+                "shift_timing": worker.shift_timing,
+                "daily_wages": worker.daily_wages,
+                "duty_hours": worker.duty_hours,
+            }
+            for worker in workers
+        ]
+
+    employees = (
+        db.query(Employee)
+        .filter(Employee.factory_id == current_user.factory_id)
+        .order_by(Employee.name.asc())
+        .all()
+    )
+    return [
+        {
+            "id": employee.id,
+            "name": employee.name,
+            "phone": None,
+            "shift_type": employee.role,
+            "shift_timing": None,
+            "daily_wages": employee.daily_wage,
+            "duty_hours": 8,
+        }
+        for employee in employees
+    ]
+
+
+@app.get("/api/onboarding/machines")
+def list_onboarding_machines_main(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    machines = (
+        db.query(Machine)
+        .filter(Machine.factory_id == current_user.factory_id)
+        .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
+        .all()
+    )
+    return [
+        {
+            "id": machine.id,
+            "machine_type": machine.machine_type,
+            "machine_number": machine.machine_number or machine.machine_sequence_number or machine.name,
+            "mould_size_ml": machine.mould_size_ml or machine.cup_size_ml,
+            "bottom_size_mm": machine.bottom_size_mm,
+            "speed_per_minute": machine.speed_per_minute,
+        }
+        for machine in machines
+    ]
+
+
+@app.get("/api/onboarding/materials")
+def list_onboarding_materials_main(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    return {
+        "raw_material_metrics": (
+            db.query(RawMaterialMetrics)
+            .filter(RawMaterialMetrics.factory_id == factory_id)
+            .order_by(RawMaterialMetrics.material_type.asc(), RawMaterialMetrics.size_ml_or_mm.asc())
+            .all()
+        ),
+        "packaging_metrics": (
+            db.query(PackagingMetrics)
+            .filter(PackagingMetrics.factory_id == factory_id)
+            .order_by(PackagingMetrics.cup_size_ml.asc())
+            .all()
+        ),
+    }
+
+
+@app.get("/api/inventory")
+def list_inventory_api_alias(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return inventory.list_live_stock(current_user=current_user, db=db)
 
 
 @app.get("/report/customer-balance", response_model=List[CustomerBalanceRow])

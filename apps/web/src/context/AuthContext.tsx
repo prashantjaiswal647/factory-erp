@@ -3,25 +3,37 @@ import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
 
-type UserRole = "Owner" | "Operator";
+export type UserRole = "Owner" | "Supervisor" | "Operator";
 
 type AuthUser = {
+  id?: number;
+  user_id?: string | null;
   username: string;
+  phone_number?: string | null;
+  full_name?: string | null;
   role: UserRole;
+  factory_id?: number;
 };
 
 type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<AuthUser>;
+  login: (username: string, password: string, factoryId?: number) => Promise<AuthUser>;
   logout: () => void;
 };
 
 type TokenResponse = {
   access_token: string;
   token_type: string;
-  username: string;
-  role: UserRole;
+  user: {
+    id: number;
+    user_id?: string | null;
+    factory_id: number;
+    username: string;
+    phone_number?: string | null;
+    full_name?: string | null;
+    role: string;
+  };
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -52,20 +64,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  async function login(username: string, password: string) {
-    const formData = new URLSearchParams();
-    formData.set("username", username);
-    formData.set("password", password);
-
-    const response = await api.post<TokenResponse>("/token", formData, {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      }
+  async function login(username: string, password: string, factoryId?: number) {
+    const response = await api.post<TokenResponse>("/api/auth/login", {
+      factory_id: factoryId,
+      username,
+      password
     });
 
+    const role = normalizeRole(response.data.user.role);
     const nextUser = {
-      username: response.data.username,
-      role: response.data.role
+      id: response.data.user.id,
+      user_id: response.data.user.user_id,
+      username: response.data.user.username,
+      phone_number: response.data.user.phone_number,
+      full_name: response.data.user.full_name,
+      role,
+      factory_id: response.data.user.factory_id
     };
 
     localStorage.setItem(tokenKey, response.data.access_token);
@@ -91,6 +105,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function normalizeRole(role: string): UserRole {
+  const value = role.trim().toUpperCase();
+  if (value === "OWNER") return "Owner";
+  if (value === "SUPERVISOR") return "Supervisor";
+  return "Operator";
 }
 
 export function useAuth() {

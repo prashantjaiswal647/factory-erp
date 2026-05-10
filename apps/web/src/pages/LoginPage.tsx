@@ -1,20 +1,28 @@
-import { LockKeyhole, LogIn } from "lucide-react";
+import { Bot, Crown, HardHat, LockKeyhole, LogIn, Wrench } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import { roleHomePath } from "../components/PrivateRoute";
 import { useAuth } from "../context/AuthContext";
+
+const roleCards = [
+  { icon: Crown, label: "Owner", text: "Full dashboard, hisaab aur control." },
+  { icon: HardHat, label: "Supervisor", text: "Production, sales aur collection." },
+  { icon: Wrench, label: "Operator", text: "Inventory aur production entry." }
+];
 
 export default function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [factoryId, setFactoryId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (user) {
-    return <Navigate to={user.role === "Operator" ? "/production" : "/"} replace />;
+    return <Navigate to={roleHomePath(user.role)} replace />;
   }
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -23,74 +31,92 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const nextUser = await login(username, password);
+      const nextUser = await login(username, password, factoryId ? Number(factoryId) : undefined);
       const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
-      navigate(from && from !== "/login" ? from : nextUser.role === "Operator" ? "/production" : "/", {
+      navigate(from && from !== "/login" ? from : roleHomePath(nextUser.role), {
         replace: true
       });
     } catch {
-      setError("Invalid username or password.");
+      setError("Invalid factory, username, phone, or password.");
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-zinc-100 px-4 text-zinc-950">
-      <section className="w-full max-w-md rounded-md border border-zinc-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-md bg-brand-600 text-white">
-            <LockKeyhole className="h-5 w-5" />
+    <main className="grid min-h-screen place-items-center bg-[#07100f] px-4 py-10 text-white">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_25%_20%,rgba(178,255,89,0.14),transparent_28%),radial-gradient(circle_at_75%_10%,rgba(0,77,64,0.55),transparent_35%),linear-gradient(135deg,#07100f_0%,#111827_60%,#001f1b_100%)]" />
+      <section className="relative z-10 w-full max-w-5xl">
+        <Link className="mb-8 inline-flex items-center gap-3 text-sm font-semibold text-zinc-300 hover:text-[#B2FF59]" to="/">
+          <span className="grid h-9 w-9 place-items-center rounded-md bg-[#004D40] text-[#B2FF59]">
+            <Bot className="h-5 w-5" />
+          </span>
+          Munshi AI
+        </Link>
+
+        <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-6 backdrop-blur">
+            <p className="text-sm font-semibold uppercase tracking-widest text-[#B2FF59]">Role Gateway</p>
+            <h1 className="mt-3 text-4xl font-semibold">Apna kaam, apna access.</h1>
+            <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-400">
+              Munshi AI har user ko sirf wahi tabs dikhata hai jo uske role ke liye zaroori hain.
+            </p>
+
+            <div className="mt-8 grid gap-4 md:grid-cols-3 lg:grid-cols-1">
+              {roleCards.map((role) => (
+                <article key={role.label} className="rounded-lg border border-white/10 bg-zinc-950/60 p-4">
+                  <role.icon className="h-7 w-7 text-[#B2FF59]" />
+                  <h2 className="mt-3 font-semibold">{role.label}</h2>
+                  <p className="mt-1 text-sm text-zinc-400">{role.text}</p>
+                </article>
+              ))}
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold">AI ERP Login</h1>
-            <p className="text-sm text-zinc-500">Secure factory operations access</p>
-          </div>
+
+          <form className="rounded-lg border border-[#B2FF59]/20 bg-zinc-950/80 p-6 shadow-[0_0_60px_rgba(0,77,64,.35)] backdrop-blur" onSubmit={submitLogin}>
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-md bg-[#004D40] text-[#B2FF59] shadow-[0_0_24px_rgba(178,255,89,.2)]">
+                <LockKeyhole className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-semibold">Secure Login</h2>
+                <p className="text-sm text-zinc-400">Factory ID + credentials</p>
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-4">
+              <Field label="Factory ID" value={factoryId} onChange={setFactoryId} inputMode="numeric" type="number" />
+              <Field label="Username / Phone" value={username} onChange={setUsername} autoComplete="username" />
+              <Field label="Password" value={password} onChange={setPassword} autoComplete="current-password" type="password" />
+            </div>
+
+            {error ? <p className="mt-4 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200">{error}</p> : null}
+
+            <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] shadow-[0_0_28px_rgba(178,255,89,.35)] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
+              <LogIn className="h-4 w-4" />
+              {isSubmitting ? "Signing in..." : "Login to Munshi AI"}
+            </button>
+          </form>
         </div>
-
-        <form className="mt-6 space-y-4" onSubmit={submitLogin}>
-          <div>
-            <label className="text-sm font-medium text-zinc-700" htmlFor="username">
-              Username
-            </label>
-            <input
-              className="mt-1 h-11 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm outline-none transition focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
-              id="username"
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              required
-              type="text"
-              value={username}
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-zinc-700" htmlFor="password">
-              Password
-            </label>
-            <input
-              className="mt-1 h-11 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm outline-none transition focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
-              id="password"
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              required
-              type="password"
-              value={password}
-            />
-          </div>
-
-          {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p> : null}
-
-          <button
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
-            disabled={isSubmitting}
-            type="submit"
-          >
-            <LogIn className="h-4 w-4" />
-            {isSubmitting ? "Signing in..." : "Sign in"}
-          </button>
-        </form>
       </section>
     </main>
+  );
+}
+
+function Field({ label, value, onChange, type = "text", inputMode, autoComplete }: { label: string; value: string; onChange: (value: string) => void; type?: string; inputMode?: "numeric"; autoComplete?: string }) {
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-200">{label}</span>
+      <input
+        autoComplete={autoComplete}
+        className="mt-1 h-11 w-full rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-[#B2FF59]/70 focus:ring-2 focus:ring-[#B2FF59]/15"
+        inputMode={inputMode}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={(event) => event.target.select()}
+        required
+        type={type}
+        value={value}
+      />
+    </label>
   );
 }
