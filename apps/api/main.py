@@ -1,51 +1,33 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hmac
+import json
 import os
 import re
 from typing import Dict, List, Optional, Tuple
+from urllib import request as urlrequest
+from urllib.error import URLError
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-try:
-    from langchain.memory import ConversationBufferMemory
-except ImportError:  # LangChain 1.x compatibility
-    try:
-        from langchain_classic.memory import ConversationBufferMemory
-    except ImportError:
-        class ConversationBufferMemory:
-            def __init__(self, memory_key: str, input_key: str, output_key: str):
-                self.memory_key = memory_key
-                self.input_key = input_key
-                self.output_key = output_key
-                self.buffer: List[Tuple[str, str]] = []
-
-            def load_memory_variables(self, _inputs):
-                chat_history = "\n".join(
-                    f"Human: {human_message}\nAI: {ai_message}"
-                    for human_message, ai_message in self.buffer[-10:]
-                )
-                return {self.memory_key: chat_history}
-
-            def save_context(self, inputs, outputs):
-                self.buffer.append(
-                    (
-                        str(inputs.get(self.input_key, "")),
-                        str(outputs.get(self.output_key, "")),
-                    )
-                )
-
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.prompts import PromptTemplate
+from fastapi.security import OAuth2PasswordRequestForm
 from openai import OpenAI, OpenAIError
-from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func, text
 from sqlalchemy.orm import Session
 
+from ai_agent import parse_factory_intent_with_agent, save_agent_context
+from auth import (
+    authenticate_user,
+    create_access_token,
+    ensure_auth_config,
+    get_current_user,
+    get_user_by_username,
+    hash_password,
+    require_owner,
+    router as auth_router,
+)
 from db import Base, engine, get_db
 from models import (
     AdvancePayment,
@@ -54,6 +36,7 @@ from models import (
     CustomerActivity,
     Employee,
     ExpenseLog,
+    Factory,
     FactoryInventory,
     FinishedGoodsStock,
     Inventory,
@@ -64,19 +47,18 @@ from models import (
     SalesInvoice,
     User,
 )
-
-try:
-    from langchain_groq import ChatGroq
-except ImportError:
-    ChatGroq = None
-
-try:
-    from langchain_openai import ChatOpenAI
-except ImportError:
-    ChatOpenAI = None
-
+from routers.onboarding import router as onboarding_router
+from routers.calculator import router as calculator_router
+from routers.automation import router as automation_router
+from routers.phase1 import router as phase1_router
+from routers.operations import router as operations_router
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
+app.include_router(onboarding_router)
+app.include_router(calculator_router)
+app.include_router(automation_router)
+app.include_router(phase1_router)
+app.include_router(operations_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,12 +88,38 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     role: str
+    factory_id: int
 
 
 class CurrentUserResponse(BaseModel):
     id: int
     username: str
     role: str
+    factory_id: int
+    phone_number: Optional[str] = None
+    telegram_id: Optional[str] = None
+
+
+class IntegrationSettings(BaseModel):
+    phone_number: Optional[str] = Field(default=None, max_length=50)
+    telegram_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class ExternalChatPlatform(str, Enum):
+    whatsapp = "whatsapp"
+    telegram = "telegram"
+
+
+class ExternalChatRequest(BaseModel):
+    sender_id: str = Field(..., min_length=1, max_length=100)
+    platform: ExternalChatPlatform
+    message: str = Field(..., min_length=1)
+
+
+class ExternalChatResponse(BaseModel):
+    reply: str
+    status: str
+    action_taken: str
 
 
 class FactoryIntentType(str, Enum):
@@ -122,20 +130,32 @@ class FactoryIntentType(str, Enum):
     general_qa = "general_qa"
 
 
+class SupervisorToolName(str, Enum):
+    check_inventory = "check_inventory"
+    record_sale = "record_sale"
+    log_production = "log_production"
+
+
 class ProductionIntentData(BaseModel):
+    product_name: Optional[str] = None
     cup_size_ml: Optional[int] = None
     packing_profile_name: Optional[str] = None
-    blank_used: Optional[int] = None
-    bottom_used: Optional[float] = None
+    quantity: Optional[int] = None
     boxes_produced: Optional[int] = None
-    blank_waste: Optional[int] = None
-    bottom_waste: Optional[float] = None
+    blank_used: Optional[int] = 0
+    bottom_used: Optional[float] = 0
+    blank_waste: Optional[int] = 0
+    bottom_waste: Optional[float] = 0
+    machine_speed: Optional[float] = None
+    wastage: Optional[float] = 0
 
 
 class SalesIntentData(BaseModel):
     customer_name: Optional[str] = None
+    product_name: Optional[str] = None
     cup_size_ml: Optional[int] = None
     packing_profile_name: Optional[str] = None
+    quantity: Optional[int] = None
     boxes_sold: Optional[int] = None
     rate_per_box: Optional[float] = None
     amount_received: Optional[float] = None
@@ -162,6 +182,8 @@ class GeneralQAData(BaseModel):
 
 class FactoryIntent(BaseModel):
     intent_type: FactoryIntentType
+    tool_name: Optional[SupervisorToolName] = None
+    tool_args: Dict[str, str | int | float | None] = Field(default_factory=dict)
     production_data: Optional[ProductionIntentData] = None
     sales_data: Optional[SalesIntentData] = None
     expense_data: Optional[ExpenseIntentData] = None
@@ -172,6 +194,7 @@ class FactoryIntent(BaseModel):
 class AskAIRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str = Field(default="default", min_length=1, max_length=100)
+    chat_history: Optional[List[Dict[str, str]]] = None
 
 
 class BusinessExecutionResult(BaseModel):
@@ -321,8 +344,10 @@ class StorefrontProduct(BaseModel):
     product_id: int
     cup_size_ml: int
     packaging_profile_name: str
-    boxes_available: int
+    availability_status: str
     base_price: Decimal
+    image_url: Optional[str] = None
+    print_design_name: Optional[str] = None
 
 
 class StorefrontResponse(BaseModel):
@@ -362,6 +387,8 @@ class StoreCheckoutResponse(BaseModel):
     discount_pct: Decimal
     discount_amount: Decimal
     total_amount: Decimal
+    previous_balance: Decimal
+    new_total_balance: Decimal
     upi_payment_details: Optional[Dict[str, str]] = None
     items: List[StoreCheckoutItemResponse]
 
@@ -390,87 +417,6 @@ class EmployeeReport(BaseModel):
     gross_salary: Decimal
     total_advance: Decimal
     net_payable: Decimal
-
-
-factory_intent_parser = PydanticOutputParser(pydantic_object=FactoryIntent)
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "480")
-
-factory_intent_prompt = PromptTemplate(
-    template=(
-        "You are a production ERP extraction assistant for a paper cup factory.\n"
-        "Use the chat history for context, but only extract the newest user message.\n"
-        "Classify the newest user message as one of: production_entry, sales_entry, expense_entry, employee_entry, general_qa.\n"
-        "For database actions, extract only explicit facts. Use null for missing fields.\n"
-        "For general_qa, answer briefly in simple Hinglish/English in general_data.answer.\n"
-        'Important packing rule: If user says "Aaj 100 box bane 65ml ke Premium Packing me", '
-        'extract "65ml Premium Packing" as the packing_profile_name.\n\n'
-        'Employee rule: If the user says "Raju was present today, did 2 hours overtime, and took 500 advance", '
-        "extract employee_name=Raju, is_present=true, overtime_hours=2, and advance_given=500 into employee_data.\n\n"
-        "Chat history:\n{chat_history}\n\n"
-        "{format_instructions}\n\n"
-        "Newest user message: {user_message}"
-    ),
-    input_variables=["chat_history", "user_message"],
-    partial_variables={
-        "format_instructions": factory_intent_parser.get_format_instructions(),
-    },
-)
-
-SESSION_MEMORIES: Dict[str, ConversationBufferMemory] = {}
-
-
-def get_session_memory(session_id: str) -> ConversationBufferMemory:
-    if session_id not in SESSION_MEMORIES:
-        SESSION_MEMORIES[session_id] = ConversationBufferMemory(
-            memory_key="chat_history",
-            input_key="user_message",
-            output_key="ai_reply",
-        )
-    return SESSION_MEMORIES[session_id]
-
-
-def initialize_llm():
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    if groq_api_key and ChatGroq is not None:
-        return ChatGroq(
-            model=os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant",
-            temperature=0,
-            api_key=groq_api_key,
-        )
-
-    if openai_api_key and ChatOpenAI is not None:
-        return ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
-            temperature=0,
-            api_key=openai_api_key,
-        )
-
-    return None
-
-
-def parse_factory_intent_with_chain(message: str, session_id: str) -> Tuple[FactoryIntent, bool]:
-    memory = get_session_memory(session_id)
-    chat_history = memory.load_memory_variables({}).get("chat_history", "")
-    llm = initialize_llm()
-
-    if llm is None:
-        return extract_factory_intent(message), False
-
-    chain = factory_intent_prompt | llm | factory_intent_parser
-    intent = chain.invoke(
-        {
-            "chat_history": chat_history,
-            "user_message": message,
-        }
-    )
-    return intent, True
 
 
 async def transcribe_audio_upload(audio: UploadFile) -> str:
@@ -648,10 +594,10 @@ def extract_employee_data(message: str) -> EmployeeIntentData:
 
 def infer_intent_type(message: str) -> FactoryIntentType:
     lowered = message.lower()
-    sales_markers = ("sold", "sale", "invoice", "becha", "beche", "bika", "customer", "payment", "paid", "received")
+    sales_markers = ("sold", "sale", "invoice", "becha", "beche", "bika", "nikal", "dispatch", "customer", "payment", "paid", "received")
     expense_markers = ("expense", "kharcha", "rent", "salary", "bijli", "electricity", "repair", "maintenance")
     employee_markers = ("present", "absent", "overtime", " ot ", "advance", "employee", "worker", "staff")
-    production_markers = ("box bane", "produced", "production", "blank", "bottom", "waste")
+    production_markers = ("box bane", "produced", "production", "blank", "bottom", "waste", "add karo", "banaya", "made")
 
     if any(marker in lowered for marker in employee_markers):
         return FactoryIntentType.employee_entry
@@ -661,7 +607,7 @@ def infer_intent_type(message: str) -> FactoryIntentType:
         return FactoryIntentType.sales_entry
     if any(marker in lowered for marker in production_markers) or re.search(r"\b\d+\s*(?:box|boxes)\b", lowered):
         return FactoryIntentType.production_entry
-    if "?" in message or any(word in lowered for word in ("what", "how", "kitna", "kya", "show", "report", "balance")):
+    if "?" in message or any(word in lowered for word in ("what", "how", "kitna", "kya", "show", "report", "balance", "stock")):
         return FactoryIntentType.general_qa
     return FactoryIntentType.production_entry
 
@@ -674,8 +620,10 @@ def extract_factory_intent(message: str) -> FactoryIntent:
     if intent_type == FactoryIntentType.sales_entry:
         sales_data = SalesIntentData(
             customer_name=extract_customer_name(message),
+            product_name=f"{cup_size_ml}ml Paper Cup" if cup_size_ml is not None else None,
             cup_size_ml=cup_size_ml,
             packing_profile_name=packing_profile_name,
+            quantity=extract_first_int(message, [r"\b(\d+)\s*(?:box|boxes)\b"]),
             boxes_sold=extract_first_int(message, [r"\b(\d+)\s*(?:box|boxes)\b"]),
             rate_per_box=extract_first_float(message, [r"(?:rate|rate_per_box)\s*(?:is|=|:)?\s*(\d+(?:\.\d+)?)"]),
             amount_received=extract_first_float(
@@ -683,7 +631,11 @@ def extract_factory_intent(message: str) -> FactoryIntent:
                 [r"(?:received|paid|amount_received|payment)\s*(?:is|=|:)?\s*(\d+(?:\.\d+)?)"],
             ),
         )
-        return FactoryIntent(intent_type=intent_type, sales_data=sales_data)
+        return FactoryIntent(
+            intent_type=intent_type,
+            tool_name=SupervisorToolName.record_sale,
+            sales_data=sales_data,
+        )
 
     if intent_type == FactoryIntentType.expense_entry:
         expense_data = ExpenseIntentData(
@@ -711,18 +663,25 @@ def extract_factory_intent(message: str) -> FactoryIntent:
             question=message,
             answer="I can help with production, sales, expenses, inventory, and customer balance questions.",
         )
-        return FactoryIntent(intent_type=intent_type, general_data=general_data)
+        tool_name = SupervisorToolName.check_inventory if "stock" in message.lower() else None
+        return FactoryIntent(intent_type=intent_type, tool_name=tool_name, general_data=general_data)
 
     production_data = ProductionIntentData(
+        product_name=f"{cup_size_ml}ml Paper Cup" if cup_size_ml is not None else None,
         cup_size_ml=cup_size_ml,
         packing_profile_name=packing_profile_name,
+        quantity=extract_first_int(message, [r"\b(\d+)\s*(?:box|boxes)\b"]),
+        boxes_produced=extract_first_int(message, [r"\b(\d+)\s*(?:box|boxes)\b"]),
         blank_used=extract_first_int(message, [r"(?:blank|blanks)\s*(?:used)?\s*(\d+)"]),
         bottom_used=extract_first_float(message, [r"(?:bottom)\s*(?:used)?\s*(\d+(?:\.\d+)?)\s*kg?"]),
-        boxes_produced=extract_first_int(message, [r"\b(\d+)\s*(?:box|boxes)\b"]),
         blank_waste=extract_first_int(message, [r"(?:blank|blanks)\s*waste\s*(\d+)"]),
         bottom_waste=extract_first_float(message, [r"(?:bottom)\s*waste\s*(\d+(?:\.\d+)?)\s*kg?"]),
     )
-    return FactoryIntent(intent_type=intent_type, production_data=production_data)
+    return FactoryIntent(
+        intent_type=intent_type,
+        tool_name=SupervisorToolName.log_production,
+        production_data=production_data,
+    )
 
 
 MONEY_QUANT = Decimal("0.01")
@@ -755,69 +714,18 @@ def require_text(value: Optional[str], field_name: str) -> str:
     return value.strip()
 
 
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, password_hash: str) -> bool:
-    return pwd_context.verify(plain_password, password_hash)
-
-
-def create_access_token(username: str, role: str) -> str:
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {
-        "sub": username,
-        "role": role,
-        "exp": expires_at,
-    }
-    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-
-def get_user_by_username(db: Session, username: str) -> Optional[User]:
-    return (
-        db.query(User)
-        .filter(sql_func.lower(User.username) == username.lower())
+def seed_default_users(db: Session):
+    factory_name = os.getenv("DEFAULT_FACTORY_NAME") or "Default Factory"
+    factory = (
+        db.query(Factory)
+        .filter(sql_func.lower(Factory.name) == factory_name.lower())
         .first()
     )
+    if factory is None:
+        factory = Factory(name=factory_name)
+        db.add(factory)
+        db.flush()
 
-
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = get_user_by_username(db, username)
-    if user is None or not verify_password(password, user.password_hash):
-        return None
-    return user
-
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        username = payload.get("sub")
-        if not isinstance(username, str) or not username:
-            raise credentials_error
-    except JWTError as exc:
-        raise credentials_error from exc
-
-    user = get_user_by_username(db, username)
-    if user is None:
-        raise credentials_error
-    return user
-
-
-def require_owner(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "Owner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Owner role is required",
-        )
-    return current_user
-
-
-def seed_default_users(db: Session):
     owner_password = os.getenv("DEFAULT_OWNER_PASSWORD")
     operator_password = os.getenv("DEFAULT_OPERATOR_PASSWORD")
     missing_password_envs = [
@@ -851,7 +759,14 @@ def seed_default_users(db: Session):
 
     for username, password, role in defaults:
         if get_user_by_username(db, username) is None:
-            db.add(User(username=username, password_hash=hash_password(password), role=role))
+            db.add(
+                User(
+                    factory_id=factory.id,
+                    username=username,
+                    password_hash=hash_password(password),
+                    role=role,
+                )
+            )
     db.commit()
 
 
@@ -869,15 +784,179 @@ def verify_n8n_api_key(x_n8n_api_key: Optional[str] = Header(default=None)) -> N
         )
 
 
+def get_n8n_factory_id(
+    x_factory_id: Optional[int] = Header(default=None),
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_n8n_api_key),
+) -> int:
+    if x_factory_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Factory-Id header is required for n8n requests",
+        )
+    factory_exists = db.query(Factory.id).filter(Factory.id == x_factory_id).first()
+    if factory_exists is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Factory not found",
+        )
+    return x_factory_id
+
+
 def ensure_runtime_schema():
+    default_factory_name = (os.getenv("DEFAULT_FACTORY_NAME") or "Default Factory").replace("'", "''")
+    tenant_tables = [
+        "users",
+        "factory_inventory",
+        "machines",
+        "factory_settings",
+        "customers",
+        "customer_activities",
+        "inventory",
+        "raw_materials",
+        "packaging_profiles",
+        "production_logs",
+        "finished_goods_stock",
+        "expense_logs",
+        "employees",
+        "workers",
+        "attendance_logs",
+        "advance_payments",
+        "orders",
+        "order_items",
+        "sales_invoices",
+        "material_yields",
+        "costing_master",
+    ]
     statements = [
+        (
+            "CREATE TABLE IF NOT EXISTS factories ("
+            "id SERIAL PRIMARY KEY, "
+            "name VARCHAR(255) NOT NULL UNIQUE, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        "CREATE INDEX IF NOT EXISTS ix_factories_id ON factories (id)",
+        "CREATE INDEX IF NOT EXISTS ix_factories_name ON factories (name)",
+        "CREATE INDEX IF NOT EXISTS ix_factories_created_at ON factories (created_at)",
+        f"INSERT INTO factories (name) VALUES ('{default_factory_name}') ON CONFLICT (name) DO NOTHING",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS factory_name VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS owner_id INTEGER",
+        "UPDATE factories SET factory_name = name WHERE factory_name IS NULL",
+        (
+            "CREATE TABLE IF NOT EXISTS machines ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "name VARCHAR(255) NOT NULL, "
+            "machine_type VARCHAR(50) NOT NULL DEFAULT 'Paper Cup', "
+            "machine_number VARCHAR(50), "
+            "mould_size_ml INTEGER, "
+            "machine_sequence_number VARCHAR(50), "
+            "speed_per_minute INTEGER NOT NULL DEFAULT 0, "
+            "speed_bpm INTEGER NOT NULL DEFAULT 0, "
+            "speed_cups_per_minute INTEGER NOT NULL DEFAULT 0, "
+            "cup_size_ml INTEGER, "
+            "bottom_size_mm INTEGER, "
+            "default_mould_size VARCHAR(100), "
+            "current_mould_size VARCHAR(100), "
+            "bottom_size VARCHAR(100), "
+            "current_bottom_size VARCHAR(100), "
+            "can_swap_moulds BOOLEAN NOT NULL DEFAULT false"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS factory_settings ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "last_month_electricity_bill NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "number_of_machines INTEGER NOT NULL DEFAULT 0, "
+            "default_shift_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS raw_materials ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "name VARCHAR(255) NOT NULL, "
+            "material_type VARCHAR(50) NOT NULL, "
+            "type VARCHAR(50), "
+            "size_name VARCHAR(100), "
+            "size_ml INTEGER, "
+            "gsm INTEGER, "
+            "unit VARCHAR(50) NOT NULL, "
+            "opening_stock NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "current_stock NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "stock_quantity NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "price_per_unit NUMERIC(14, 2) NOT NULL DEFAULT 0"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS workers ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "name VARCHAR(255) NOT NULL, "
+            "salary NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "daily_salary NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "shift_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0, "
+            "shift_timing VARCHAR(100), "
+            "shift_type VARCHAR(100)"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS material_yields ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "material_type VARCHAR(50) NOT NULL, "
+            "size_ml INTEGER NOT NULL, "
+            "gsm INTEGER, "
+            "pieces_per_kg NUMERIC(14, 3) NOT NULL"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS costing_master ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "paper_price_per_kg NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "bottom_roll_price_per_kg NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "polybag_price NUMERIC(14, 4) NOT NULL DEFAULT 0, "
+            "carton_price NUMERIC(14, 4) NOT NULL DEFAULT 0, "
+            "labour_cost_per_box NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "electricity_cost_per_box NUMERIC(14, 2) NOT NULL DEFAULT 0"
+            ")"
+        ),
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) NOT NULL DEFAULT 'Operator'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_id ON users (telegram_id) WHERE telegram_id IS NOT NULL",
         "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role",
-        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Operator'))",
+        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Operator', 'Worker'))",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_type VARCHAR(50) NOT NULL DEFAULT 'Paper Cup'",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_number VARCHAR(50)",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS mould_size_ml INTEGER",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_sequence_number VARCHAR(50)",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS speed_cups_per_minute INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS cup_size_ml INTEGER",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS bottom_size_mm INTEGER",
+        "UPDATE machines SET machine_number = machine_sequence_number WHERE machine_number IS NULL AND machine_sequence_number IS NOT NULL",
+        "UPDATE machines SET mould_size_ml = cup_size_ml WHERE mould_size_ml IS NULL AND cup_size_ml IS NOT NULL",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact_number VARCHAR(50)",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS address TEXT",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone VARCHAR(50)",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS previous_due NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS total_due NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "UPDATE customers SET phone = contact_number WHERE phone IS NULL AND contact_number IS NOT NULL",
+        "UPDATE customers SET total_due = COALESCE(balance_amount, pending_balance, 0) WHERE total_due = 0",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS firm_name VARCHAR(255)",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS store_token VARCHAR(255)",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_portal_approved BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS portal_access_token VARCHAR(255)",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_balance_update TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS advance_discount_pct DOUBLE PRECISION NOT NULL DEFAULT 5.0",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_dues DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS pending_balance NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_store_token ON customers (store_token) WHERE store_token IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_portal_access_token ON customers (portal_access_token) WHERE portal_access_token IS NOT NULL",
         (
             "DO $$ BEGIN "
             "IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'payment_type') "
@@ -908,7 +987,199 @@ def ensure_runtime_schema():
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS bottom_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS total_raw_material_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS total_production_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS product_name VARCHAR(255)",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS product_name_ml INTEGER",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS image_url VARCHAR(1000)",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS print_design_name VARCHAR(255)",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS polybag_capacity INTEGER",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS box_capacity INTEGER",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS box_size_name VARCHAR(100)",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS cups_per_polybag INTEGER",
+        "ALTER TABLE packaging_profiles ADD COLUMN IF NOT EXISTS polybags_per_box INTEGER",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS speed_bpm INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS current_mould_size VARCHAR(100)",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS current_bottom_size VARCHAR(100)",
+        "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS type VARCHAR(50)",
+        "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS size_ml INTEGER",
+        "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS gsm INTEGER",
+        "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS stock_quantity NUMERIC(14, 3) NOT NULL DEFAULT 0",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS daily_salary NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS daily_wages NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
+        "UPDATE workers SET daily_wages = daily_salary WHERE daily_wages = 0 AND daily_salary > 0",
+        "UPDATE workers SET duty_hours = shift_hours WHERE shift_hours IS NOT NULL",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS shift_type VARCHAR(100)",
+        (
+            "CREATE TABLE IF NOT EXISTS blank_stock ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "blank_size_ml INTEGER NOT NULL, "
+            "linked_bottom_size_mm INTEGER NOT NULL, "
+            "total_qty_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS bottom_stock ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "bottom_size_mm INTEGER NOT NULL, "
+            "total_qty_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS box_stock ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "packaging_size_name VARCHAR(100) NOT NULL, "
+            "total_boxes INTEGER NOT NULL DEFAULT 0, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS polybag_stock ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "packaging_size_name VARCHAR(100) NOT NULL, "
+            "total_packets INTEGER NOT NULL DEFAULT 0, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS final_product_stock ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "product_size_ml INTEGER NOT NULL, "
+            "packaging_size_name VARCHAR(100) NOT NULL, "
+            "total_boxes INTEGER NOT NULL DEFAULT 0, "
+            "loose_packets INTEGER NOT NULL DEFAULT 0, "
+            "packets_per_box_limit INTEGER NOT NULL, "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS daily_productions ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "date DATE NOT NULL, "
+            "worker_id INTEGER NOT NULL REFERENCES workers(id), "
+            "machine_id INTEGER NOT NULL REFERENCES machines(id), "
+            "product_size_ml INTEGER NOT NULL, "
+            "packaging_size_name VARCHAR(100) NOT NULL, "
+            "packets_per_box_limit INTEGER NOT NULL, "
+            "total_boxes_made INTEGER NOT NULL DEFAULT 0, "
+            "loose_packets_made INTEGER NOT NULL DEFAULT 0, "
+            "boxes_from_loose INTEGER NOT NULL DEFAULT 0, "
+            "blank_used_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "bottom_used_kg NUMERIC(14, 3) NOT NULL DEFAULT 0, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS daily_sales ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "date DATE NOT NULL, "
+            "customer_id INTEGER NOT NULL REFERENCES customers(id), "
+            "product_size_ml INTEGER NOT NULL, "
+            "packaging_size_name VARCHAR(100) NOT NULL, "
+            "boxes_sold INTEGER NOT NULL DEFAULT 0, "
+            "loose_packets_sold INTEGER NOT NULL DEFAULT 0, "
+            "rate_per_box NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "rate_per_packet NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "total_amount NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
     ]
+    default_factory_id_sql = f"(SELECT id FROM factories WHERE name = '{default_factory_name}')"
+    for table_name in tenant_tables:
+        statements.extend(
+            [
+                f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS factory_id INTEGER",
+                f"UPDATE {table_name} SET factory_id = {default_factory_id_sql} WHERE factory_id IS NULL",
+                f"ALTER TABLE {table_name} ALTER COLUMN factory_id SET NOT NULL",
+                f"CREATE INDEX IF NOT EXISTS ix_{table_name}_factory_id ON {table_name} (factory_id)",
+            ]
+        )
+    statements.extend(
+        [
+            "ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_name_key",
+            "ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_item_name_key",
+            "ALTER TABLE packaging_profiles DROP CONSTRAINT IF EXISTS packaging_profiles_profile_name_key",
+            "ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_name_key",
+            "ALTER TABLE finished_goods_stock DROP CONSTRAINT IF EXISTS uq_finished_goods_stock_packaging_profile",
+            "ALTER TABLE finished_goods_stock DROP CONSTRAINT IF EXISTS finished_goods_stock_packaging_profile_id_key",
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_factory_name "
+                "ON customers (factory_id, name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_factory_item_name "
+                "ON inventory (factory_id, item_name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_materials_factory_material "
+                "ON raw_materials (factory_id, name, material_type, COALESCE(size_name, ''))"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_packaging_profiles_factory_profile_name "
+                "ON packaging_profiles (factory_id, profile_name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_factory_name "
+                "ON employees (factory_id, name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_machines_factory_name "
+                "ON machines (factory_id, name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_factory_settings_factory "
+                "ON factory_settings (factory_id)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_workers_factory_name "
+                "ON workers (factory_id, name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_material_yields_factory_spec "
+                "ON material_yields (factory_id, material_type, size_ml, COALESCE(gsm, 0))"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_costing_master_factory "
+                "ON costing_master (factory_id)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_finished_goods_stock_factory_packaging_profile "
+                "ON finished_goods_stock (factory_id, packaging_profile_id)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_blank_stock_factory_size "
+                "ON blank_stock (factory_id, blank_size_ml)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_bottom_stock_factory_size "
+                "ON bottom_stock (factory_id, bottom_size_mm)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_box_stock_factory_size "
+                "ON box_stock (factory_id, packaging_size_name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_polybag_stock_factory_size "
+                "ON polybag_stock (factory_id, packaging_size_name)"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_final_product_factory_product_pack "
+                "ON final_product_stock (factory_id, product_size_ml, packaging_size_name)"
+            ),
+            "CREATE INDEX IF NOT EXISTS ix_daily_productions_factory_id ON daily_productions (factory_id)",
+            "CREATE INDEX IF NOT EXISTS ix_daily_sales_factory_id ON daily_sales (factory_id)",
+        ]
+    )
 
     with engine.begin() as connection:
         for statement in statements:
@@ -917,11 +1188,13 @@ def ensure_runtime_schema():
 
 def get_packaging_profile(
     db: Session,
+    factory_id: int,
     packing_profile_name: str,
     cup_size_ml: Optional[int],
 ) -> PackagingProfile:
     profile = (
         db.query(PackagingProfile)
+        .filter(PackagingProfile.factory_id == factory_id)
         .filter(sql_func.lower(PackagingProfile.profile_name) == packing_profile_name.lower())
         .first()
     )
@@ -944,6 +1217,82 @@ def get_packaging_profile(
     return profile
 
 
+def product_search_terms(product_name: Optional[str], cup_size_ml: Optional[int]) -> List[str]:
+    terms: List[str] = []
+    if product_name:
+        terms.append(product_name.strip())
+        size_match = re.search(r"\b(\d{2,4})\s*ml\b", product_name, flags=re.IGNORECASE)
+        if size_match:
+            terms.append(f"{size_match.group(1)}ml")
+    if cup_size_ml:
+        terms.append(f"{cup_size_ml}ml")
+    return [term for term in dict.fromkeys(terms) if term]
+
+
+def find_product_stock(
+    db: Session,
+    factory_id: int,
+    product_name: Optional[str] = None,
+    cup_size_ml: Optional[int] = None,
+) -> Optional[Tuple[FinishedGoodsStock, PackagingProfile]]:
+    query = (
+        db.query(FinishedGoodsStock, PackagingProfile)
+        .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+        .filter(FinishedGoodsStock.factory_id == factory_id)
+        .filter(PackagingProfile.factory_id == factory_id)
+    )
+    if cup_size_ml is not None:
+        query = query.filter(PackagingProfile.cup_size_ml == cup_size_ml)
+
+    terms = product_search_terms(product_name, cup_size_ml)
+    if terms and cup_size_ml is None:
+        name_filters = [
+            sql_func.lower(PackagingProfile.profile_name).like(f"%{term.lower()}%")
+            for term in terms
+        ]
+        if name_filters:
+            query = query.filter(*name_filters[:1])
+
+    return query.order_by(FinishedGoodsStock.updated_at.desc(), FinishedGoodsStock.id.asc()).first()
+
+
+def find_packaging_profile_for_product(
+    db: Session,
+    factory_id: int,
+    product_name: Optional[str] = None,
+    cup_size_ml: Optional[int] = None,
+) -> Optional[PackagingProfile]:
+    query = db.query(PackagingProfile).filter(PackagingProfile.factory_id == factory_id)
+    if cup_size_ml is not None:
+        query = query.filter(PackagingProfile.cup_size_ml == cup_size_ml)
+
+    terms = product_search_terms(product_name, cup_size_ml)
+    if terms and cup_size_ml is None:
+        query = query.filter(sql_func.lower(PackagingProfile.profile_name).like(f"%{terms[0].lower()}%"))
+
+    return query.order_by(PackagingProfile.id.asc()).first()
+
+
+def resolve_production_packaging_profile(
+    db: Session,
+    factory_id: int,
+    data: ProductionIntentData,
+) -> PackagingProfile:
+    if data.packing_profile_name:
+        return get_packaging_profile(db, factory_id, data.packing_profile_name, data.cup_size_ml)
+
+    profile = find_packaging_profile_for_product(db, factory_id, data.product_name, data.cup_size_ml)
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"{data.product_name or data.cup_size_ml or 'Product'} ki packing details nahi mili. "
+                "Kya main standard 100pcs/box maan lu ya aap naya profile banayenge?"
+            ),
+        )
+    return profile
+
+
 def deduct_inventory(inventory_item: Inventory, quantity_needed: Decimal, usage_label: str):
     available_quantity = to_quantity(inventory_item.quantity)
     if available_quantity < quantity_needed:
@@ -958,9 +1307,10 @@ def deduct_inventory(inventory_item: Inventory, quantity_needed: Decimal, usage_
     inventory_item.quantity = available_quantity - quantity_needed
 
 
-def get_raw_inventory(db: Session, keyword: str, unit: str) -> Inventory:
+def get_raw_inventory(db: Session, factory_id: int, keyword: str, unit: str) -> Inventory:
     inventory_item = (
         db.query(Inventory)
+        .filter(Inventory.factory_id == factory_id)
         .filter(Inventory.category == "Raw")
         .filter(Inventory.unit == unit)
         .filter(sql_func.lower(Inventory.item_name).like(f"%{keyword.lower()}%"))
@@ -977,9 +1327,14 @@ def get_raw_inventory(db: Session, keyword: str, unit: str) -> Inventory:
     return inventory_item
 
 
-def get_or_create_finished_goods_stock(db: Session, profile: PackagingProfile) -> FinishedGoodsStock:
+def get_or_create_finished_goods_stock(
+    db: Session,
+    factory_id: int,
+    profile: PackagingProfile,
+) -> FinishedGoodsStock:
     stock = (
         db.query(FinishedGoodsStock)
+        .filter(FinishedGoodsStock.factory_id == factory_id)
         .filter(FinishedGoodsStock.packaging_profile_id == profile.id)
         .first()
     )
@@ -987,6 +1342,7 @@ def get_or_create_finished_goods_stock(db: Session, profile: PackagingProfile) -
         return stock
 
     stock = FinishedGoodsStock(
+        factory_id=factory_id,
         cup_size_ml=profile.cup_size_ml,
         packaging_profile_id=profile.id,
         boxes_available=0,
@@ -996,16 +1352,17 @@ def get_or_create_finished_goods_stock(db: Session, profile: PackagingProfile) -
     return stock
 
 
-def get_or_create_customer(db: Session, customer_name: str) -> Customer:
+def get_or_create_customer(db: Session, factory_id: int, customer_name: str) -> Customer:
     customer = (
         db.query(Customer)
+        .filter(Customer.factory_id == factory_id)
         .filter(sql_func.lower(Customer.name) == customer_name.lower())
         .first()
     )
     if customer is not None:
         return customer
 
-    customer = Customer(name=customer_name, balance_amount=Decimal("0.00"))
+    customer = Customer(factory_id=factory_id, name=customer_name, balance_amount=Decimal("0.00"))
     db.add(customer)
     db.flush()
     return customer
@@ -1026,24 +1383,41 @@ UPI_PAYMENT_DETAILS = {
 }
 
 
+def dispatch_order_confirmation_webhook(payload: Dict[str, object]) -> None:
+    webhook_url = os.getenv("N8N_ORDER_CONFIRMATION_WEBHOOK") or "http://n8n:5678/webhook/order-confirmation"
+    body = json.dumps(payload, default=str).encode("utf-8")
+    request = urlrequest.Request(
+        webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=5) as response:
+            response.read()
+    except URLError:
+        return
+
+
 def get_store_customer(db: Session, store_token: str) -> Customer:
     customer = (
         db.query(Customer)
-        .filter(Customer.store_token == store_token)
+        .filter((Customer.portal_access_token == store_token) | (Customer.store_token == store_token))
         .first()
     )
-    if customer is not None:
+    if customer is not None and customer.is_portal_approved:
         return customer
 
     raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="Storefront not found",
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied",
     )
 
 
 def calculate_finished_goods_base_price(db: Session, stock: FinishedGoodsStock) -> Decimal:
     latest_sale = (
         db.query(SalesInvoice)
+        .filter(SalesInvoice.factory_id == stock.factory_id)
         .filter(SalesInvoice.packaging_profile_id == stock.packaging_profile_id)
         .filter(SalesInvoice.boxes_sold > 0)
         .filter(SalesInvoice.total_amount > 0)
@@ -1055,6 +1429,7 @@ def calculate_finished_goods_base_price(db: Session, stock: FinishedGoodsStock) 
 
     latest_production = (
         db.query(ProductionLog)
+        .filter(ProductionLog.factory_id == stock.factory_id)
         .filter(ProductionLog.packaging_profile_id == stock.packaging_profile_id)
         .filter(ProductionLog.boxes_produced > 0)
         .filter(ProductionLog.total_production_cost > 0)
@@ -1065,6 +1440,16 @@ def calculate_finished_goods_base_price(db: Session, stock: FinishedGoodsStock) 
         return to_money(to_money(latest_production.total_production_cost) / Decimal(latest_production.boxes_produced))
 
     return Decimal("0.00")
+
+
+def get_availability_status(boxes_available: int) -> str:
+    if boxes_available <= 0:
+        return "Out of Stock"
+    if boxes_available < 10:
+        return "Low Stock"
+    if boxes_available > 50:
+        return "In Stock"
+    return "In Stock"
 
 
 def normalize_store_payment_method(payment_method: str) -> str:
@@ -1088,9 +1473,10 @@ def normalize_store_payment_method(payment_method: str) -> str:
     return normalized_payment_method
 
 
-def get_employee_by_name(db: Session, employee_name: str) -> Employee:
+def get_employee_by_name(db: Session, factory_id: int, employee_name: str) -> Employee:
     employee = (
         db.query(Employee)
+        .filter(Employee.factory_id == factory_id)
         .filter(sql_func.lower(Employee.name) == employee_name.lower())
         .first()
     )
@@ -1103,10 +1489,9 @@ def get_employee_by_name(db: Session, employee_name: str) -> Employee:
     )
 
 
-def execute_production_entry(db: Session, data: ProductionIntentData) -> BusinessExecutionResult:
-    packing_profile_name = require_text(data.packing_profile_name, "packing_profile_name")
-    boxes_produced = require_positive_int(data.boxes_produced, "boxes_produced")
-    profile = get_packaging_profile(db, packing_profile_name, data.cup_size_ml)
+def execute_production_entry(db: Session, factory_id: int, data: ProductionIntentData) -> BusinessExecutionResult:
+    boxes_produced = require_positive_int(data.boxes_produced or data.quantity, "quantity")
+    profile = resolve_production_packaging_profile(db, factory_id, data)
 
     if profile.box_inventory is None or profile.poly_inventory is None:
         raise HTTPException(
@@ -1135,13 +1520,13 @@ def execute_production_entry(db: Session, data: ProductionIntentData) -> Busines
 
     blank_cost = Decimal("0.00")
     if blank_consumed > 0:
-        blank_inventory = get_raw_inventory(db, "blank", "pieces")
+        blank_inventory = get_raw_inventory(db, factory_id, "blank", "pieces")
         deduct_inventory(blank_inventory, blank_consumed, "blank raw material")
         blank_cost = to_money(blank_consumed * to_money(blank_inventory.price_per_unit))
 
     bottom_cost = Decimal("0.00")
     if bottom_consumed > 0:
-        bottom_inventory = get_raw_inventory(db, "bottom", "kg")
+        bottom_inventory = get_raw_inventory(db, factory_id, "bottom", "kg")
         deduct_inventory(bottom_inventory, bottom_consumed, "bottom raw material")
         bottom_cost = to_money(bottom_consumed * to_money(bottom_inventory.price_per_unit))
 
@@ -1149,6 +1534,7 @@ def execute_production_entry(db: Session, data: ProductionIntentData) -> Busines
     total_production_cost = to_money(total_packing_cost + total_raw_material_cost)
 
     production_log = ProductionLog(
+        factory_id=factory_id,
         date=date.today(),
         shift="AI",
         cup_size_ml=profile.cup_size_ml,
@@ -1168,7 +1554,7 @@ def execute_production_entry(db: Session, data: ProductionIntentData) -> Busines
     )
     db.add(production_log)
 
-    finished_stock = get_or_create_finished_goods_stock(db, profile)
+    finished_stock = get_or_create_finished_goods_stock(db, factory_id, profile)
     finished_stock.boxes_available = (finished_stock.boxes_available or 0) + boxes_produced
 
     db.flush()
@@ -1186,18 +1572,24 @@ def execute_production_entry(db: Session, data: ProductionIntentData) -> Busines
     )
 
 
-def execute_sales_entry(db: Session, data: SalesIntentData) -> BusinessExecutionResult:
+def execute_sales_entry(db: Session, factory_id: int, data: SalesIntentData) -> BusinessExecutionResult:
     customer_name = require_text(data.customer_name, "customer_name")
-    packing_profile_name = require_text(data.packing_profile_name, "packing_profile_name")
-    boxes_sold = require_positive_int(data.boxes_sold, "boxes_sold")
-    if data.rate_per_box is None or data.rate_per_box <= 0:
+    boxes_sold = require_positive_int(data.boxes_sold or data.quantity, "quantity")
+
+    profile = (
+        get_packaging_profile(db, factory_id, data.packing_profile_name, data.cup_size_ml)
+        if data.packing_profile_name
+        else find_packaging_profile_for_product(db, factory_id, data.product_name, data.cup_size_ml)
+    )
+    if profile is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="rate_per_box is required and must be greater than zero",
+            detail=(
+                f"{data.product_name or data.cup_size_ml or 'Product'} ka profile nahi mila. "
+                "Kaunsa product/size sale hua?"
+            ),
         )
-
-    profile = get_packaging_profile(db, packing_profile_name, data.cup_size_ml)
-    finished_stock = get_or_create_finished_goods_stock(db, profile)
+    finished_stock = get_or_create_finished_goods_stock(db, factory_id, profile)
     available_finished_boxes = finished_stock.boxes_available or 0
     if available_finished_boxes < boxes_sold:
         raise HTTPException(
@@ -1208,8 +1600,9 @@ def execute_sales_entry(db: Session, data: SalesIntentData) -> BusinessExecution
             ),
         )
 
-    customer = get_or_create_customer(db, customer_name)
-    total_amount = to_money(Decimal(boxes_sold) * to_money(data.rate_per_box))
+    customer = get_or_create_customer(db, factory_id, customer_name)
+    rate_per_box = to_money(data.rate_per_box) if data.rate_per_box and data.rate_per_box > 0 else calculate_finished_goods_base_price(db, finished_stock)
+    total_amount = to_money(Decimal(boxes_sold) * rate_per_box)
     amount_paid = to_money(data.amount_received)
     new_balance = to_money(customer.balance_amount) + total_amount - amount_paid
     if new_balance < 0:
@@ -1222,6 +1615,7 @@ def execute_sales_entry(db: Session, data: SalesIntentData) -> BusinessExecution
     finished_stock.boxes_available = available_finished_boxes - boxes_sold
 
     sales_invoice = SalesInvoice(
+        factory_id=factory_id,
         customer_id=customer.id,
         date=date.today(),
         cup_size_ml=profile.cup_size_ml,
@@ -1245,7 +1639,7 @@ def execute_sales_entry(db: Session, data: SalesIntentData) -> BusinessExecution
     )
 
 
-def execute_expense_entry(db: Session, data: ExpenseIntentData) -> BusinessExecutionResult:
+def execute_expense_entry(db: Session, factory_id: int, data: ExpenseIntentData) -> BusinessExecutionResult:
     description = require_text(data.description, "description")
     category = data.category.strip() if data.category else "General"
     amount = to_money(data.amount)
@@ -1256,6 +1650,7 @@ def execute_expense_entry(db: Session, data: ExpenseIntentData) -> BusinessExecu
         )
 
     expense_log = ExpenseLog(
+        factory_id=factory_id,
         date=date.today(),
         category=category,
         description=description,
@@ -1273,9 +1668,9 @@ def execute_expense_entry(db: Session, data: ExpenseIntentData) -> BusinessExecu
     )
 
 
-def execute_employee_entry(db: Session, data: EmployeeIntentData) -> BusinessExecutionResult:
+def execute_employee_entry(db: Session, factory_id: int, data: EmployeeIntentData) -> BusinessExecutionResult:
     employee_name = require_text(data.employee_name, "employee_name")
-    employee = get_employee_by_name(db, employee_name)
+    employee = get_employee_by_name(db, factory_id, employee_name)
 
     overtime_hours = float(data.overtime_hours or 0)
     if overtime_hours < 0:
@@ -1295,6 +1690,7 @@ def execute_employee_entry(db: Session, data: EmployeeIntentData) -> BusinessExe
     if data.is_present is not None or data.overtime_hours is not None:
         attendance_log = (
             db.query(AttendanceLog)
+            .filter(AttendanceLog.factory_id == factory_id)
             .filter(AttendanceLog.employee_id == employee.id)
             .filter(AttendanceLog.date == date.today())
             .first()
@@ -1302,6 +1698,7 @@ def execute_employee_entry(db: Session, data: EmployeeIntentData) -> BusinessExe
         is_present = data.is_present if data.is_present is not None else overtime_hours > 0
         if attendance_log is None:
             attendance_log = AttendanceLog(
+                factory_id=factory_id,
                 date=date.today(),
                 employee_id=employee.id,
                 is_present=is_present,
@@ -1315,6 +1712,7 @@ def execute_employee_entry(db: Session, data: EmployeeIntentData) -> BusinessExe
     advance_payment: Optional[AdvancePayment] = None
     if advance_amount > 0:
         advance_payment = AdvancePayment(
+            factory_id=factory_id,
             date=date.today(),
             employee_id=employee.id,
             amount=float(advance_amount),
@@ -1347,7 +1745,7 @@ def execute_general_qa(data: GeneralQAData) -> BusinessExecutionResult:
     )
 
 
-def execute_factory_intent(db: Session, intent: FactoryIntent) -> BusinessExecutionResult:
+def execute_factory_intent(db: Session, factory_id: int, intent: FactoryIntent) -> BusinessExecutionResult:
     try:
         if intent.intent_type == FactoryIntentType.production_entry:
             if intent.production_data is None:
@@ -1355,28 +1753,28 @@ def execute_factory_intent(db: Session, intent: FactoryIntent) -> BusinessExecut
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="production_data is required for production_entry",
                 )
-            result = execute_production_entry(db, intent.production_data)
+            result = execute_production_entry(db, factory_id, intent.production_data)
         elif intent.intent_type == FactoryIntentType.sales_entry:
             if intent.sales_data is None:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="sales_data is required for sales_entry",
                 )
-            result = execute_sales_entry(db, intent.sales_data)
+            result = execute_sales_entry(db, factory_id, intent.sales_data)
         elif intent.intent_type == FactoryIntentType.expense_entry:
             if intent.expense_data is None:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="expense_data is required for expense_entry",
                 )
-            result = execute_expense_entry(db, intent.expense_data)
+            result = execute_expense_entry(db, factory_id, intent.expense_data)
         elif intent.intent_type == FactoryIntentType.employee_entry:
             if intent.employee_data is None:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="employee_data is required for employee_entry",
                 )
-            result = execute_employee_entry(db, intent.employee_data)
+            result = execute_employee_entry(db, factory_id, intent.employee_data)
         else:
             result = execute_general_qa(intent.general_data or GeneralQAData())
 
@@ -1438,12 +1836,17 @@ def build_validation_reply(intent: Optional[FactoryIntent], detail: str) -> str:
 
 def sum_decimal(
     db: Session,
+    factory_id: int,
     model,
     column,
     start_date: Optional[date],
     end_date: Optional[date],
 ) -> Decimal:
-    query = db.query(sql_func.coalesce(sql_func.sum(column), 0)).select_from(model)
+    query = (
+        db.query(sql_func.coalesce(sql_func.sum(column), 0))
+        .select_from(model)
+        .filter(model.factory_id == factory_id)
+    )
     if start_date is not None:
         query = query.filter(model.date >= start_date)
     if end_date is not None:
@@ -1451,12 +1854,13 @@ def sum_decimal(
     return to_money(query.scalar())
 
 
-def build_recent_7_days(db: Session) -> List[DailyProductionSales]:
+def build_recent_7_days(db: Session, factory_id: int) -> List[DailyProductionSales]:
     today = date.today()
     start_day = today - timedelta(days=6)
 
     production_rows = (
         db.query(ProductionLog.date, sql_func.coalesce(sql_func.sum(ProductionLog.boxes_produced), 0))
+        .filter(ProductionLog.factory_id == factory_id)
         .filter(ProductionLog.date >= start_day)
         .filter(ProductionLog.date <= today)
         .group_by(ProductionLog.date)
@@ -1464,6 +1868,7 @@ def build_recent_7_days(db: Session) -> List[DailyProductionSales]:
     )
     sales_rows = (
         db.query(SalesInvoice.date, sql_func.coalesce(sql_func.sum(SalesInvoice.boxes_sold), 0))
+        .filter(SalesInvoice.factory_id == factory_id)
         .filter(SalesInvoice.date >= start_day)
         .filter(SalesInvoice.date <= today)
         .group_by(SalesInvoice.date)
@@ -1483,7 +1888,7 @@ def build_recent_7_days(db: Session) -> List[DailyProductionSales]:
     ]
 
 
-def calculate_wastage_mix(db: Session) -> WastageMix:
+def calculate_wastage_mix(db: Session, factory_id: int) -> WastageMix:
     rows = (
         db.query(
             ProductionLog.boxes_produced,
@@ -1493,6 +1898,8 @@ def calculate_wastage_mix(db: Session) -> WastageMix:
             PackagingProfile.polys_per_box,
         )
         .join(PackagingProfile, ProductionLog.packaging_profile_id == PackagingProfile.id)
+        .filter(ProductionLog.factory_id == factory_id)
+        .filter(PackagingProfile.factory_id == factory_id)
         .all()
     )
 
@@ -1522,6 +1929,26 @@ def calculate_wastage_percent(wastage_mix: WastageMix) -> Decimal:
     return to_money((Decimal(wastage_mix.blank_waste_pcs) / total_considered_pcs) * Decimal("100"))
 
 
+def build_product_catalog(db: Session, factory_id: int) -> str:
+    rows = (
+        db.query(PackagingProfile, FinishedGoodsStock)
+        .outerjoin(FinishedGoodsStock, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+        .filter(PackagingProfile.factory_id == factory_id)
+        .order_by(PackagingProfile.cup_size_ml.asc(), PackagingProfile.profile_name.asc())
+        .all()
+    )
+    if not rows:
+        return "No finished goods or packaging profiles configured."
+
+    return "\n".join(
+        (
+            f"- {profile.profile_name}: {profile.cup_size_ml}ml, "
+            f"{stock.boxes_available if stock else 0} boxes in stock"
+        )
+        for profile, stock in rows
+    )
+
+
 def current_month_bounds() -> Tuple[date, date, date]:
     today = date.today()
     month_start = today.replace(day=1)
@@ -1533,11 +1960,198 @@ def current_month_bounds() -> Tuple[date, date, date]:
     return month_start, next_month_start, month_end
 
 
+def execute_supervisor_tool(
+    db: Session,
+    factory_id: int,
+    message: str,
+    intent: FactoryIntent,
+) -> Optional[AskAIResponse]:
+    tool_name = intent.tool_name
+    if tool_name is None:
+        if intent.intent_type == FactoryIntentType.general_qa and "stock" in message.lower():
+            tool_name = SupervisorToolName.check_inventory
+        elif intent.intent_type == FactoryIntentType.production_entry:
+            tool_name = SupervisorToolName.log_production
+        elif intent.intent_type == FactoryIntentType.sales_entry:
+            tool_name = SupervisorToolName.record_sale
+
+    if tool_name == SupervisorToolName.check_inventory:
+        return check_inventory_tool(db, factory_id, message, intent)
+    if tool_name == SupervisorToolName.log_production:
+        return log_production_tool(db, factory_id, intent)
+    if tool_name == SupervisorToolName.record_sale:
+        return record_sale_tool(db, factory_id, intent)
+    return None
+
+
+def check_inventory_tool(
+    db: Session,
+    factory_id: int,
+    message: str,
+    intent: FactoryIntent,
+) -> AskAIResponse:
+    product_name = tool_arg(intent, "product_name") or tool_arg(intent, "product") or message
+    cup_size_ml = parse_optional_int(tool_arg(intent, "cup_size_ml")) or extract_cup_size_ml(product_name)
+    stock_pair = find_product_stock(db, factory_id, product_name, cup_size_ml)
+    if stock_pair is None:
+        ai_reply = (
+            f"Malik, {product_name.strip()} ka stock mujhe is factory me nahi mila. "
+            "Aap product size/profile bata den, main dobara check kar dunga."
+        )
+        return supervisor_general_response(intent, ai_reply, status_text="needs_info")
+
+    stock, profile = stock_pair
+    ai_reply = f"Malik, {profile.profile_name} ka stock abhi {stock.boxes_available or 0} box hai."
+    return supervisor_general_response(intent, ai_reply, status_text="success")
+
+
+def log_production_tool(db: Session, factory_id: int, intent: FactoryIntent) -> AskAIResponse:
+    data = intent.production_data
+    if data is None:
+        return supervisor_general_response(intent, "Kitne box production add karne hain?", status_text="needs_info")
+
+    quantity = data.boxes_produced or data.quantity
+    if not quantity:
+        return supervisor_general_response(intent, "Got it. Kitne box add karne hain?", status_text="needs_info")
+
+    profile = find_packaging_profile_for_product(db, factory_id, data.product_name, data.cup_size_ml)
+    if data.packing_profile_name:
+        try:
+            profile = get_packaging_profile(db, factory_id, data.packing_profile_name, data.cup_size_ml)
+        except HTTPException:
+            profile = None
+    if profile is None:
+        product_label = data.product_name or (f"{data.cup_size_ml}ml" if data.cup_size_ml else "is product")
+        ai_reply = (
+            f"{product_label} ki packing details nahi mili, "
+            "kya main standard 100pcs/box maan lu ya aap naya profile banayenge?"
+        )
+        return supervisor_general_response(intent, ai_reply, status_text="needs_info")
+
+    result = execute_production_entry(db, factory_id, data)
+    db.commit()
+    ai_reply = (
+        f"Done Malik. {quantity} box {profile.profile_name} production me add ho gaya. "
+        f"Ab stock {result.finished_goods_boxes_available} box hai."
+    )
+    return supervisor_success_response(intent, result, ai_reply)
+
+
+def record_sale_tool(db: Session, factory_id: int, intent: FactoryIntent) -> AskAIResponse:
+    data = intent.sales_data
+    if data is None:
+        return supervisor_general_response(intent, "Sale record karne ke liye customer, product aur quantity bata dijiye.", status_text="needs_info")
+
+    quantity = data.boxes_sold or data.quantity
+    if not data.customer_name:
+        return supervisor_general_response(intent, "Sale kis customer ko hui?", status_text="needs_info")
+    if not quantity:
+        return supervisor_general_response(intent, "Kitne box sale hue?", status_text="needs_info")
+
+    profile = (
+        get_packaging_profile(db, factory_id, data.packing_profile_name, data.cup_size_ml)
+        if data.packing_profile_name
+        else find_packaging_profile_for_product(db, factory_id, data.product_name, data.cup_size_ml)
+    )
+    if profile is None:
+        product_label = data.product_name or (f"{data.cup_size_ml}ml" if data.cup_size_ml else "product")
+        return supervisor_general_response(
+            intent,
+            f"{product_label} ka product profile nahi mila. Kaunsa size/product sale hua?",
+            status_text="needs_info",
+        )
+
+    data.packing_profile_name = profile.profile_name
+    data.cup_size_ml = profile.cup_size_ml
+    data.boxes_sold = quantity
+    result = execute_sales_entry(db, factory_id, data)
+    db.commit()
+    ai_reply = (
+        f"Sale record ho gayi Malik. {quantity} box {profile.profile_name} {data.customer_name} ko gaya. "
+        f"Remaining stock {result.finished_goods_boxes_available} box hai."
+    )
+    return supervisor_success_response(intent, result, ai_reply)
+
+
+def supervisor_success_response(intent: FactoryIntent, result: BusinessExecutionResult, ai_reply: str) -> AskAIResponse:
+    return AskAIResponse(
+        ai_reply=ai_reply,
+        action_taken=intent.intent_type,
+        status=result.status,
+        intent=intent,
+        result=result,
+    )
+
+
+def supervisor_general_response(intent: FactoryIntent, ai_reply: str, status_text: str) -> AskAIResponse:
+    return AskAIResponse(
+        ai_reply=ai_reply,
+        action_taken=FactoryIntentType.general_qa,
+        status=status_text,
+        intent=intent,
+    )
+
+
+def tool_arg(intent: FactoryIntent, key: str):
+    return intent.tool_args.get(key) if intent.tool_args else None
+
+
+def parse_optional_int(value) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def friendly_tool_error(detail: str) -> str:
+    if "packing details nahi mili" in detail or "profile nahi mila" in detail:
+        return detail
+    if "Insufficient finished goods" in detail:
+        return f"Malik, stock kam hai. {detail}"
+    if "Insufficient" in detail:
+        return f"Malik, material/stock kam hai. {detail}"
+    if "quantity" in detail or "required" in detail:
+        return f"Thoda aur detail chahiye: {detail}"
+    return f"Is entry ko save karne se pehle ek detail clear karni hai: {detail}"
+
+
+def normalize_external_id(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized_value = value.strip()
+    return normalized_value or None
+
+
+def ensure_external_id_available(
+    db: Session,
+    current_user_id: int,
+    field_name: str,
+    value: Optional[str],
+) -> None:
+    if value is None:
+        return
+    existing_user = db.query(User).filter(getattr(User, field_name) == value).first()
+    if existing_user is not None and existing_user.id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{field_name} is already connected to another account",
+        )
+
+
+def get_user_by_external_sender(db: Session, platform: ExternalChatPlatform, sender_id: str) -> Optional[User]:
+    normalized_sender_id = normalize_external_id(sender_id)
+    if normalized_sender_id is None:
+        return None
+    if platform == ExternalChatPlatform.whatsapp:
+        return db.query(User).filter(User.phone_number == normalized_sender_id).first()
+    return db.query(User).filter(User.telegram_id == normalized_sender_id).first()
+
+
 @app.on_event("startup")
 def on_startup():
-    if not JWT_SECRET_KEY:
-        raise RuntimeError("JWT_SECRET_KEY environment variable is required")
-
+    ensure_auth_config()
     Base.metadata.create_all(bind=engine)
     ensure_runtime_schema()
     db = next(get_db())
@@ -1566,9 +2180,10 @@ def login_for_access_token(
         )
 
     return TokenResponse(
-        access_token=create_access_token(user.username, user.role),
+        access_token=create_access_token(user.username, user.role, user.factory_id),
         username=user.username,
         role=user.role,
+        factory_id=user.factory_id,
     )
 
 
@@ -1578,27 +2193,90 @@ def read_current_user(current_user: User = Depends(get_current_user)):
         id=current_user.id,
         username=current_user.username,
         role=current_user.role,
+        factory_id=current_user.factory_id,
+        phone_number=current_user.phone_number,
+        telegram_id=current_user.telegram_id,
     )
 
 
-def process_factory_message(message: str, session_id: str, db: Session) -> AskAIResponse:
-    memory = get_session_memory(session_id)
+@app.get("/settings/integrations", response_model=IntegrationSettings)
+def read_integration_settings(current_user: User = Depends(get_current_user)):
+    return IntegrationSettings(
+        phone_number=current_user.phone_number,
+        telegram_id=current_user.telegram_id,
+    )
+
+
+@app.put("/settings/integrations", response_model=IntegrationSettings)
+def update_integration_settings(
+    settings: IntegrationSettings,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    phone_number = normalize_external_id(settings.phone_number)
+    telegram_id = normalize_external_id(settings.telegram_id)
+    ensure_external_id_available(db, current_user.id, "phone_number", phone_number)
+    ensure_external_id_available(db, current_user.id, "telegram_id", telegram_id)
+
+    current_user.phone_number = phone_number
+    current_user.telegram_id = telegram_id
+    db.commit()
+    db.refresh(current_user)
+    return IntegrationSettings(
+        phone_number=current_user.phone_number,
+        telegram_id=current_user.telegram_id,
+    )
+
+
+def process_factory_message(
+    message: str,
+    session_id: str,
+    factory_id: int,
+    db: Session,
+    chat_history: Optional[List[Dict[str, str]]] = None,
+    actor_role: Optional[str] = None,
+) -> AskAIResponse:
     parsed_intent: Optional[FactoryIntent] = None
     parser_warning: Optional[str] = None
+    product_catalog = build_product_catalog(db, factory_id)
 
     try:
-        parsed_intent, used_llm = parse_factory_intent_with_chain(message, session_id)
+        parsed_intent, used_llm = parse_factory_intent_with_agent(
+            message=message,
+            session_id=session_id,
+            intent_model=FactoryIntent,
+            fallback_parser=extract_factory_intent,
+            product_catalog=product_catalog,
+            chat_history=chat_history,
+        )
     except Exception as exc:
         parsed_intent = extract_factory_intent(message)
         used_llm = False
         parser_warning = f"LLM parser failed; local parser fallback was used: {exc}"
 
     try:
-        result = execute_factory_intent(db, parsed_intent)
+        tool_response = execute_supervisor_tool(db, factory_id, message, parsed_intent)
+        if tool_response is not None:
+            save_agent_context(session_id, message, tool_response.ai_reply)
+            return tool_response
+    except HTTPException as exc:
+        db.rollback()
+        ai_reply = friendly_tool_error(str(exc.detail))
+        save_agent_context(session_id, message, ai_reply)
+        return AskAIResponse(
+            ai_reply=ai_reply,
+            action_taken=FactoryIntentType.general_qa,
+            status="needs_info" if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY else "validation_error",
+            intent=parsed_intent,
+            error=str(exc.detail),
+        )
+
+    try:
+        result = execute_factory_intent(db, factory_id, parsed_intent)
     except HTTPException as exc:
         detail = str(exc.detail)
         ai_reply = build_validation_reply(parsed_intent, detail)
-        memory.save_context({"user_message": message}, {"ai_reply": ai_reply})
+        save_agent_context(session_id, message, ai_reply)
         return AskAIResponse(
             ai_reply=ai_reply,
             action_taken=parsed_intent.intent_type,
@@ -1608,7 +2286,7 @@ def process_factory_message(message: str, session_id: str, db: Session) -> AskAI
         )
 
     ai_reply = build_success_reply(parsed_intent, result, used_llm)
-    memory.save_context({"user_message": message}, {"ai_reply": ai_reply})
+    save_agent_context(session_id, message, ai_reply)
     return AskAIResponse(
         ai_reply=ai_reply,
         action_taken=parsed_intent.intent_type,
@@ -1620,18 +2298,57 @@ def process_factory_message(message: str, session_id: str, db: Session) -> AskAI
 
 
 @app.post("/ask-ai", response_model=AskAIResponse)
-def ask_ai(payload: AskAIRequest, db: Session = Depends(get_db)):
-    return process_factory_message(payload.message, payload.session_id, db)
+def ask_ai(
+    payload: AskAIRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return process_factory_message(
+        message=payload.message,
+        session_id=payload.session_id,
+        factory_id=current_user.factory_id,
+        db=db,
+        chat_history=payload.chat_history,
+        actor_role=current_user.role,
+    )
+
+
+@app.post("/webhook/external-chat", response_model=ExternalChatResponse)
+def external_chat_webhook(payload: ExternalChatRequest, db: Session = Depends(get_db)):
+    user = get_user_by_external_sender(db, payload.platform, payload.sender_id)
+    if user is None:
+        return ExternalChatResponse(
+            reply="Aapka number registered nahi hai. Kripya dashboard se connect karein.",
+            status="not_registered",
+            action_taken=FactoryIntentType.general_qa.value,
+        )
+
+    session_id = f"external:{payload.platform.value}:{payload.sender_id}"
+    ai_response = process_factory_message(
+        message=payload.message,
+        session_id=session_id,
+        factory_id=user.factory_id,
+        db=db,
+        actor_role=user.role,
+    )
+    return ExternalChatResponse(
+        reply=ai_response.ai_reply,
+        status=ai_response.status,
+        action_taken=ai_response.action_taken.value
+        if isinstance(ai_response.action_taken, FactoryIntentType)
+        else str(ai_response.action_taken),
+    )
 
 
 @app.post("/api/webhook/whatsapp", response_model=AskAIResponse)
 async def whatsapp_voice_webhook(
     audio: UploadFile = File(...),
     session_id: str = Form(default="whatsapp"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     transcribed_text = await transcribe_audio_upload(audio)
-    return process_factory_message(transcribed_text, session_id, db)
+    return process_factory_message(transcribed_text, session_id, current_user.factory_id, db)
 
 
 @app.get("/report/profit-loss", response_model=ProfitLossReport)
@@ -1641,12 +2358,14 @@ def profit_loss_report(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    revenue = sum_decimal(db, SalesInvoice, SalesInvoice.total_amount, start_date, end_date)
-    cash_received = sum_decimal(db, SalesInvoice, SalesInvoice.amount_paid, start_date, end_date)
-    total_packing_cost = sum_decimal(db, ProductionLog, ProductionLog.total_packing_cost, start_date, end_date)
-    total_expenses = sum_decimal(db, ExpenseLog, ExpenseLog.amount, start_date, end_date)
+    factory_id = current_user.factory_id
+    revenue = sum_decimal(db, factory_id, SalesInvoice, SalesInvoice.total_amount, start_date, end_date)
+    cash_received = sum_decimal(db, factory_id, SalesInvoice, SalesInvoice.amount_paid, start_date, end_date)
+    total_packing_cost = sum_decimal(db, factory_id, ProductionLog, ProductionLog.total_packing_cost, start_date, end_date)
+    total_expenses = sum_decimal(db, factory_id, ExpenseLog, ExpenseLog.amount, start_date, end_date)
     total_raw_material_cost = sum_decimal(
         db,
+        factory_id,
         ProductionLog,
         ProductionLog.total_raw_material_cost,
         start_date,
@@ -1654,6 +2373,7 @@ def profit_loss_report(
     )
     total_production_cost = sum_decimal(
         db,
+        factory_id,
         ProductionLog,
         ProductionLog.total_production_cost,
         start_date,
@@ -1673,38 +2393,52 @@ def profit_loss_report(
 
 
 @app.get("/api/dashboard-stats", response_model=DashboardStats)
-def dashboard_stats(db: Session = Depends(get_db)):
+def dashboard_stats(
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
     today = date.today()
     month_start = today.replace(day=1)
-    monthly_revenue = sum_decimal(db, SalesInvoice, SalesInvoice.total_amount, month_start, today)
+    monthly_revenue = sum_decimal(db, factory_id, SalesInvoice, SalesInvoice.total_amount, month_start, today)
     monthly_production_cost = sum_decimal(
         db,
+        factory_id,
         ProductionLog,
         ProductionLog.total_production_cost,
         month_start,
         today,
     )
-    monthly_expenses = sum_decimal(db, ExpenseLog, ExpenseLog.amount, month_start, today)
+    monthly_expenses = sum_decimal(db, factory_id, ExpenseLog, ExpenseLog.amount, month_start, today)
     total_pending_recoveries = to_money(
-        db.query(sql_func.coalesce(sql_func.sum(Customer.balance_amount), 0)).scalar()
+        db.query(sql_func.coalesce(sql_func.sum(Customer.balance_amount), 0))
+        .filter(Customer.factory_id == factory_id)
+        .scalar()
     )
     total_boxes_in_stock = int(
-        db.query(sql_func.coalesce(sql_func.sum(FinishedGoodsStock.boxes_available), 0)).scalar() or 0
+        db.query(sql_func.coalesce(sql_func.sum(FinishedGoodsStock.boxes_available), 0))
+        .filter(FinishedGoodsStock.factory_id == factory_id)
+        .scalar()
+        or 0
     )
-    wastage_mix = calculate_wastage_mix(db)
+    wastage_mix = calculate_wastage_mix(db, factory_id)
 
     return DashboardStats(
         monthly_net_profit=to_money(monthly_revenue - monthly_production_cost - monthly_expenses),
         total_pending_recoveries=total_pending_recoveries,
         total_boxes_in_stock=total_boxes_in_stock,
         overall_wastage_percent=calculate_wastage_percent(wastage_mix),
-        recent_7_days=build_recent_7_days(db),
+        recent_7_days=build_recent_7_days(db, factory_id),
         wastage_mix=wastage_mix,
     )
 
 
 @app.get("/report/customer-balance", response_model=List[CustomerBalanceRow])
-def customer_balance_report(db: Session = Depends(get_db)):
+def customer_balance_report(
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
     rows = (
         db.query(
             Customer.name,
@@ -1712,6 +2446,7 @@ def customer_balance_report(db: Session = Depends(get_db)):
             Customer.balance_amount,
         )
         .outerjoin(SalesInvoice, SalesInvoice.customer_id == Customer.id)
+        .filter(Customer.factory_id == factory_id)
         .group_by(Customer.id, Customer.name, Customer.balance_amount)
         .order_by(Customer.balance_amount.desc(), Customer.name.asc())
         .all()
@@ -1730,11 +2465,14 @@ def customer_balance_report(db: Session = Depends(get_db)):
 @app.get(
     "/api/n8n/pending-payments",
     response_model=List[PendingPaymentRow],
-    dependencies=[Depends(verify_n8n_api_key)],
 )
-def n8n_pending_payments(db: Session = Depends(get_db)):
+def n8n_pending_payments(
+    factory_id: int = Depends(get_n8n_factory_id),
+    db: Session = Depends(get_db),
+):
     customers = (
         db.query(Customer)
+        .filter(Customer.factory_id == factory_id)
         .filter(Customer.balance_amount > 0)
         .order_by(Customer.balance_amount.desc(), Customer.name.asc())
         .all()
@@ -1753,11 +2491,14 @@ def n8n_pending_payments(db: Session = Depends(get_db)):
 @app.get(
     "/api/n8n/verified-customers",
     response_model=List[VerifiedStoreCustomerRow],
-    dependencies=[Depends(verify_n8n_api_key)],
 )
-def n8n_verified_customers(db: Session = Depends(get_db)):
+def n8n_verified_customers(
+    factory_id: int = Depends(get_n8n_factory_id),
+    db: Session = Depends(get_db),
+):
     customers = (
         db.query(Customer)
+        .filter(Customer.factory_id == factory_id)
         .filter(Customer.store_token.isnot(None))
         .filter(Customer.store_token != "")
         .order_by(Customer.name.asc())
@@ -1776,9 +2517,13 @@ def n8n_verified_customers(db: Session = Depends(get_db)):
 
 
 @app.get("/api/inventory/low-stock", response_model=List[LowStockInventoryRow])
-def low_stock_inventory(db: Session = Depends(get_db)):
+def low_stock_inventory(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     low_stock_items = (
         db.query(Inventory)
+        .filter(Inventory.factory_id == current_user.factory_id)
         .filter(Inventory.category == "Raw")
         .filter(Inventory.unit == "kg")
         .filter(Inventory.quantity < LOW_STOCK_THRESHOLD_KG)
@@ -1807,6 +2552,8 @@ def admin_live_activity(
     rows = (
         db.query(CustomerActivity, Customer)
         .join(Customer, CustomerActivity.customer_id == Customer.id)
+        .filter(CustomerActivity.factory_id == current_user.factory_id)
+        .filter(Customer.factory_id == current_user.factory_id)
         .order_by(CustomerActivity.created_at.desc(), CustomerActivity.id.desc())
         .limit(20)
         .all()
@@ -1825,11 +2572,17 @@ def admin_live_activity(
 
 
 @app.get("/report/production-log", response_model=List[ProductionLogRow])
-def production_log_report(limit: int = 100, db: Session = Depends(get_db)):
+def production_log_report(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     bounded_limit = min(max(limit, 1), 500)
     rows = (
         db.query(ProductionLog, PackagingProfile)
         .join(PackagingProfile, ProductionLog.packaging_profile_id == PackagingProfile.id)
+        .filter(ProductionLog.factory_id == current_user.factory_id)
+        .filter(PackagingProfile.factory_id == current_user.factory_id)
         .order_by(ProductionLog.date.desc(), ProductionLog.id.desc())
         .limit(bounded_limit)
         .all()
@@ -1866,15 +2619,20 @@ def production_log_report(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @app.get("/report/live-inventory", response_model=LiveInventoryReport)
-def live_inventory_report(db: Session = Depends(get_db)):
+def live_inventory_report(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     raw_materials = (
         db.query(Inventory)
+        .filter(Inventory.factory_id == current_user.factory_id)
         .filter(Inventory.category == "Raw")
         .order_by(Inventory.item_name.asc())
         .all()
     )
     packaging_materials = (
         db.query(Inventory)
+        .filter(Inventory.factory_id == current_user.factory_id)
         .filter(Inventory.category == "Packaging")
         .order_by(Inventory.item_name.asc())
         .all()
@@ -1882,6 +2640,8 @@ def live_inventory_report(db: Session = Depends(get_db)):
     finished_goods = (
         db.query(FinishedGoodsStock, PackagingProfile)
         .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+        .filter(FinishedGoodsStock.factory_id == current_user.factory_id)
+        .filter(PackagingProfile.factory_id == current_user.factory_id)
         .order_by(PackagingProfile.cup_size_ml.asc(), PackagingProfile.profile_name.asc())
         .all()
     )
@@ -1924,13 +2684,30 @@ def live_inventory_report(db: Session = Depends(get_db)):
 
 @app.get("/api/store/{store_token}", response_model=StorefrontResponse)
 def get_storefront(store_token: str, db: Session = Depends(get_db)):
+    return get_customer_storefront(store_token, db)
+
+
+@app.get("/api/storefront/{store_token}", response_model=StorefrontResponse)
+def get_secure_storefront(store_token: str, db: Session = Depends(get_db)):
+    return get_customer_storefront(store_token, db)
+
+
+def get_customer_storefront(store_token: str, db: Session) -> StorefrontResponse:
     customer = get_store_customer(db, store_token)
-    db.add(CustomerActivity(customer_id=customer.id, activity_type="Viewed Store"))
+    db.add(
+        CustomerActivity(
+            factory_id=customer.factory_id,
+            customer_id=customer.id,
+            activity_type="Viewed Store",
+        )
+    )
     db.commit()
 
     available_stocks = (
         db.query(FinishedGoodsStock)
         .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+        .filter(FinishedGoodsStock.factory_id == customer.factory_id)
+        .filter(PackagingProfile.factory_id == customer.factory_id)
         .filter(FinishedGoodsStock.boxes_available > 0)
         .order_by(PackagingProfile.cup_size_ml.asc(), PackagingProfile.profile_name.asc())
         .all()
@@ -1947,8 +2724,10 @@ def get_storefront(store_token: str, db: Session = Depends(get_db)):
                 product_id=stock.id,
                 cup_size_ml=stock.cup_size_ml,
                 packaging_profile_name=stock.packaging_profile.profile_name,
-                boxes_available=stock.boxes_available,
+                availability_status=get_availability_status(stock.boxes_available),
                 base_price=calculate_finished_goods_base_price(db, stock),
+                image_url=stock.packaging_profile.image_url,
+                print_design_name=stock.packaging_profile.print_design_name,
             )
             for stock in available_stocks
         ],
@@ -1959,8 +2738,28 @@ def get_storefront(store_token: str, db: Session = Depends(get_db)):
 def checkout_storefront(
     store_token: str,
     payload: StoreCheckoutRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    return process_storefront_order(store_token, payload, background_tasks, db)
+
+
+@app.post("/api/storefront/{store_token}/order", response_model=StoreCheckoutResponse)
+def create_storefront_order(
+    store_token: str,
+    payload: StoreCheckoutRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return process_storefront_order(store_token, payload, background_tasks, db)
+
+
+def process_storefront_order(
+    store_token: str,
+    payload: StoreCheckoutRequest,
+    background_tasks: BackgroundTasks,
+    db: Session,
+) -> StoreCheckoutResponse:
     customer = get_store_customer(db, store_token)
     payment_method = normalize_store_payment_method(payload.payment_method)
     if not payload.terms_accepted:
@@ -1976,6 +2775,7 @@ def checkout_storefront(
     try:
         locked_stocks = (
             db.query(FinishedGoodsStock)
+            .filter(FinishedGoodsStock.factory_id == customer.factory_id)
             .filter(FinishedGoodsStock.id.in_(requested_quantities.keys()))
             .with_for_update()
             .all()
@@ -1993,6 +2793,7 @@ def checkout_storefront(
             discount_pct = to_money(customer.advance_discount_pct)
 
         order = Order(
+            factory_id=customer.factory_id,
             customer_id=customer.id,
             status="Pending",
             payment_method=payment_method,
@@ -2006,6 +2807,7 @@ def checkout_storefront(
         response_items: List[StoreCheckoutItemResponse] = []
         base_total_amount = Decimal("0.00")
         total_amount = Decimal("0.00")
+        previous_balance = to_money(customer.balance_amount)
         for product_id, requested_quantity in requested_quantities.items():
             stock = stocks_by_id[product_id]
             available_quantity = stock.boxes_available or 0
@@ -2034,6 +2836,7 @@ def checkout_storefront(
             stock.boxes_available = available_quantity - requested_quantity
             db.add(
                 OrderItem(
+                    factory_id=customer.factory_id,
                     order_id=order.id,
                     product_id=product_id,
                     quantity=requested_quantity,
@@ -2055,8 +2858,27 @@ def checkout_storefront(
             )
 
         order.total_amount = total_amount
+        new_total_balance = to_money(previous_balance + total_amount)
+        customer.balance_amount = new_total_balance
+        customer.pending_balance = new_total_balance
+        customer.pending_dues = float(new_total_balance)
+        customer.last_balance_update = datetime.utcnow()
         db.commit()
+
         discount_amount = to_money(base_total_amount - total_amount)
+        webhook_payload = {
+            "customer_name": customer.name,
+            "whatsapp_number": customer.contact_number,
+            "order_details": ", ".join(
+                f"{item.quantity} Boxes of {item.packaging_profile_name}"
+                for item in response_items
+            ),
+            "order_value": float(total_amount),
+            "previous_balance": float(previous_balance),
+            "new_total_balance": float(new_total_balance),
+        }
+        background_tasks.add_task(dispatch_order_confirmation_webhook, webhook_payload)
+
         return StoreCheckoutResponse(
             message="Order placed successfully and stock reserved for approval",
             order_id=order.id,
@@ -2065,6 +2887,8 @@ def checkout_storefront(
             discount_pct=discount_pct,
             discount_amount=discount_amount,
             total_amount=total_amount,
+            previous_balance=previous_balance,
+            new_total_balance=new_total_balance,
             upi_payment_details=UPI_PAYMENT_DETAILS if payment_method == "Full_Advance_UPI" else None,
             items=response_items,
         )
@@ -2088,6 +2912,7 @@ def revoke_order_discount(
     try:
         order = (
             db.query(Order)
+            .filter(Order.factory_id == current_user.factory_id)
             .filter(Order.id == order_id)
             .with_for_update()
             .first()
@@ -2112,6 +2937,7 @@ def revoke_order_discount(
 
         customer = (
             db.query(Customer)
+            .filter(Customer.factory_id == current_user.factory_id)
             .filter(Customer.id == order.customer_id)
             .with_for_update()
             .first()
@@ -2161,8 +2987,17 @@ def revoke_order_discount(
 
 
 @app.get("/api/employee-report/{employee_id}", response_model=EmployeeReport)
-def employee_report(employee_id: int, db: Session = Depends(get_db)):
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+def employee_report(
+    employee_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    employee = (
+        db.query(Employee)
+        .filter(Employee.factory_id == current_user.factory_id)
+        .filter(Employee.id == employee_id)
+        .first()
+    )
     if employee is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2183,6 +3018,7 @@ def employee_report(employee_id: int, db: Session = Depends(get_db)):
 
     days_present = int(
         db.query(sql_func.count(AttendanceLog.id))
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
         .filter(*attendance_filters)
         .filter(AttendanceLog.is_present.is_(True))
         .scalar()
@@ -2190,12 +3026,14 @@ def employee_report(employee_id: int, db: Session = Depends(get_db)):
     )
     total_overtime_hours = float(
         db.query(sql_func.coalesce(sql_func.sum(AttendanceLog.overtime_hours), 0))
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
         .filter(*attendance_filters)
         .scalar()
         or 0
     )
     total_advance = to_money(
         db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0))
+        .filter(AdvancePayment.factory_id == current_user.factory_id)
         .filter(*advance_filters)
         .scalar()
     )
@@ -2224,9 +3062,13 @@ def employee_report(employee_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/inventory", response_model=List[InventoryResponse])
-def list_inventory(db: Session = Depends(get_db)):
+def list_inventory(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     return (
         db.query(FactoryInventory)
+        .filter(FactoryInventory.factory_id == current_user.factory_id)
         .order_by(FactoryInventory.updated_at.desc(), FactoryInventory.id.desc())
         .all()
     )
@@ -2237,8 +3079,13 @@ def list_inventory(db: Session = Depends(get_db)):
     response_model=InventoryResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_inventory_item(item: InventoryCreate, db: Session = Depends(get_db)):
+def create_inventory_item(
+    item: InventoryCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     inventory_item = FactoryInventory(
+        factory_id=current_user.factory_id,
         raw_material_name=item.raw_material_name.strip(),
         quantity=item.quantity,
     )
