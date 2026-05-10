@@ -241,18 +241,36 @@ def create_daily_sale(
                 .first()
             )
             if stock is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock not found")
+                packets_per_box_limit = 1
+                box_stock = (
+                    db.query(BoxStock)
+                    .filter(BoxStock.factory_id == factory_id)
+                    .filter(sql_func.lower(BoxStock.packaging_size_name) == item.packaging_size_name.lower())
+                    .with_for_update()
+                    .first()
+                )
+                if box_stock is None:
+                    box_stock = BoxStock(
+                        factory_id=factory_id,
+                        packaging_size_name=item.packaging_size_name.strip(),
+                        total_boxes=0,
+                    )
+                    db.add(box_stock)
+                    db.flush()
+
+                stock = FinalProductStock(
+                    factory_id=factory_id,
+                    product_size_ml=item.product_size_ml,
+                    packaging_size_name=item.packaging_size_name.strip(),
+                    total_boxes=0,
+                    loose_packets=0,
+                    packets_per_box_limit=packets_per_box_limit,
+                )
+                db.add(stock)
+                db.flush()
 
             available_packets = (stock.total_boxes or 0) * stock.packets_per_box_limit + (stock.loose_packets or 0)
             sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
-            if sold_packets > available_packets:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        f"Insufficient final stock for {item.product_size_ml}ml "
-                        f"{item.packaging_size_name}"
-                    ),
-                )
 
             remaining_packets = available_packets - sold_packets
             stock.total_boxes = remaining_packets // stock.packets_per_box_limit

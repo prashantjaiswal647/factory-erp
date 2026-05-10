@@ -52,6 +52,7 @@ from routers.calculator import router as calculator_router
 from routers.automation import router as automation_router
 from routers.phase1 import router as phase1_router
 from routers.operations import router as operations_router
+from routers import sales
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 app.include_router(onboarding_router)
@@ -59,6 +60,7 @@ app.include_router(calculator_router)
 app.include_router(automation_router)
 app.include_router(phase1_router)
 app.include_router(operations_router)
+app.include_router(sales.router, prefix="/api/sales", tags=["sales"])
 
 app.add_middleware(
     CORSMiddleware,
@@ -1096,6 +1098,7 @@ def ensure_runtime_schema():
         "ALTER TABLE blank_stock DROP CONSTRAINT IF EXISTS ck_blank_stock_qty_non_negative",
         "ALTER TABLE bottom_stock DROP CONSTRAINT IF EXISTS ck_bottom_stock_qty_non_negative",
         "ALTER TABLE box_stock DROP CONSTRAINT IF EXISTS ck_box_stock_total_non_negative",
+        "ALTER TABLE final_product_stock DROP CONSTRAINT IF EXISTS ck_final_product_boxes_non_negative",
     ]
     default_factory_id_sql = f"(SELECT id FROM factories WHERE name = '{default_factory_name}')"
     for table_name in tenant_tables:

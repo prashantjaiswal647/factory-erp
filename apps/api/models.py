@@ -719,7 +719,6 @@ class FinalProductStock(TenantMixin, Base):
     __table_args__ = (
         UniqueConstraint("factory_id", "product_size_ml", "packaging_size_name", name="uq_final_product_factory_product_pack"),
         CheckConstraint("product_size_ml > 0", name="ck_final_product_size_positive"),
-        CheckConstraint("total_boxes >= 0", name="ck_final_product_boxes_non_negative"),
         CheckConstraint("loose_packets >= 0", name="ck_final_product_loose_non_negative"),
         CheckConstraint("packets_per_box_limit > 0", name="ck_final_product_packets_limit_positive"),
     )
