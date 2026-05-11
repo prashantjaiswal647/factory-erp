@@ -2,8 +2,11 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import Layout from "./components/Layout";
 import PrivateRoute, { roleHomePath } from "./components/PrivateRoute";
+import SubscriptionGuard from "./components/SubscriptionGuard";
 import { useAuth } from "./context/AuthContext";
 import AiChatPage from "./pages/AiChatPage";
+import AttendancePage from "./pages/AttendancePage";
+import BillingPage from "./pages/BillingPage";
 import CalculatorPage from "./pages/CalculatorPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -17,6 +20,7 @@ import ProductionPage from "./pages/ProductionPage";
 import SalesEntryPage from "./pages/SalesEntryPage";
 import StorefrontPage from "./pages/StorefrontPage";
 import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
+import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
 import UnauthorizedPage from "./pages/UnauthorizedPage";
 
 function RoleLanding() {
@@ -42,10 +46,14 @@ export default function App() {
       <Route
         element={
           <PrivateRoute>
-            <Layout />
+            <SubscriptionGuard>
+              <Layout />
+            </SubscriptionGuard>
           </PrivateRoute>
         }
       >
+        <Route path="billing" element={<BillingPage />} />
+        <Route path="subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="dashboard" element={<RoleLanding />} />
         <Route
           path="inventory"
@@ -60,6 +68,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Supervisor", "Operator"]}>
               <ProductionPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="attendance"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Supervisor"]}>
+              <AttendancePage />
             </PrivateRoute>
           }
         />

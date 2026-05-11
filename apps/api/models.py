@@ -20,6 +20,12 @@ from db import Base
 
 class Factory(Base):
     __tablename__ = "factories"
+    __table_args__ = (
+        CheckConstraint(
+            "subscription_status IN ('trial', 'active', 'expired')",
+            name="ck_factories_subscription_status",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
@@ -37,6 +43,11 @@ class Factory(Base):
         server_default=func.now(),
         index=True,
     )
+    trial_start_date = Column(DateTime(timezone=True), nullable=True, server_default=func.now())
+    trial_end_date = Column(DateTime(timezone=True), nullable=True)
+    subscription_status = Column(String(50), nullable=False, default="trial", server_default="trial", index=True)
+    razorpay_customer_id = Column(String(255), nullable=True)
+    razorpay_subscription_id = Column(String(255), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
@@ -458,6 +469,8 @@ class Worker(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
+    phone = Column(String(50), nullable=True, index=True)
+    daily_wage_rate = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     daily_wages = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     duty_hours = Column(Float, nullable=False, default=8.0, server_default="8.0")
     salary = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
@@ -469,6 +482,7 @@ class Worker(TenantMixin, Base):
 
     __table_args__ = (
         CheckConstraint("daily_wages >= 0", name="ck_workers_daily_wages_non_negative"),
+        CheckConstraint("daily_wage_rate >= 0", name="ck_workers_daily_wage_rate_non_negative"),
         CheckConstraint("duty_hours > 0", name="ck_workers_duty_hours_positive"),
         CheckConstraint("salary >= 0", name="ck_workers_salary_non_negative"),
         CheckConstraint("daily_salary >= 0", name="ck_workers_daily_salary_non_negative"),
@@ -551,7 +565,11 @@ class AttendanceLog(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True, index=True)
+    status = Column(String(20), nullable=False, default="Absent", server_default="Absent", index=True)
+    production_qty = Column(Numeric(14, 3), nullable=True)
+    is_settled = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     is_present = Column(Boolean, nullable=False, default=False)
     overtime_hours = Column(Float, nullable=False, default=0)
 
@@ -559,6 +577,8 @@ class AttendanceLog(TenantMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("factory_id", "date", "employee_id", name="uq_attendance_logs_factory_date_employee"),
+        UniqueConstraint("factory_id", "date", "worker_id", name="uq_attendance_logs_factory_date_worker"),
+        CheckConstraint("status IN ('Present', 'Absent', 'Half-day')", name="ck_attendance_logs_status"),
         CheckConstraint("overtime_hours >= 0", name="ck_attendance_logs_overtime_non_negative"),
     )
 
@@ -568,13 +588,34 @@ class AdvancePayment(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True, index=True)
     amount = Column(Float, nullable=False, default=0)
+    is_settled = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
 
     employee = relationship("Employee", back_populates="advance_payments")
 
     __table_args__ = (
         CheckConstraint("amount >= 0", name="ck_advance_payments_amount_non_negative"),
+    )
+
+
+class HisabSettlement(TenantMixin, Base):
+    __tablename__ = "hisab_settlements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    duty_from_date = Column(Date, nullable=False, index=True)
+    duty_to_date = Column(Date, nullable=False, index=True)
+    advance_cutoff_date = Column(Date, nullable=False, index=True)
+    total_duty_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    total_advance_deducted = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    net_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("total_duty_amount >= 0", name="ck_hisab_settlements_duty_non_negative"),
+        CheckConstraint("total_advance_deducted >= 0", name="ck_hisab_settlements_advance_non_negative"),
     )
 
 

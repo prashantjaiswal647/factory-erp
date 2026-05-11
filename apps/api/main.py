@@ -56,6 +56,7 @@ from models import (
     SalesInvoice,
     User,
     Worker,
+    HisabSettlement,
 )
 from routers.onboarding import router as onboarding_router
 from routers.calculator import router as calculator_router
@@ -66,6 +67,8 @@ from routers import sales
 from routers import inventory
 from routers import payments
 from routers import dashboard
+from routers import attendance
+from routers import billing
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 app.add_middleware(
@@ -87,6 +90,8 @@ app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"]
 app.include_router(payments.router)
 app.include_router(auth_router)
 app.include_router(dashboard.router)
+app.include_router(attendance.router)
+app.include_router(billing.router)
 
 
 class InventoryCreate(BaseModel):
@@ -847,6 +852,7 @@ def ensure_runtime_schema():
         "orders",
         "order_items",
         "sales_invoices",
+        "hisab_settlements",
         "material_yields",
         "costing_master",
         "payments",
@@ -865,6 +871,11 @@ def ensure_runtime_schema():
         f"INSERT INTO factories (name) VALUES ('{default_factory_name}') ON CONFLICT (name) DO NOTHING",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS factory_name VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS owner_id INTEGER",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_start_date TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '3 days')",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial'",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_customer_id VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_subscription_id VARCHAR(255)",
         "UPDATE factories SET factory_name = name WHERE factory_name IS NULL",
         (
             "CREATE TABLE IF NOT EXISTS machines ("
@@ -1034,6 +1045,9 @@ def ensure_runtime_schema():
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS daily_salary NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS daily_wages NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS phone VARCHAR(50)",
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS daily_wage_rate NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "UPDATE workers SET daily_wage_rate = daily_wages WHERE daily_wage_rate = 0 AND daily_wages > 0",
         "UPDATE workers SET daily_wages = daily_salary WHERE daily_wages = 0 AND daily_salary > 0",
         "UPDATE workers SET duty_hours = shift_hours WHERE shift_hours IS NOT NULL",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS shift_type VARCHAR(100)",
@@ -1162,6 +1176,31 @@ def ensure_runtime_schema():
         "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS labor_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS electricity_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS production_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE attendance_logs ALTER COLUMN employee_id DROP NOT NULL",
+        "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS worker_id INTEGER REFERENCES workers(id)",
+        "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'Absent'",
+        "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS production_qty NUMERIC(14, 3)",
+        "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE attendance_logs DROP CONSTRAINT IF EXISTS ck_attendance_logs_status",
+        "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_status CHECK (status IN ('Present', 'Absent', 'Half-day'))",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_logs_factory_date_worker ON attendance_logs (factory_id, date, worker_id) WHERE worker_id IS NOT NULL",
+        "ALTER TABLE advance_payments ALTER COLUMN employee_id DROP NOT NULL",
+        "ALTER TABLE advance_payments ADD COLUMN IF NOT EXISTS worker_id INTEGER REFERENCES workers(id)",
+        "ALTER TABLE advance_payments ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false",
+        (
+            "CREATE TABLE IF NOT EXISTS hisab_settlements ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "worker_id INTEGER NOT NULL REFERENCES workers(id), "
+            "duty_from_date DATE NOT NULL, "
+            "duty_to_date DATE NOT NULL, "
+            "advance_cutoff_date DATE NOT NULL, "
+            "total_duty_amount NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "total_advance_deducted NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "net_paid NUMERIC(14, 2) NOT NULL DEFAULT 0, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
     ]
     default_factory_id_sql = f"(SELECT id FROM factories WHERE name = '{default_factory_name}')"
     for table_name in tenant_tables:

@@ -1,0 +1,356 @@
+from calendar import monthrange
+from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func as sql_func
+from sqlalchemy.orm import Session
+
+from dependencies import PAYMENT_ROLES, check_permissions
+from db import get_db
+from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker
+
+
+router = APIRouter(prefix="/api/workers", tags=["attendance-ledger"])
+MONEY_QUANT = Decimal("0.01")
+
+
+def money(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def month_bounds(month: str) -> tuple[date, date]:
+    try:
+        year, month_number = [int(part) for part in month.split("-")]
+        return date(year, month_number, 1), date(year, month_number, monthrange(year, month_number)[1])
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Month must be YYYY-MM") from exc
+
+
+def attendance_units(status: str) -> Decimal:
+    if status == "Present":
+        return Decimal("1")
+    if status == "Half-day":
+        return Decimal("0.5")
+    return Decimal("0")
+
+
+def worker_rate(worker: Worker) -> Decimal:
+    return money(worker.daily_wage_rate or worker.daily_wages or worker.daily_salary or worker.salary or 0)
+
+
+def get_worker(db: Session, factory_id: int, worker_id: int) -> Worker:
+    worker = (
+        db.query(Worker)
+        .filter(Worker.factory_id == factory_id)
+        .filter(Worker.id == worker_id)
+        .filter(Worker.is_active.is_(True))
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+    return worker
+
+
+class AttendanceSummaryRow(BaseModel):
+    worker_id: int
+    worker_name: str
+    phone: Optional[str] = None
+    daily_wage_rate: Decimal
+    duty_days: Decimal
+    uncleared_advance: Decimal
+    net_current_balance: Decimal
+
+
+class AttendanceSummaryResponse(BaseModel):
+    month: str
+    workers: List[AttendanceSummaryRow]
+
+
+class DayLedgerRow(BaseModel):
+    date: date
+    attendance_id: Optional[int] = None
+    status: str = "Absent"
+    production_qty: Optional[Decimal] = None
+    duty_amount: Decimal
+    advance_amount: Decimal
+
+
+class WorkerLedgerResponse(BaseModel):
+    worker_id: int
+    worker_name: str
+    month: str
+    days: List[DayLedgerRow]
+
+
+class AttendanceUpsert(BaseModel):
+    date: date
+    status: str = Field(..., pattern="^(Present|Absent|Half-day)$")
+    production_qty: Optional[Decimal] = Field(default=None, ge=0)
+
+
+class AdvanceCreate(BaseModel):
+    date: date
+    amount: Decimal = Field(..., gt=0)
+
+
+class SettlementRequest(BaseModel):
+    worker_id: int = Field(..., gt=0)
+    duty_from_date: date
+    duty_to_date: date
+    advance_cutoff_date: date
+    confirm: bool = False
+
+
+class SettlementResponse(BaseModel):
+    worker_id: int
+    total_duty_amount: Decimal
+    total_advance_deducted: Decimal
+    net_payable: Decimal
+    settlement_id: Optional[int] = None
+    attendance_count: int
+    advance_count: int
+
+
+@router.get("/attendance/summary", response_model=AttendanceSummaryResponse)
+def attendance_summary(
+    month: str,
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    start, end = month_bounds(month)
+    rows: list[AttendanceSummaryRow] = []
+    workers = (
+        db.query(Worker)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(Worker.is_active.is_(True))
+        .order_by(Worker.name.asc())
+        .all()
+    )
+    for worker in workers:
+        logs = (
+            db.query(AttendanceLog)
+            .filter(AttendanceLog.factory_id == current_user.factory_id)
+            .filter(AttendanceLog.worker_id == worker.id)
+            .filter(AttendanceLog.date >= start)
+            .filter(AttendanceLog.date <= end)
+            .all()
+        )
+        duty_days = sum((attendance_units(log.status) for log in logs), Decimal("0"))
+        advance_total = money(
+            db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0))
+            .filter(AdvancePayment.factory_id == current_user.factory_id)
+            .filter(AdvancePayment.worker_id == worker.id)
+            .filter(AdvancePayment.is_settled.is_(False))
+            .scalar()
+        )
+        duty_amount = money(duty_days * worker_rate(worker))
+        rows.append(
+            AttendanceSummaryRow(
+                worker_id=worker.id,
+                worker_name=worker.name,
+                phone=worker.phone,
+                daily_wage_rate=worker_rate(worker),
+                duty_days=duty_days,
+                uncleared_advance=advance_total,
+                net_current_balance=money(duty_amount - advance_total),
+            )
+        )
+    return AttendanceSummaryResponse(month=month, workers=rows)
+
+
+@router.get("/{worker_id}/attendance-ledger", response_model=WorkerLedgerResponse)
+def worker_ledger(
+    worker_id: int,
+    month: str,
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    worker = get_worker(db, current_user.factory_id, worker_id)
+    start, end = month_bounds(month)
+    logs = {
+        log.date: log
+        for log in db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.date >= start)
+        .filter(AttendanceLog.date <= end)
+        .all()
+    }
+    advances = {
+        row.date: money(row.amount)
+        for row in db.query(
+            AdvancePayment.date,
+            sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0).label("amount"),
+        )
+        .filter(AdvancePayment.factory_id == current_user.factory_id)
+        .filter(AdvancePayment.worker_id == worker.id)
+        .filter(AdvancePayment.date >= start)
+        .filter(AdvancePayment.date <= end)
+        .group_by(AdvancePayment.date)
+        .all()
+    }
+    days: list[DayLedgerRow] = []
+    current = start
+    while current <= end:
+        log = logs.get(current)
+        status_value = log.status if log else "Absent"
+        days.append(
+            DayLedgerRow(
+                date=current,
+                attendance_id=log.id if log else None,
+                status=status_value,
+                production_qty=log.production_qty if log else None,
+                duty_amount=money(attendance_units(status_value) * worker_rate(worker)),
+                advance_amount=advances.get(current, Decimal("0.00")),
+            )
+        )
+        current += timedelta(days=1)
+    return WorkerLedgerResponse(worker_id=worker.id, worker_name=worker.name, month=month, days=days)
+
+
+@router.post("/{worker_id}/attendance", response_model=DayLedgerRow)
+def upsert_attendance(
+    worker_id: int,
+    payload: AttendanceUpsert,
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    worker = get_worker(db, current_user.factory_id, worker_id)
+    log = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.date == payload.date)
+        .first()
+    )
+    if log is None:
+        log = AttendanceLog(factory_id=current_user.factory_id, worker_id=worker.id, date=payload.date)
+        db.add(log)
+    if log.is_settled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Attendance already settled")
+    log.status = payload.status
+    log.is_present = payload.status in ("Present", "Half-day")
+    log.production_qty = payload.production_qty
+    db.commit()
+    db.refresh(log)
+    advance_amount = money(
+        db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0))
+        .filter(AdvancePayment.factory_id == current_user.factory_id)
+        .filter(AdvancePayment.worker_id == worker.id)
+        .filter(AdvancePayment.date == payload.date)
+        .scalar()
+    )
+    return DayLedgerRow(
+        date=log.date,
+        attendance_id=log.id,
+        status=log.status,
+        production_qty=log.production_qty,
+        duty_amount=money(attendance_units(log.status) * worker_rate(worker)),
+        advance_amount=advance_amount,
+    )
+
+
+@router.post("/{worker_id}/advance")
+def add_worker_advance(
+    worker_id: int,
+    payload: AdvanceCreate,
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    worker = get_worker(db, current_user.factory_id, worker_id)
+    advance = AdvancePayment(
+        factory_id=current_user.factory_id,
+        worker_id=worker.id,
+        date=payload.date,
+        amount=float(payload.amount),
+        is_settled=False,
+    )
+    db.add(advance)
+    db.commit()
+    db.refresh(advance)
+    return {"id": advance.id, "worker_id": worker.id, "date": advance.date, "amount": advance.amount}
+
+
+def calculate_settlement(db: Session, factory_id: int, worker: Worker, payload: SettlementRequest) -> SettlementResponse:
+    if payload.duty_to_date < payload.duty_from_date:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Duty To cannot be before Duty From")
+    attendance_rows = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.is_settled.is_(False))
+        .filter(AttendanceLog.date >= payload.duty_from_date)
+        .filter(AttendanceLog.date <= payload.duty_to_date)
+        .all()
+    )
+    duty_days = sum((attendance_units(row.status) for row in attendance_rows), Decimal("0"))
+    total_duty = money(duty_days * worker_rate(worker))
+    advance_rows = (
+        db.query(AdvancePayment)
+        .filter(AdvancePayment.factory_id == factory_id)
+        .filter(AdvancePayment.worker_id == worker.id)
+        .filter(AdvancePayment.is_settled.is_(False))
+        .filter(AdvancePayment.date <= payload.advance_cutoff_date)
+        .all()
+    )
+    total_advance = money(sum((Decimal(str(row.amount or 0)) for row in advance_rows), Decimal("0")))
+    return SettlementResponse(
+        worker_id=worker.id,
+        total_duty_amount=total_duty,
+        total_advance_deducted=total_advance,
+        net_payable=money(total_duty - total_advance),
+        attendance_count=len(attendance_rows),
+        advance_count=len(advance_rows),
+    )
+
+
+@router.post("/settle", response_model=SettlementResponse)
+def settle_hisab(
+    payload: SettlementRequest,
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    worker = get_worker(db, current_user.factory_id, payload.worker_id)
+    preview = calculate_settlement(db, current_user.factory_id, worker, payload)
+    if not payload.confirm:
+        return preview
+
+    attendance_rows = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.is_settled.is_(False))
+        .filter(AttendanceLog.date >= payload.duty_from_date)
+        .filter(AttendanceLog.date <= payload.duty_to_date)
+        .all()
+    )
+    advance_rows = (
+        db.query(AdvancePayment)
+        .filter(AdvancePayment.factory_id == current_user.factory_id)
+        .filter(AdvancePayment.worker_id == worker.id)
+        .filter(AdvancePayment.is_settled.is_(False))
+        .filter(AdvancePayment.date <= payload.advance_cutoff_date)
+        .all()
+    )
+    settlement = HisabSettlement(
+        factory_id=current_user.factory_id,
+        worker_id=worker.id,
+        duty_from_date=payload.duty_from_date,
+        duty_to_date=payload.duty_to_date,
+        advance_cutoff_date=payload.advance_cutoff_date,
+        total_duty_amount=preview.total_duty_amount,
+        total_advance_deducted=preview.total_advance_deducted,
+        net_paid=preview.net_payable,
+    )
+    db.add(settlement)
+    for row in attendance_rows:
+        row.is_settled = True
+    for row in advance_rows:
+        row.is_settled = True
+    db.commit()
+    db.refresh(settlement)
+    preview.settlement_id = settlement.id
+    return preview

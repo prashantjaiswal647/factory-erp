@@ -5,6 +5,19 @@ import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { roleHomePath } from "../components/PrivateRoute";
 import { useAuth } from "../context/AuthContext";
 
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: { client_id: string; callback: (response: { credential?: string }) => void }) => void;
+          prompt: () => void;
+        };
+      };
+    };
+  }
+}
+
 const roleCards = [
   { icon: Crown, label: "Owner", text: "Full dashboard, hisaab aur control." },
   { icon: HardHat, label: "Supervisor", text: "Production, sales aur collection." },
@@ -12,7 +25,7 @@ const roleCards = [
 ];
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [factoryId, setFactoryId] = useState("");
@@ -39,6 +52,60 @@ export default function LoginPage() {
     } catch {
       setError("Invalid factory, username, phone, or password.");
     } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function loadGoogleScript() {
+    if (window.google?.accounts?.id) return;
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Google sign-in failed to load")), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Google sign-in failed to load"));
+      document.body.appendChild(script);
+    });
+  }
+
+  async function startGoogleLogin() {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      setError("VITE_GOOGLE_CLIENT_ID is not configured.");
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await loadGoogleScript();
+      window.google?.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (response) => {
+          if (!response.credential) {
+            setError("Google login cancelled.");
+            setIsSubmitting(false);
+            return;
+          }
+          try {
+            const nextUser = await loginWithGoogle(response.credential);
+            navigate(roleHomePath(nextUser.role), { replace: true });
+          } catch {
+            setError("Google login failed.");
+          } finally {
+            setIsSubmitting(false);
+          }
+        }
+      });
+      window.google?.accounts.id.prompt();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Google login failed.");
       setIsSubmitting(false);
     }
   }
@@ -95,6 +162,15 @@ export default function LoginPage() {
             <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] shadow-[0_0_28px_rgba(178,255,89,.35)] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
               <LogIn className="h-4 w-4" />
               {isSubmitting ? "Signing in..." : "Login to Munshi AI"}
+            </button>
+            <button
+              className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500"
+              disabled={isSubmitting}
+              onClick={startGoogleLogin}
+              type="button"
+            >
+              <span className="text-lg font-bold text-[#4285F4]">G</span>
+              Sign in with Google
             </button>
           </form>
         </div>

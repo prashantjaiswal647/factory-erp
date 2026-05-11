@@ -11,12 +11,13 @@ import {
   getInventory,
   getProductionAlerts,
   getAiDashboardInsights,
+  getBillingStatus,
   deleteDashboardCustomer,
   deleteDashboardMachine,
   deleteDashboardRawMaterial,
   deleteDashboardWorker
 } from "../lib/api";
-import type { AiDashboardInsights, DashboardCustomer, DashboardMachine, DashboardMaterials, DashboardWorker, LiveStockRow, ProductionAlertsResponse } from "../lib/api";
+import type { AiDashboardInsights, BillingStatus, DashboardCustomer, DashboardMachine, DashboardMaterials, DashboardWorker, LiveStockRow, ProductionAlertsResponse } from "../lib/api";
 
 export default function DashboardPage() {
   const [workers, setWorkers] = useState<DashboardWorker[]>([]);
@@ -26,6 +27,7 @@ export default function DashboardPage() {
   const [inventory, setInventory] = useState<LiveStockRow[]>([]);
   const [productionAlerts, setProductionAlerts] = useState<ProductionAlertsResponse | null>(null);
   const [aiInsights, setAiInsights] = useState<AiDashboardInsights | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   const [typedInsight, setTypedInsight] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -40,14 +42,15 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError("");
     try {
-      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes] = await Promise.all([
+      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, billingRes] = await Promise.all([
         getDashboardWorkers(),
         getDashboardMachines(),
         getDashboardMaterials(),
         getDashboardCustomers(),
         getInventory(),
         getProductionAlerts(),
-        getAiDashboardInsights()
+        getAiDashboardInsights(),
+        getBillingStatus()
       ]);
       setWorkers(workerRes.data);
       setMachines(machineRes.data);
@@ -56,6 +59,7 @@ export default function DashboardPage() {
       setInventory(inventoryRes.data);
       setProductionAlerts(alertRes.data);
       setAiInsights(aiRes.data);
+      setBillingStatus(billingRes.data);
     } catch (caught) {
       if (axios.isAxiosError(caught) && caught.response?.status === 401) {
         localStorage.clear();
@@ -149,6 +153,16 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
+      {billingStatus?.subscription_status === "trial" ? (
+        <div className="sticky top-0 z-20 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            You are on a free trial. {billingStatus.trial_days_remaining} day{billingStatus.trial_days_remaining === 1 ? "" : "s"} remaining.
+          </span>
+          <Link className="inline-flex h-9 items-center justify-center rounded-md bg-[#004D40] px-3 font-semibold text-white hover:bg-[#00695C]" to="/billing">
+            Upgrade Now
+          </Link>
+        </div>
+      ) : null}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-950">Live Factory Overview</h1>

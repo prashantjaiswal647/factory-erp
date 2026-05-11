@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
@@ -13,12 +13,17 @@ type AuthUser = {
   full_name?: string | null;
   role: UserRole;
   factory_id?: number;
+  subscription_status?: "trial" | "active" | "expired" | null;
+  trial_end_date?: string | null;
+  trial_days_remaining?: number;
 };
 
 type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
   login: (username: string, password: string, factoryId?: number) => Promise<AuthUser>;
+  loginWithGoogle: (credential: string) => Promise<AuthUser>;
+  updateUser: (patch: Partial<AuthUser>) => void;
   logout: () => void;
 };
 
@@ -33,6 +38,9 @@ type TokenResponse = {
     phone_number?: string | null;
     full_name?: string | null;
     role: string;
+    subscription_status?: "trial" | "active" | "expired" | null;
+    trial_end_date?: string | null;
+    trial_days_remaining?: number;
   };
 };
 
@@ -71,22 +79,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password
     });
 
-    const role = normalizeRole(response.data.user.role);
-    const nextUser = {
-      id: response.data.user.id,
-      user_id: response.data.user.user_id,
-      username: response.data.user.username,
-      phone_number: response.data.user.phone_number,
-      full_name: response.data.user.full_name,
+    return persistAuth(response.data);
+  }
+
+  async function loginWithGoogle(credential: string) {
+    const response = await api.post<TokenResponse>("/api/auth/google", { credential });
+    return persistAuth(response.data);
+  }
+
+  function persistAuth(data: TokenResponse) {
+    const role = normalizeRole(data.user.role);
+    const nextUser: AuthUser = {
+      id: data.user.id,
+      user_id: data.user.user_id,
+      username: data.user.username,
+      phone_number: data.user.phone_number,
+      full_name: data.user.full_name,
       role,
-      factory_id: response.data.user.factory_id
+      factory_id: data.user.factory_id,
+      subscription_status: data.user.subscription_status,
+      trial_end_date: data.user.trial_end_date,
+      trial_days_remaining: data.user.trial_days_remaining
     };
 
-    localStorage.setItem(tokenKey, response.data.access_token);
+    localStorage.setItem(tokenKey, data.access_token);
     localStorage.setItem(userKey, JSON.stringify(nextUser));
     setUser(nextUser);
     return nextUser;
   }
+
+  const updateUser = useCallback(function updateUser(patch: Partial<AuthUser>) {
+    setUser((current) => {
+      if (!current) return current;
+      const nextUser = { ...current, ...patch };
+      localStorage.setItem(userKey, JSON.stringify(nextUser));
+      return nextUser;
+    });
+  }, []);
 
   function logout() {
     localStorage.removeItem(tokenKey);
@@ -99,9 +128,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       isLoading,
       login,
+      loginWithGoogle,
+      updateUser,
       logout
     }),
-    [isLoading, user]
+    [isLoading, updateUser, user]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

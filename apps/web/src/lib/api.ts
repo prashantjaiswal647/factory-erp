@@ -83,6 +83,21 @@ export type AiDashboardInsights = {
   source: string;
 };
 
+export type BillingStatus = {
+  subscription_status: "trial" | "active" | "expired";
+  trial_end_date?: string | null;
+  trial_days_remaining: number;
+  is_access_allowed: boolean;
+  is_owner: boolean;
+};
+
+export type RazorpayOrder = {
+  key_id: string;
+  order_id: string;
+  amount: number;
+  currency: string;
+};
+
 export type DailySaleCreate = {
   date: string;
   customer_id: number;
@@ -248,6 +263,55 @@ export type PaymentCreate = {
   date?: string;
 };
 
+export type AttendanceSummaryRow = {
+  worker_id: number;
+  worker_name: string;
+  phone?: string | null;
+  daily_wage_rate: string;
+  duty_days: string;
+  uncleared_advance: string;
+  net_current_balance: string;
+};
+
+export type AttendanceSummaryResponse = {
+  month: string;
+  workers: AttendanceSummaryRow[];
+};
+
+export type WorkerLedgerDay = {
+  date: string;
+  attendance_id?: number | null;
+  status: "Present" | "Absent" | "Half-day";
+  production_qty?: string | null;
+  duty_amount: string;
+  advance_amount: string;
+};
+
+export type WorkerLedgerResponse = {
+  worker_id: number;
+  worker_name: string;
+  month: string;
+  days: WorkerLedgerDay[];
+};
+
+export type SettlementRequest = {
+  worker_id: number;
+  duty_from_date: string;
+  duty_to_date: string;
+  advance_cutoff_date: string;
+  confirm: boolean;
+};
+
+export type SettlementResponse = {
+  worker_id: number;
+  total_duty_amount: string;
+  total_advance_deducted: string;
+  net_payable: string;
+  settlement_id?: number | null;
+  attendance_count: number;
+  advance_count: number;
+};
+
 export function createWorker(payload: WorkerCreate) {
   return api.post("/api/onboarding/step1/workers", payload);
 }
@@ -315,6 +379,26 @@ export function recordPayment(payload: PaymentCreate) {
 
 export function sendOutstandingReminder(customerId: number) {
   return api.post(`/api/accounts/reminders/${customerId}`);
+}
+
+export function getAttendanceSummary(month: string) {
+  return api.get<AttendanceSummaryResponse>("/api/workers/attendance/summary", { params: { month } });
+}
+
+export function getWorkerLedger(workerId: number, month: string) {
+  return api.get<WorkerLedgerResponse>(`/api/workers/${workerId}/attendance-ledger`, { params: { month } });
+}
+
+export function upsertWorkerAttendance(workerId: number, payload: { date: string; status: WorkerLedgerDay["status"]; production_qty?: number | null }) {
+  return api.post<WorkerLedgerDay>(`/api/workers/${workerId}/attendance`, payload);
+}
+
+export function addWorkerAdvance(workerId: number, payload: { date: string; amount: number }) {
+  return api.post(`/api/workers/${workerId}/advance`, payload);
+}
+
+export function settleWorkerHisab(payload: SettlementRequest) {
+  return api.post<SettlementResponse>("/api/workers/settle", payload);
 }
 
 export function getPaymentDues() {
@@ -516,4 +600,20 @@ export function getActualMonthlyData() {
 
 export function compareIdealWithActual(payload: { ideal_calculation_results: IdealCostResponse; actual_monthly_data: ActualMonthlyData }) {
   return api.post<AiCompareResponse>("/api/calculator/ai-compare", payload);
+}
+
+export function getBillingStatus() {
+  return api.get<BillingStatus>("/api/billing/status");
+}
+
+export function createBillingOrder() {
+  return api.post<RazorpayOrder>("/api/billing/create-order");
+}
+
+export function verifyBillingPayment(payload: {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+}) {
+  return api.post<BillingStatus & { razorpay_payment_id: string }>("/api/billing/verify", payload);
 }

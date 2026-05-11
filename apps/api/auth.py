@@ -4,7 +4,7 @@ import random
 from typing import Callable, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -13,7 +13,14 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import OTPStore, User
+from models import Factory, OTPStore, User
+
+try:
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+except ImportError:  # pragma: no cover - optional SaaS dependency
+    google_requests = None
+    google_id_token = None
 
 
 JWT_ALGORITHM = "HS256"
@@ -98,6 +105,10 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=255)
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str = Field(..., min_length=1)
+
+
 class AuthUserProfile(BaseModel):
     id: int
     user_id: Optional[str] = None
@@ -106,6 +117,9 @@ class AuthUserProfile(BaseModel):
     phone_number: Optional[str] = None
     full_name: Optional[str] = None
     role: str
+    subscription_status: Optional[str] = None
+    trial_end_date: Optional[datetime] = None
+    trial_days_remaining: int = 0
 
 
 class LoginResponse(BaseModel):
@@ -122,8 +136,40 @@ def ensure_user_uuid(user: User, db: Session) -> str:
     return user.user_id
 
 
+def ensure_factory_trial(factory: Optional[Factory]) -> None:
+    if factory is None:
+        return
+    now = datetime.now(timezone.utc)
+    if factory.trial_start_date is None:
+        factory.trial_start_date = now
+    if factory.trial_end_date is None:
+        factory.trial_end_date = now + timedelta(days=3)
+    if not factory.subscription_status:
+        factory.subscription_status = "trial"
+    trial_end = factory.trial_end_date
+    if trial_end is not None and trial_end.tzinfo is None:
+        trial_end = trial_end.replace(tzinfo=timezone.utc)
+    if factory.subscription_status == "trial" and trial_end is not None and trial_end < now:
+        factory.subscription_status = "expired"
+
+
+def trial_days_remaining(factory: Optional[Factory]) -> int:
+    if factory is None or factory.trial_end_date is None:
+        return 0
+    trial_end = factory.trial_end_date
+    if trial_end.tzinfo is None:
+        trial_end = trial_end.replace(tzinfo=timezone.utc)
+    seconds = (trial_end - datetime.now(timezone.utc)).total_seconds()
+    if seconds <= 0:
+        return 0
+    return max(1, int((seconds + 86399) // 86400))
+
+
 def build_login_response(user: User, db: Session) -> LoginResponse:
     user_uuid = ensure_user_uuid(user, db)
+    ensure_factory_trial(user.factory)
+    db.commit()
+    db.refresh(user)
     subject = user.phone_number if user.phone_number else user.username
     token = create_access_token(
         subject=subject,
@@ -142,11 +188,22 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
             phone_number=user.phone_number,
             full_name=user.full_name,
             role=user.role,
+            subscription_status=user.factory.subscription_status if user.factory else None,
+            trial_end_date=user.factory.trial_end_date if user.factory else None,
+            trial_days_remaining=trial_days_remaining(user.factory),
         ),
     )
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def is_subscription_bypass_path(path: str) -> bool:
+    return path.startswith("/api/auth") or path.startswith("/api/billing")
+
+
+def get_current_user(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -163,6 +220,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = get_user_by_subject(db, subject)
     if user is None:
         raise credentials_error
+    ensure_factory_trial(user.factory)
+    if user.factory is not None:
+        db.commit()
+        db.refresh(user)
+        if user.factory.subscription_status == "expired" and not is_subscription_bypass_path(request.url.path):
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Factory subscription expired",
+            )
     return user
 
 
@@ -355,4 +421,80 @@ def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Factory access denied",
         )
+    return build_login_response(user, db)
+
+
+@router.post("/google", response_model=LoginResponse)
+def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+    if google_id_token is None or google_requests is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google OAuth dependencies are not installed",
+        )
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    if not google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GOOGLE_CLIENT_ID is not configured",
+        )
+
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            payload.credential,
+            google_requests.Request(),
+            google_client_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google token",
+        ) from exc
+
+    email = str(claims.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Google account email is required",
+        )
+
+    user = get_user_by_username(db, email)
+    if user is None:
+        now = datetime.now(timezone.utc)
+        display_name = str(claims.get("name") or email.split("@")[0]).strip()
+        base_factory_name = f"{display_name} Factory"
+        factory_name = base_factory_name
+        suffix = 1
+        while db.query(Factory).filter(sql_func.lower(Factory.name) == factory_name.lower()).first():
+            suffix += 1
+            factory_name = f"{base_factory_name} {suffix}"
+
+        factory = Factory(
+            name=factory_name,
+            factory_name=factory_name,
+            trial_start_date=now,
+            trial_end_date=now + timedelta(days=3),
+            subscription_status="trial",
+        )
+        db.add(factory)
+        db.flush()
+
+        user = User(
+            factory_id=factory.id,
+            username=email,
+            phone_number=None,
+            full_name=display_name,
+            password_hash=hash_password(uuid4().hex),
+            role="Owner",
+            is_verified=True,
+        )
+        db.add(user)
+        db.flush()
+        factory.owner_id = user.id
+        db.commit()
+        db.refresh(user)
+    else:
+        ensure_factory_trial(user.factory)
+        db.commit()
+        db.refresh(user)
+
     return build_login_response(user, db)

@@ -1,4 +1,4 @@
-import { Bot, Boxes, Calculator, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UsersRound, WalletCards, X } from "lucide-react";
+import { Bot, Boxes, Calculator, CalendarDays, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UsersRound, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
@@ -19,6 +19,7 @@ const navigation: NavigationItem[] = [
   { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner"] },
   { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner"] },
   { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Supervisor", "Operator"] },
+  { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["Owner", "Supervisor"] },
   { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner"], section: "Revenue & Accounts" },
   { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },

@@ -14,3 +14,5 @@ langchain-classic
 langchain-groq
 langchain-openai
 pydantic
+google-auth
+razorpay
