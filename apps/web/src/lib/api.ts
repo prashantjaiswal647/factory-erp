@@ -46,10 +46,14 @@ export type DailyProductionCreate = {
   date: string;
   worker_id: number;
   machine_id: number;
+  product_id?: number | null;
+  product_size_ml?: number | null;
   variety: string;
+  packaging_size?: string | null;
   packaging_size_name: string;
   pieces_per_packet: number;
   packets_per_box_limit: number;
+  shift: "Day" | "Night";
   total_boxes_made: number;
   loose_packets_made: number;
   blank_used_bori: number;
@@ -91,6 +95,39 @@ export type BillingStatus = {
   is_owner: boolean;
 };
 
+export type StaffRoleCreate = "sub_owner" | "supervisor" | "worker";
+
+export type StaffCreate = {
+  full_name: string;
+  phone_number: string;
+  password: string;
+  role: StaffRoleCreate;
+};
+
+export type StaffMember = {
+  id: number;
+  user_id?: string | null;
+  full_name?: string | null;
+  phone_number?: string | null;
+  role: "Sub-Owner" | "Supervisor" | "Operator";
+  factory_id: number;
+};
+
+export type FactoryExpenseCreate = {
+  expense_name: string;
+  amount: number;
+  category?: string;
+};
+
+export type FactoryExpense = {
+  id: number;
+  factory_id: number;
+  expense_name: string;
+  amount: string;
+  category: string;
+  timestamp: string;
+};
+
 export type RazorpayOrder = {
   key_id: string;
   order_id: string;
@@ -103,30 +140,63 @@ export type DailySaleCreate = {
   customer_id: number;
   amount_paid: number;
   items: Array<{
+    product_id?: number | null;
     product_size_ml: number;
     variety: string;
+    packaging_size?: string | null;
     packaging_size_name: string;
     boxes_sold: number;
-    loose_packets_sold: number;
+    loose_packets_sold?: number;
     rate_per_box: number;
     rate_per_packet: number;
+    packets_per_box: number;
   }>;
+};
+
+export type DailySaleResponse = {
+  order_id?: number;
+  sale_ids: number[];
+  customer_id: number;
+  bill_total: string;
+  amount_paid: string;
+  customer_total_due: string;
+  status?: string;
 };
 
 export type FinalStockOption = {
   id: number;
   product_size_ml: number;
   variety: string;
+  packaging_size?: string | null;
+  pieces_per_packet?: number | null;
+  packets_per_box?: number | null;
   packaging_size_name: string;
+  current_quantity: number;
   total_boxes: number;
   loose_packets: number;
   packets_per_box_limit: number;
 };
 
+export type FinalProductOpeningStockCreate = {
+  product_id: number;
+  initial_quantity: number;
+};
+
 export type LiveStockRow = {
-  id: number;
+  id: number | string;
+  factory_id?: number;
+  product_id?: number | null;
+  product_size_ml?: number | null;
+  variety?: string | null;
   stock_type: "Blank" | "Bottom" | "Box" | "Final Product";
   item_name: string;
+  category?: string | null;
+  packaging_size?: string | null;
+  packaging_size_name?: string | null;
+  pieces_per_packet?: number | null;
+  packets_per_box?: number | null;
+  packets_per_box_limit?: number | null;
+  current_quantity?: number | null;
   quantity: number;
   unit: string;
   size_mm?: number | null;
@@ -240,6 +310,52 @@ export type CustomerSearchResult = {
   gst_number?: string | null;
 };
 
+export type BillCustomerOption = {
+  id: number;
+  name: string;
+  phone_number: string;
+  place: string;
+  telegram_id?: string | null;
+};
+
+export type BillOrderOption = {
+  id: number;
+  order_date: string;
+  status: string;
+  total_amount: string;
+  payment_method: string;
+};
+
+export type BillNotificationResponse = {
+  message: string;
+  order_id: number;
+  customer_id: number;
+  owner_channel: string;
+  customer_channel: string;
+  bill_summary: string;
+};
+
+export type PendingSaleItem = {
+  product_size_ml?: number | null;
+  variety?: string | null;
+  packaging_size_name?: string | null;
+  boxes_sold: number;
+  loose_packets_sold: number;
+  rate_per_box: string;
+  rate_per_packet: string;
+};
+
+export type PendingSale = {
+  order_id: number;
+  customer_id: number;
+  customer_name: string;
+  customer_phone: string;
+  total_amount: string;
+  status: string;
+  order_date: string;
+  items: PendingSaleItem[];
+};
+
 export type OutstandingCustomer = {
   customer_id: number;
   customer_name: string;
@@ -249,6 +365,16 @@ export type OutstandingCustomer = {
   total_paid: string;
   current_pending_balance: string;
   last_reminded_at?: string | null;
+  bills?: OutstandingBill[];
+};
+
+export type OutstandingBill = {
+  order_id: number;
+  order_date: string;
+  bill_amount: string;
+  amount_paid: string;
+  remaining_balance: string;
+  status: string;
 };
 
 export type OutstandingResponse = {
@@ -256,11 +382,28 @@ export type OutstandingResponse = {
   customers: OutstandingCustomer[];
 };
 
+export type PendingDue = {
+  customer_name: string;
+  customer_phone: string;
+  invoice_id: number;
+  date: string;
+  total_amount: string;
+  pending_amount: string;
+  payment_status: "Paid" | "Half-Paid" | "Unpaid" | string;
+};
+
+export type PaymentReminderTriggerResponse = {
+  message: string;
+  reminders_pushed: number;
+  webhook_url: string;
+};
+
 export type PaymentCreate = {
   customer_phone: string;
   amount_paid: number;
   payment_mode: "Cash" | "UPI" | "Bank Transfer";
   date?: string;
+  sale_id?: number;
 };
 
 export type AttendanceSummaryRow = {
@@ -346,7 +489,7 @@ export function getAiDashboardInsights() {
 }
 
 export function createDailySale(payload: DailySaleCreate) {
-  return api.post("/api/sales/add", payload);
+  return api.post<DailySaleResponse>("/api/sales/order", payload);
 }
 
 export function createSalesCustomer(payload: CustomerCreate) {
@@ -357,6 +500,30 @@ export function searchCustomers(q: string) {
   return api.get<CustomerSearchResult[]>("/api/customers/search", { params: { q } });
 }
 
+export function getBillCustomers() {
+  return api.get<BillCustomerOption[]>("/api/sales/bill-customers");
+}
+
+export function getCustomerOrders(customerId: number) {
+  return api.get<BillOrderOption[]>(`/api/sales/customers/${customerId}/orders`);
+}
+
+export function sendBillNotification(payload: { order_id: number; customer_id: number }) {
+  return api.post<BillNotificationResponse>("/api/sales/send-bill-notification", payload);
+}
+
+export function getPendingSales() {
+  return api.get<PendingSale[]>("/api/sales/pending");
+}
+
+export function approveSalesOrder(orderId: number) {
+  return api.post<{ message: string; order_id: number; status: string }>(`/api/sales/order/${orderId}/approve`);
+}
+
+export function rejectSalesOrder(orderId: number) {
+  return api.post<{ message: string; order_id: number; status: string }>(`/api/sales/order/${orderId}/reject`);
+}
+
 export function getInventory() {
   return api.get<LiveStockRow[]>("/api/inventory/");
 }
@@ -365,16 +532,32 @@ export function getFinalStockOptions() {
   return api.get<FinalStockOption[]>("/api/inventory/final-stock");
 }
 
+export function saveFinalProductOpeningStock(payload: FinalProductOpeningStockCreate) {
+  return api.post<FinalStockOption>("/api/onboarding/final-stock", payload);
+}
+
 export function getCustomerBalance(customerId: number) {
   return api.get<CustomerBalance>(`/api/sales/customers/${customerId}/balance`);
 }
 
 export function getOutstandingDues() {
-  return api.get<OutstandingResponse>("/api/accounts/outstanding");
+  return api.get<OutstandingResponse>("/api/sales/outstanding");
+}
+
+export function getPendingPaymentDues() {
+  return api.get<PendingDue[]>("/api/sales/dues/pending");
+}
+
+export function triggerPaymentReminders() {
+  return api.post<PaymentReminderTriggerResponse>("/api/automation/trigger-payment-reminders");
 }
 
 export function recordPayment(payload: PaymentCreate) {
   return api.post("/api/accounts/payments", payload);
+}
+
+export function clearOutstandingBill(orderId: number) {
+  return api.delete(`/api/sales/outstanding/${orderId}`, { params: { confirm: true } });
 }
 
 export function sendOutstandingReminder(customerId: number) {
@@ -402,7 +585,7 @@ export function settleWorkerHisab(payload: SettlementRequest) {
 }
 
 export function getPaymentDues() {
-  return api.get<OutstandingResponse>("/api/payments/dues");
+  return api.get<OutstandingResponse>("/api/sales/outstanding");
 }
 
 export function addPayment(payload: PaymentCreate) {
@@ -604,6 +787,26 @@ export function compareIdealWithActual(payload: { ideal_calculation_results: Ide
 
 export function getBillingStatus() {
   return api.get<BillingStatus>("/api/billing/status");
+}
+
+export function getStaffMembers() {
+  return api.get<StaffMember[]>("/api/staff");
+}
+
+export function createStaffMember(payload: StaffCreate) {
+  return api.post<StaffMember>("/api/staff/create", payload);
+}
+
+export function deleteStaffMember(id: number) {
+  return api.delete(`/api/staff/${id}`);
+}
+
+export function getFactoryExpenses() {
+  return api.get<FactoryExpense[]>("/api/expenses");
+}
+
+export function createFactoryExpense(payload: FactoryExpenseCreate) {
+  return api.post<FactoryExpense>("/api/expenses", payload);
 }
 
 export function createBillingOrder() {

@@ -53,6 +53,7 @@ def require_non_empty_work(payload_boxes: int, payload_loose: int) -> None:
 
 
 @router.post("/production/daily", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/production/entry", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
 def create_daily_production(
     payload: DailyProductionCreate,
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
@@ -80,18 +81,46 @@ def create_daily_production(
         if worker is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
-        product_size_ml = machine.mould_size_ml or machine.cup_size_ml
+        selected_final_stock = None
+        if payload.product_id is not None:
+            selected_final_stock = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == factory_id)
+                .filter(FinalProductStock.id == payload.product_id)
+                .with_for_update()
+                .first()
+            )
+            if selected_final_stock is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock variation not found")
+
+        product_size_ml = (
+            payload.product_size_ml
+            or (selected_final_stock.product_size_ml if selected_final_stock is not None else None)
+            or machine.mould_size_ml
+            or machine.cup_size_ml
+        )
         if not product_size_ml:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Machine does not have a product mould size configured",
             )
+        packaging_size_name = (
+            payload.packaging_size
+            or payload.packaging_size_name
+            or (selected_final_stock.packaging_size_name if selected_final_stock is not None else None)
+        )
+        if not packaging_size_name:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Packaging size variation is required",
+            )
+        variety = (payload.variety or (selected_final_stock.variety if selected_final_stock is not None else "") or "Standard/White").strip()
 
         blank_stock = (
             db.query(BlankStock)
             .filter(BlankStock.factory_id == factory_id)
             .filter(BlankStock.blank_size_ml == product_size_ml)
-            .filter(sql_func.lower(BlankStock.variety) == to_lower(payload.variety))
+            .filter(sql_func.lower(BlankStock.variety) == to_lower(variety))
             .with_for_update()
             .first()
         )
@@ -99,7 +128,7 @@ def create_daily_production(
             blank_stock = BlankStock(
                 factory_id=factory_id,
                 blank_size_ml=product_size_ml,
-                variety=payload.variety.strip(),
+                variety=variety,
                 linked_bottom_size_mm=machine.bottom_size_mm,
                 total_qty_kg=Decimal("0.000"),
             )
@@ -110,7 +139,7 @@ def create_daily_production(
             db.query(BottomStock)
             .filter(BottomStock.factory_id == factory_id)
             .filter(BottomStock.bottom_size_mm == machine.bottom_size_mm)
-            .filter(sql_func.lower(BottomStock.variety) == to_lower(payload.variety))
+            .filter(sql_func.lower(BottomStock.variety) == to_lower(variety))
             .with_for_update()
             .first()
         )
@@ -118,7 +147,7 @@ def create_daily_production(
             bottom_stock = BottomStock(
                 factory_id=factory_id,
                 bottom_size_mm=machine.bottom_size_mm,
-                variety=payload.variety.strip(),
+                variety=variety,
                 total_qty_kg=Decimal("0.000"),
             )
             db.add(bottom_stock)
@@ -149,21 +178,25 @@ def create_daily_production(
         blank_boras_after = to_qty(blank_stock.total_boras) - blank_used_bori if blank_stock.total_boras is not None else None
         bottom_rolls_after = (bottom_stock.total_rolls or 0) - bottom_used_rolls
 
-        final_stock = (
-            db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == factory_id)
-            .filter(FinalProductStock.product_size_ml == product_size_ml)
-            .filter(sql_func.lower(FinalProductStock.variety) == payload.variety.lower())
-            .filter(sql_func.lower(FinalProductStock.packaging_size_name) == payload.packaging_size_name.lower())
-            .with_for_update()
-            .first()
-        )
+        final_stock = selected_final_stock
+        if final_stock is None:
+            final_stock = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == factory_id)
+                .filter(FinalProductStock.product_size_ml == product_size_ml)
+                .filter(sql_func.lower(FinalProductStock.variety) == to_lower(variety))
+                .filter(sql_func.lower(FinalProductStock.packaging_size_name) == to_lower(packaging_size_name))
+                .with_for_update()
+                .first()
+            )
         if final_stock is None:
             final_stock = FinalProductStock(
                 factory_id=factory_id,
                 product_size_ml=product_size_ml,
-                variety=payload.variety.strip(),
-                packaging_size_name=payload.packaging_size_name.strip(),
+                variety=variety,
+                packaging_size_name=packaging_size_name.strip(),
+                pieces_per_packet=payload.pieces_per_packet,
+                current_quantity=0,
                 total_boxes=0,
                 loose_packets=0,
                 packets_per_box_limit=payload.packets_per_box_limit,
@@ -182,14 +215,14 @@ def create_daily_production(
         box_stock = (
             db.query(BoxStock)
             .filter(BoxStock.factory_id == factory_id)
-            .filter(sql_func.lower(BoxStock.packaging_size_name) == payload.packaging_size_name.lower())
+            .filter(sql_func.lower(BoxStock.packaging_size_name) == to_lower(packaging_size_name))
             .with_for_update()
             .first()
         )
         if box_stock is None:
             box_stock = BoxStock(
                 factory_id=factory_id,
-                packaging_size_name=payload.packaging_size_name.strip(),
+                packaging_size_name=packaging_size_name.strip(),
                 total_boxes=0,
             )
             db.add(box_stock)
@@ -220,7 +253,10 @@ def create_daily_production(
         bottom_stock.total_weight_kg = bottom_after
         bottom_stock.total_rolls = bottom_rolls_after
         final_stock.total_boxes = final_total_boxes
-        final_stock.variety = payload.variety.strip()
+        final_stock.current_quantity = final_total_boxes
+        final_stock.variety = variety
+        final_stock.packaging_size_name = packaging_size_name.strip()
+        final_stock.pieces_per_packet = payload.pieces_per_packet
         final_stock.loose_packets = final_loose_packets
         final_stock.packets_per_box_limit = payload.packets_per_box_limit
         box_stock.total_boxes = box_stock_after
@@ -231,8 +267,8 @@ def create_daily_production(
             worker_id=worker.id,
             machine_id=machine.id,
             product_size_ml=product_size_ml,
-            variety=payload.variety.strip(),
-            packaging_size_name=payload.packaging_size_name.strip(),
+            variety=variety,
+            packaging_size_name=packaging_size_name.strip(),
             packets_per_box_limit=payload.packets_per_box_limit,
             total_boxes_made=payload.total_boxes_made,
             loose_packets_made=payload.loose_packets_made,
@@ -273,7 +309,7 @@ def create_daily_production(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Daily production failed and was rolled back: {exc}",
+            detail="Production entry failed and was rolled back",
         ) from exc
 
 
@@ -365,6 +401,7 @@ def create_daily_sale(
                     product_size_ml=item.product_size_ml,
                     variety=item.variety.strip(),
                     packaging_size_name=item.packaging_size_name.strip(),
+                    current_quantity=0,
                     total_boxes=0,
                     loose_packets=0,
                     packets_per_box_limit=packets_per_box_limit,
@@ -374,9 +411,15 @@ def create_daily_sale(
 
             available_packets = (stock.total_boxes or 0) * stock.packets_per_box_limit + (stock.loose_packets or 0)
             sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
+            if available_packets < sold_packets:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
+                )
 
             remaining_packets = available_packets - sold_packets
             stock.total_boxes = remaining_packets // stock.packets_per_box_limit
+            stock.current_quantity = stock.total_boxes
             stock.loose_packets = remaining_packets % stock.packets_per_box_limit
 
             line_total = to_money(

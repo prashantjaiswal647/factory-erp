@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hmac
+import httpx
 import json
 import os
 import re
@@ -9,8 +10,9 @@ from typing import Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import URLError
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +27,7 @@ from auth import (
     get_current_user,
     get_user_by_username,
     hash_password,
+    public_router as public_auth_router,
     require_owner,
     router as auth_router,
 )
@@ -40,6 +43,7 @@ from models import (
     DailyProduction,
     Employee,
     ExpenseLog,
+    FactoryExpense,
     Factory,
     FinalProductStock,
     FactoryInventory,
@@ -69,11 +73,38 @@ from routers import payments
 from routers import dashboard
 from routers import attendance
 from routers import billing
+from routers import staff
+from routers import expenses
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
+
+
+def parse_cors_origins() -> List[str]:
+    default_origins = ["http://localhost:5173", "http://localhost:3000"]
+    configured = [
+        os.getenv("FRONTEND_ORIGIN"),
+        os.getenv("HOSTINGER_DOMAIN"),
+        os.getenv("HOSTINGER_IP"),
+    ]
+    configured.extend((os.getenv("CORS_ORIGINS") or "").split(","))
+
+    origins = []
+    for origin in [*default_origins, *configured]:
+        if not origin:
+            continue
+        cleaned = origin.strip().rstrip("/")
+        candidates = [cleaned]
+        if cleaned and not cleaned.startswith(("http://", "https://")):
+            candidates = [f"https://{cleaned}", f"http://{cleaned}"]
+        for candidate in candidates:
+            if candidate and candidate not in origins:
+                origins.append(candidate)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "*"],
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,9 +120,20 @@ app.include_router(sales.router, prefix="/api", tags=["customers"])
 app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"])
 app.include_router(payments.router)
 app.include_router(auth_router)
+app.include_router(public_auth_router)
 app.include_router(dashboard.router)
 app.include_router(attendance.router)
 app.include_router(billing.router)
+app.include_router(staff.router)
+app.include_router(expenses.router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error"},
+    )
 
 
 class InventoryCreate(BaseModel):
@@ -104,7 +146,11 @@ class InventoryResponse(BaseModel):
 
     id: int
     raw_material_name: str
-    quantity: int
+    category: Optional[str] = None
+    packaging_size: Optional[str] = None
+    pieces_per_packet: Optional[int] = None
+    packets_per_box: Optional[int] = None
+    quantity: Optional[int] = None
     updated_at: datetime
 
 
@@ -123,6 +169,11 @@ class CurrentUserResponse(BaseModel):
     factory_id: int
     phone_number: Optional[str] = None
     telegram_id: Optional[str] = None
+
+
+class N8NTestRequest(BaseModel):
+    factory_id: int
+    message: str
 
 
 class IntegrationSettings(BaseModel):
@@ -315,7 +366,10 @@ class VerifiedStoreCustomerRow(BaseModel):
 class LowStockInventoryRow(BaseModel):
     id: int
     item_name: str
-    category: str
+    category: Optional[str] = None
+    packaging_size: Optional[str] = None
+    pieces_per_packet: Optional[int] = None
+    packets_per_box: Optional[int] = None
     unit: str
     quantity: Decimal
     supplier_whatsapp_number: str
@@ -347,7 +401,10 @@ class ProductionLogRow(BaseModel):
 class InventoryRow(BaseModel):
     id: int
     item_name: str
-    category: str
+    category: Optional[str] = None
+    packaging_size: Optional[str] = None
+    pieces_per_packet: Optional[int] = None
+    packets_per_box: Optional[int] = None
     unit: str
     quantity: Decimal
     price_per_unit: Decimal
@@ -830,6 +887,51 @@ def get_n8n_factory_id(
     return x_factory_id
 
 
+def build_n8n_test_webhook_url() -> str:
+    webhook_url = (os.getenv("N8N_WEBHOOK_URL") or "").strip()
+    if not webhook_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="N8N_WEBHOOK_URL is not configured",
+        )
+    if webhook_url.rstrip("/").endswith("/test-ai"):
+        return webhook_url
+    return f"{webhook_url.rstrip('/')}/test-ai"
+
+
+@app.post("/api/n8n/test")
+async def test_n8n_webhook(payload: N8NTestRequest):
+    api_key = os.getenv("N8N_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="N8N_API_KEY is not configured",
+        )
+
+    webhook_url = build_n8n_test_webhook_url()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                webhook_url,
+                json=payload.model_dump(),
+                headers={"x-api-key": api_key},
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not connect to n8n webhook: {exc}",
+        ) from exc
+
+    try:
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except ValueError:
+        return Response(
+            content=response.text,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type") or "text/plain",
+        )
+
+
 def ensure_runtime_schema():
     default_factory_name = (os.getenv("DEFAULT_FACTORY_NAME") or "Default Factory").replace("'", "''")
     tenant_tables = [
@@ -845,6 +947,7 @@ def ensure_runtime_schema():
         "production_logs",
         "finished_goods_stock",
         "expense_logs",
+        "factory_expenses",
         "employees",
         "workers",
         "attendance_logs",
@@ -961,14 +1064,31 @@ def ensure_runtime_schema():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) NOT NULL DEFAULT 'Operator'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
+        "UPDATE users SET email = username WHERE email IS NULL AND username LIKE '%@%'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email) WHERE email IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_user_id ON users (user_id) WHERE user_id IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_id ON users (telegram_id) WHERE telegram_id IS NOT NULL",
         "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role",
         "UPDATE users SET role = 'Operator' WHERE role = 'Worker'",
-        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Supervisor', 'Operator'))",
+        "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('Owner', 'Sub-Owner', 'Supervisor', 'Operator'))",
+        (
+            "CREATE TABLE IF NOT EXISTS factory_expenses ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "expense_name VARCHAR(255) NOT NULL, "
+            "amount NUMERIC(14, 2) NOT NULL, "
+            "category VARCHAR(100) NOT NULL DEFAULT 'General', "
+            "timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        "CREATE INDEX IF NOT EXISTS ix_factory_expenses_factory_id ON factory_expenses (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_factory_expenses_timestamp ON factory_expenses (timestamp)",
+        "ALTER TABLE factory_expenses DROP CONSTRAINT IF EXISTS ck_factory_expenses_amount_non_negative",
+        "ALTER TABLE factory_expenses ADD CONSTRAINT ck_factory_expenses_amount_non_negative CHECK (amount >= 0)",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_type VARCHAR(50) NOT NULL DEFAULT 'Paper Cup'",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_number VARCHAR(50)",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS mould_size_ml INTEGER",
@@ -979,6 +1099,7 @@ def ensure_runtime_schema():
         "UPDATE machines SET machine_number = machine_sequence_number WHERE machine_number IS NULL AND machine_sequence_number IS NOT NULL",
         "UPDATE machines SET mould_size_ml = cup_size_ml WHERE mould_size_ml IS NULL AND cup_size_ml IS NOT NULL",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact_number VARCHAR(50)",
+        "ALTER TABLE customers ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS address TEXT",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone VARCHAR(50)",
         "ALTER TABLE customers ADD COLUMN IF NOT EXISTS previous_due NUMERIC(14, 2) NOT NULL DEFAULT 0",
@@ -1004,21 +1125,53 @@ def ensure_runtime_schema():
             "END IF; END $$"
         ),
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_discount_revoked BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_confirmed_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS balance_amount NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS base_rate NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_size_ml INTEGER",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS variety VARCHAR(100)",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS packaging_size_name VARCHAR(100)",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) NOT NULL DEFAULT 'Unpaid'",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS pending_amount NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS ix_orders_payment_status ON orders (payment_status)",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS boxes_sold INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS loose_packets_sold INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS rate_per_box NUMERIC(14, 2) NOT NULL DEFAULT 0",
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS rate_per_packet NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_payment_type",
         "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_payment_method",
+        "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_status",
         "UPDATE orders SET payment_method = 'Full_Advance_Doorstep' WHERE payment_method = 'Advance'",
         "UPDATE orders SET payment_method = 'Normal_Credit' WHERE payment_method = 'Credit'",
         "UPDATE order_items SET base_rate = final_rate WHERE base_rate = 0",
+        (
+            "ALTER TABLE orders ADD CONSTRAINT ck_orders_status "
+            "CHECK (status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected'))"
+        ),
+        "UPDATE orders SET balance_amount = GREATEST(total_amount - amount_paid, 0) WHERE balance_amount = 0 AND total_amount > 0",
         (
             "ALTER TABLE orders ADD CONSTRAINT ck_orders_payment_method "
             "CHECK (payment_method IN ('Normal_Credit', 'Full_Advance_UPI', 'Full_Advance_Doorstep'))"
         ),
         "ALTER TABLE order_items DROP CONSTRAINT IF EXISTS ck_order_items_base_rate_non_negative",
+        "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_amount_paid_non_negative",
+        "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_balance_amount_non_negative",
+        "ALTER TABLE order_items DROP CONSTRAINT IF EXISTS ck_order_items_boxes_sold_non_negative",
+        "ALTER TABLE order_items DROP CONSTRAINT IF EXISTS ck_order_items_loose_packets_sold_non_negative",
+        "ALTER TABLE order_items DROP CONSTRAINT IF EXISTS ck_order_items_rate_per_box_non_negative",
+        "ALTER TABLE order_items DROP CONSTRAINT IF EXISTS ck_order_items_rate_per_packet_non_negative",
         (
             "ALTER TABLE order_items ADD CONSTRAINT ck_order_items_base_rate_non_negative "
             "CHECK (base_rate >= 0)"
         ),
+        "ALTER TABLE orders ADD CONSTRAINT ck_orders_amount_paid_non_negative CHECK (amount_paid >= 0)",
+        "ALTER TABLE orders ADD CONSTRAINT ck_orders_balance_amount_non_negative CHECK (balance_amount >= 0)",
+        "ALTER TABLE order_items ADD CONSTRAINT ck_order_items_boxes_sold_non_negative CHECK (boxes_sold >= 0)",
+        "ALTER TABLE order_items ADD CONSTRAINT ck_order_items_loose_packets_sold_non_negative CHECK (loose_packets_sold >= 0)",
+        "ALTER TABLE order_items ADD CONSTRAINT ck_order_items_rate_per_box_non_negative CHECK (rate_per_box >= 0)",
+        "ALTER TABLE order_items ADD CONSTRAINT ck_order_items_rate_per_packet_non_negative CHECK (rate_per_packet >= 0)",
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS box_packing_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS poly_packing_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
         "ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS total_packing_cost NUMERIC(14, 2) NOT NULL DEFAULT 0",
@@ -1096,6 +1249,7 @@ def ensure_runtime_schema():
             "factory_id INTEGER NOT NULL REFERENCES factories(id), "
             "product_size_ml INTEGER NOT NULL, "
             "packaging_size_name VARCHAR(100) NOT NULL, "
+            "current_quantity INTEGER NOT NULL DEFAULT 0, "
             "total_boxes INTEGER NOT NULL DEFAULT 0, "
             "loose_packets INTEGER NOT NULL DEFAULT 0, "
             "packets_per_box_limit INTEGER NOT NULL, "
@@ -1167,6 +1321,8 @@ def ensure_runtime_schema():
         "ALTER TABLE bottom_stock DROP CONSTRAINT IF EXISTS ck_bottom_stock_qty_non_negative",
         "ALTER TABLE box_stock DROP CONSTRAINT IF EXISTS ck_box_stock_total_non_negative",
         "ALTER TABLE final_product_stock DROP CONSTRAINT IF EXISTS ck_final_product_boxes_non_negative",
+        "ALTER TABLE final_product_stock ADD COLUMN IF NOT EXISTS current_quantity INTEGER NOT NULL DEFAULT 0",
+        "UPDATE final_product_stock SET current_quantity = total_boxes WHERE current_quantity = 0 AND total_boxes IS NOT NULL",
         "ALTER TABLE blank_stock ADD COLUMN IF NOT EXISTS variety VARCHAR(100) NOT NULL DEFAULT 'Plain White'",
         "ALTER TABLE bottom_stock ADD COLUMN IF NOT EXISTS variety VARCHAR(100) NOT NULL DEFAULT 'Plain White'",
         "ALTER TABLE daily_productions ADD COLUMN IF NOT EXISTS wastage_kg NUMERIC(14, 3) NOT NULL DEFAULT 0",
@@ -1216,6 +1372,14 @@ def ensure_runtime_schema():
         [
             "ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_name_key",
             "ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_item_name_key",
+            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS category VARCHAR(50) NOT NULL DEFAULT 'Raw'",
+            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS packaging_size VARCHAR(100)",
+            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS pieces_per_packet INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS packets_per_box INTEGER NOT NULL DEFAULT 0",
+            "CREATE INDEX IF NOT EXISTS ix_inventory_category ON inventory (category)",
+            "CREATE INDEX IF NOT EXISTS ix_inventory_packaging_size ON inventory (packaging_size)",
+            "ALTER TABLE final_product_stock ADD COLUMN IF NOT EXISTS pieces_per_packet INTEGER NOT NULL DEFAULT 1",
+            "DROP INDEX IF EXISTS uq_final_product_factory_product_pack",
             "ALTER TABLE packaging_profiles DROP CONSTRAINT IF EXISTS packaging_profiles_profile_name_key",
             "ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_name_key",
             "ALTER TABLE finished_goods_stock DROP CONSTRAINT IF EXISTS uq_finished_goods_stock_packaging_profile",
@@ -1223,6 +1387,10 @@ def ensure_runtime_schema():
             (
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_factory_name "
                 "ON customers (factory_id, name)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_customers_factory_name_phone "
+                "ON customers (factory_id, name, phone_number)"
             ),
             (
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_factory_item_name "
@@ -1286,6 +1454,7 @@ def ensure_runtime_schema():
             ),
             "CREATE INDEX IF NOT EXISTS ix_daily_productions_factory_id ON daily_productions (factory_id)",
             "CREATE INDEX IF NOT EXISTS ix_daily_sales_factory_id ON daily_sales (factory_id)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_factory_customer_date ON orders (factory_id, customer_id, order_date DESC)",
         ]
     )
 

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
 
-export type UserRole = "Owner" | "Supervisor" | "Operator";
+export type UserRole = "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
 
 type AuthUser = {
   id?: number;
@@ -13,6 +13,7 @@ type AuthUser = {
   full_name?: string | null;
   role: UserRole;
   factory_id?: number;
+  factory_name?: string | null;
   subscription_status?: "trial" | "active" | "expired" | null;
   trial_end_date?: string | null;
   trial_days_remaining?: number;
@@ -21,7 +22,7 @@ type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
-  login: (username: string, password: string, factoryId?: number) => Promise<AuthUser>;
+  login: (identifier: string, password: string) => Promise<AuthUser>;
   loginWithGoogle: (credential: string) => Promise<AuthUser>;
   updateUser: (patch: Partial<AuthUser>) => void;
   logout: () => void;
@@ -34,6 +35,7 @@ type TokenResponse = {
     id: number;
     user_id?: string | null;
     factory_id: number;
+    factory_name?: string | null;
     username: string;
     phone_number?: string | null;
     full_name?: string | null;
@@ -72,10 +74,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  async function login(username: string, password: string, factoryId?: number) {
+  async function login(identifier: string, password: string) {
     const response = await api.post<TokenResponse>("/api/auth/login", {
-      factory_id: factoryId,
-      username,
+      identifier,
       password
     });
 
@@ -97,12 +98,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       full_name: data.user.full_name,
       role,
       factory_id: data.user.factory_id,
+      factory_name: data.user.factory_name,
       subscription_status: data.user.subscription_status,
       trial_end_date: data.user.trial_end_date,
       trial_days_remaining: data.user.trial_days_remaining
     };
 
     localStorage.setItem(tokenKey, data.access_token);
+    localStorage.setItem("token", data.access_token);
+    localStorage.setItem("factory_id", String(nextUser.factory_id ?? ""));
     localStorage.setItem(userKey, JSON.stringify(nextUser));
     setUser(nextUser);
     return nextUser;
@@ -118,6 +122,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function logout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("factory_id");
     localStorage.removeItem(tokenKey);
     localStorage.removeItem(userKey);
     setUser(null);
@@ -141,6 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 function normalizeRole(role: string): UserRole {
   const value = role.trim().toUpperCase();
   if (value === "OWNER") return "Owner";
+  if (value === "SUB-OWNER" || value === "SUB_OWNER") return "Sub-Owner";
   if (value === "SUPERVISOR") return "Supervisor";
   return "Operator";
 }

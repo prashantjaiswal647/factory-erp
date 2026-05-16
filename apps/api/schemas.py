@@ -372,6 +372,7 @@ class FinalProductStockResponse(BaseModel):
     factory_id: int
     product_size_ml: int
     packaging_size_name: str
+    current_quantity: int = 0
     total_boxes: int
     loose_packets: int
     packets_per_box_limit: int
@@ -411,10 +412,14 @@ class DailyProductionCreate(BaseModel):
     date: date
     worker_id: int = Field(..., gt=0)
     machine_id: int = Field(..., gt=0)
+    product_id: Optional[int] = Field(default=None, gt=0)
+    product_size_ml: Optional[int] = Field(default=None, gt=0)
     variety: str = Field(default="Standard/White", min_length=1, max_length=100)
+    packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
     pieces_per_packet: int = Field(default=1, gt=0)
     packets_per_box_limit: int = Field(..., gt=0)
+    shift: str = Field(default="Day", pattern="^(Day|Night)$")
     total_boxes_made: int = Field(..., ge=0)
     loose_packets_made: int = Field(..., ge=0)
     blank_used_bori: Decimal = Field(default=Decimal("0.000"), ge=0)
@@ -441,13 +446,19 @@ class DailyProductionResponse(BaseModel):
 
 
 class DailySaleItemCreate(BaseModel):
+    product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: int = Field(..., gt=0)
     variety: str = Field(default="Standard/White", min_length=1, max_length=100)
+    packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
     boxes_sold: int = Field(default=0, ge=0)
     loose_packets_sold: int = Field(default=0, ge=0)
     rate_per_box: Decimal = Field(default=Decimal("0.00"), ge=0)
     rate_per_packet: Decimal = Field(default=Decimal("0.00"), ge=0)
+    packets_per_box: int = Field(default=0, ge=0)
+
+
+SalesOrderItemCreate = DailySaleItemCreate
 
 
 class DailySaleCreate(BaseModel):

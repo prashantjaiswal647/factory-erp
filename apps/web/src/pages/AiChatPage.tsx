@@ -3,7 +3,8 @@ import { AlertCircle, Bot, CheckCircle2, SendHorizontal, Sparkles, UserRound } f
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { api } from "../lib/api";
+import { api, getBillCustomers, getCustomerOrders, sendBillNotification } from "../lib/api";
+import type { BillCustomerOption, BillOrderOption } from "../lib/api";
 
 type ChatRole = "assistant" | "user" | "error";
 
@@ -62,6 +63,12 @@ export default function AiChatPage() {
   const [inputValue, setInputValue] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [billingCustomers, setBillingCustomers] = useState<BillCustomerOption[]>([]);
+  const [billingOrders, setBillingOrders] = useState<BillOrderOption[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [isBillingLoading, setIsBillingLoading] = useState(false);
+  const [isBillSending, setIsBillSending] = useState(false);
   const { triggerDataRefresh } = useDataRefresh();
   const sessionId = useMemo(getSessionId, []);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -73,6 +80,74 @@ export default function AiChatPage() {
   useEffect(() => {
     window.localStorage.setItem(chatMessagesStorageKey, JSON.stringify(messages));
   }, [messages]);
+
+  useEffect(() => {
+    void loadBillingCustomers();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setBillingOrders([]);
+      setSelectedOrderId("");
+      return;
+    }
+    void loadCustomerOrders(Number(selectedCustomerId));
+  }, [selectedCustomerId]);
+
+  async function loadBillingCustomers() {
+    setIsBillingLoading(true);
+    try {
+      const response = await getBillCustomers();
+      setBillingCustomers(response.data);
+    } finally {
+      setIsBillingLoading(false);
+    }
+  }
+
+  async function loadCustomerOrders(customerId: number) {
+    setIsBillingLoading(true);
+    try {
+      const response = await getCustomerOrders(customerId);
+      setBillingOrders(response.data);
+      setSelectedOrderId(response.data[0]?.id ? String(response.data[0].id) : "");
+    } finally {
+      setIsBillingLoading(false);
+    }
+  }
+
+  async function handleSendBill() {
+    if (!selectedCustomerId || !selectedOrderId || isBillSending) {
+      return;
+    }
+
+    setIsBillSending(true);
+    try {
+      const response = await sendBillNotification({
+        customer_id: Number(selectedCustomerId),
+        order_id: Number(selectedOrderId)
+      });
+      const successMessage = response.data.message || "Bill successfully sent to Owner and Customer via Telegram/WhatsApp.";
+      setToast({ type: "success", message: successMessage });
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          id: createId(),
+          role: "assistant",
+          text: successMessage
+        }
+      ]);
+    } catch (error) {
+      let errorMessage = "Unable to send bill notification.";
+      if (axios.isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        errorMessage = typeof detail === "string" ? detail : error.message || errorMessage;
+      }
+      setToast({ type: "error", message: errorMessage });
+      setMessages((currentMessages) => [...currentMessages, { id: createId(), role: "error", text: errorMessage }]);
+    } finally {
+      setIsBillSending(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -164,6 +239,59 @@ export default function AiChatPage() {
         </div>
         <div className="hidden rounded-md border border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 sm:block">
           Session active
+        </div>
+      </div>
+
+      <div className="border-b border-zinc-200 bg-white px-5 py-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-950">Operations / Billing</h2>
+            <p className="text-xs text-zinc-500">Generate and send a storefront order bill.</p>
+          </div>
+          {isBillingLoading ? <span className="text-xs font-medium text-zinc-400">Loading...</span> : null}
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+          <label className="block text-sm">
+            <span className="font-medium text-zinc-700">Customer</span>
+            <select
+              className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              value={selectedCustomerId}
+              onChange={(event) => setSelectedCustomerId(event.target.value)}
+            >
+              <option value="">Select customer</option>
+              {billingCustomers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name} {customer.phone_number ? `- ${customer.phone_number}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-sm">
+            <span className="font-medium text-zinc-700">Recent Order</span>
+            <select
+              className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-50"
+              value={selectedOrderId}
+              onChange={(event) => setSelectedOrderId(event.target.value)}
+              disabled={!selectedCustomerId || billingOrders.length === 0}
+            >
+              <option value="">Select order</option>
+              {billingOrders.map((order) => (
+                <option key={order.id} value={order.id}>
+                  #{order.id} - Rs {order.total_amount} - {order.status}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            className="mt-auto inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+            type="button"
+            disabled={!selectedCustomerId || !selectedOrderId || isBillSending}
+            onClick={handleSendBill}
+          >
+            {isBillSending ? "Sending..." : "Generate & Send Bill"}
+          </button>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
-import { Bot, Boxes, Calculator, CalendarDays, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UsersRound, WalletCards, X } from "lucide-react";
+import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
@@ -14,24 +14,41 @@ type NavigationItem = {
 };
 
 const navigation: NavigationItem[] = [
-  { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner"] },
-  { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Supervisor", "Operator"] },
-  { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner"] },
-  { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner"] },
-  { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Supervisor", "Operator"] },
-  { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["Owner", "Supervisor"] },
-  { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner"], section: "Revenue & Accounts" },
-  { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },
-  { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Supervisor"], section: "Revenue & Accounts" },
-  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner"], section: "Revenue & Accounts" },
-  { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Supervisor", "Operator"] }
+  { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner", "Sub-Owner"] },
+  { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
+  { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
+  { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner", "Sub-Owner"] },
+  { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
+  { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["Owner", "Sub-Owner", "Supervisor"] },
+  { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
+  { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
+  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
+  { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner"], section: "Admin" },
+  { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] }
 ];
 
 export default function Layout() {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { logout, user } = useAuth();
+  const navigate = useNavigate();
 
   const visibleNavigation = navigation.filter((item) => user && item.roles.includes(user.role));
+  const displayName = user?.full_name || user?.username || "User";
+  const initials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "U";
+
+  function handleSignOut() {
+    logout();
+    setIsProfileMenuOpen(false);
+    navigate("/login", { replace: true });
+  }
 
   const navItems = visibleNavigation.map((item, index) => {
     const showSection = item.section && visibleNavigation[index - 1]?.section !== item.section;
@@ -116,7 +133,7 @@ export default function Layout() {
       ) : null}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 backdrop-blur lg:px-8">
+        <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 pr-20 backdrop-blur sm:pr-80 lg:px-8 lg:pr-80">
           <button
             className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 lg:hidden"
             type="button"
@@ -136,18 +153,63 @@ export default function Layout() {
             />
           </div>
 
-          <div className="hidden text-right sm:block">
-            <p className="text-sm font-medium">{user?.username}</p>
-            <p className="text-xs text-zinc-500">{user?.role}</p>
+          <div className="absolute right-4 top-1/2 z-40 flex -translate-y-1/2 items-center justify-end gap-4 lg:right-8">
+            {user?.subscription_status === "trial" ? (
+              <button
+                className="inline-flex h-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-900 shadow-sm transition hover:border-amber-300 hover:bg-amber-100"
+                type="button"
+                onClick={() => navigate("/billing")}
+              >
+                Free Trial
+              </button>
+            ) : null}
+
+            <div className="relative">
+              <button
+                className="flex h-10 items-center gap-2 rounded-full border border-zinc-200 bg-white pl-1.5 pr-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+                type="button"
+                aria-expanded={isProfileMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setIsProfileMenuOpen((current) => !current)}
+              >
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">
+                  {initials}
+                </span>
+                <span className="hidden max-w-32 truncate sm:inline">{displayName}</span>
+                <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden="true" />
+              </button>
+
+              {isProfileMenuOpen ? (
+                <div className="absolute right-0 mt-2 w-56 overflow-hidden rounded-lg border border-zinc-200 bg-white py-2 shadow-lg" role="menu">
+                  <div className="border-b border-zinc-100 px-4 pb-2">
+                    <p className="truncate text-sm font-semibold text-zinc-950">{displayName}</p>
+                    <p className="text-xs text-zinc-500">{user?.role}</p>
+                  </div>
+                  <button
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      navigate("/profile");
+                    }}
+                  >
+                    <UserRound className="h-4 w-4 text-zinc-500" />
+                    My Profile
+                  </button>
+                  <button
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50"
+                    type="button"
+                    role="menuitem"
+                    onClick={handleSignOut}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Sign Out
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
-          <button
-            className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50"
-            onClick={logout}
-            title="Sign out"
-            type="button"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
         </header>
 
         <main className="px-4 py-6 lg:px-8">

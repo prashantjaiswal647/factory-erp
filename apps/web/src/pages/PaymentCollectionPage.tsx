@@ -1,6 +1,7 @@
 import { CreditCard, IndianRupee, Search, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { useDataRefresh } from "../context/DataRefreshContext";
 import { addPayment, getPaymentDues, searchCustomers } from "../lib/api";
 import type { CustomerSearchResult, OutstandingCustomer, PaymentCreate } from "../lib/api";
 
@@ -12,6 +13,21 @@ const initialPayment: PaymentCreate = {
   payment_mode: "Cash",
   date: today
 };
+
+function apiErrorMessage(error: unknown) {
+  const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (typeof item === "string") return item;
+      const location = Array.isArray((item as { loc?: unknown }).loc) ? (item as { loc: unknown[] }).loc.join(".") : "";
+      const message = (item as { msg?: unknown }).msg;
+      return [location, message].filter(Boolean).join(": ") || JSON.stringify(item);
+    }).join("; ");
+  }
+  if (typeof detail === "string") return detail;
+  if (detail) return JSON.stringify(detail);
+  return "An error occurred";
+}
 
 function money(value: string | number) {
   return `₹${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -28,6 +44,7 @@ export default function PaymentCollectionPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const { refreshVersion, triggerDataRefresh } = useDataRefresh();
 
   async function loadDues() {
     setIsLoading(true);
@@ -45,7 +62,7 @@ export default function PaymentCollectionPage() {
 
   useEffect(() => {
     void loadDues();
-  }, []);
+  }, [refreshVersion]);
 
   useEffect(() => {
     const query = customerQuery.trim();
@@ -99,12 +116,20 @@ export default function PaymentCollectionPage() {
     setIsSaving(true);
     setError("");
     try {
-      const response = await addPayment(payment);
+      const payload: PaymentCreate = {
+        customer_phone: String(selectedCustomer.phone_number || payment.customer_phone || "").trim(),
+        amount_paid: Number(payment.amount_paid || 0),
+        payment_mode: payment.payment_mode,
+        date: payment.date || undefined,
+        sale_id: payment.sale_id ? Number(payment.sale_id) : undefined
+      };
+      const response = await addPayment(payload);
       setToast(`Payment saved. Remaining balance: ${money(response.data.total_remaining_balance)}`);
       setPayment({ ...initialPayment, customer_phone: selectedCustomer.phone_number });
+      triggerDataRefresh();
       await loadDues();
-    } catch {
-      setError("Payment save nahi ho paaya.");
+    } catch (error) {
+      setError(apiErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -183,7 +208,7 @@ export default function PaymentCollectionPage() {
                 type="number"
                 value={payment.amount_paid}
                 onFocus={(event) => event.target.select()}
-                onChange={(event) => setPayment((current) => ({ ...current, amount_paid: Number(event.target.value) }))}
+                onChange={(event) => setPayment((current) => ({ ...current, amount_paid: event.target.value === "" ? 0 : Number(event.target.value) }))}
               />
             </label>
           </div>

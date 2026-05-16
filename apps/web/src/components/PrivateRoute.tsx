@@ -7,6 +7,7 @@ import type { UserRole } from "../context/AuthContext";
 
 export function roleHomePath(role: UserRole) {
   if (role === "Owner") return "/dashboard";
+  if (role === "Sub-Owner") return "/dashboard";
   if (role === "Supervisor") return "/production";
   return "/inventory";
 }

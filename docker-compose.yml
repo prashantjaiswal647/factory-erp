@@ -6,7 +6,7 @@ services:
     container_name: ai-erp-web
     restart: unless-stopped
     environment:
-      VITE_API_BASE_URL: http://localhost:8000
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     ports:
       - "5173:5173"
     depends_on:
@@ -19,7 +19,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     container_name: ai-erp-api
-    restart: unless-stopped
+    restart: always
     env_file:
       - .env
     environment:
@@ -36,7 +36,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ai-erp-postgres
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}

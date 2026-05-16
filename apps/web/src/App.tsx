@@ -10,6 +10,7 @@ import BillingPage from "./pages/BillingPage";
 import CalculatorPage from "./pages/CalculatorPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
+import FactoryExpensesPage from "./pages/FactoryExpensesPage";
 import InventoryPage from "./pages/InventoryPage";
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
@@ -17,7 +18,9 @@ import OnboardingPage from "./pages/OnboardingPage";
 import OutstandingPage from "./pages/OutstandingPage";
 import PaymentCollectionPage from "./pages/PaymentCollectionPage";
 import ProductionPage from "./pages/ProductionPage";
+import ProfilePage from "./pages/ProfilePage";
 import SalesEntryPage from "./pages/SalesEntryPage";
+import StaffManagement from "./pages/StaffManagement";
 import StorefrontPage from "./pages/StorefrontPage";
 import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
 import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
@@ -26,7 +29,7 @@ import UnauthorizedPage from "./pages/UnauthorizedPage";
 function RoleLanding() {
   const { user } = useAuth();
 
-  if (user && user.role !== "Owner") {
+  if (user && user.role !== "Owner" && user.role !== "Sub-Owner") {
     return <Navigate to={roleHomePath(user.role)} replace />;
   }
 
@@ -55,10 +58,19 @@ export default function App() {
         <Route path="billing" element={<BillingPage />} />
         <Route path="subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="dashboard" element={<RoleLanding />} />
+        <Route path="profile" element={<ProfilePage />} />
+        <Route
+          path="staff"
+          element={
+            <PrivateRoute allowedRoles={["Owner"]}>
+              <StaffManagement />
+            </PrivateRoute>
+          }
+        />
         <Route
           path="inventory"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor", "Operator"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor", "Operator"]}>
               <InventoryPage />
             </PrivateRoute>
           }
@@ -66,7 +78,7 @@ export default function App() {
         <Route
           path="production"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor", "Operator"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor", "Operator"]}>
               <ProductionPage />
             </PrivateRoute>
           }
@@ -74,7 +86,7 @@ export default function App() {
         <Route
           path="attendance"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
               <AttendancePage />
             </PrivateRoute>
           }
@@ -82,7 +94,7 @@ export default function App() {
         <Route
           path="sales"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
               <SalesEntryPage />
             </PrivateRoute>
           }
@@ -90,7 +102,7 @@ export default function App() {
         <Route
           path="customers"
           element={
-            <PrivateRoute allowedRoles={["Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <CustomersPage />
             </PrivateRoute>
           }
@@ -98,7 +110,7 @@ export default function App() {
         <Route
           path="outstanding"
           element={
-            <PrivateRoute allowedRoles={["Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <OutstandingPage />
             </PrivateRoute>
           }
@@ -106,15 +118,23 @@ export default function App() {
         <Route
           path="payments"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
               <PaymentCollectionPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="expenses"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor", "Operator"]}>
+              <FactoryExpensesPage />
             </PrivateRoute>
           }
         />
         <Route
           path="onboarding"
           element={
-            <PrivateRoute allowedRoles={["Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <OnboardingPage />
             </PrivateRoute>
           }
@@ -122,7 +142,7 @@ export default function App() {
         <Route
           path="calculator"
           element={
-            <PrivateRoute allowedRoles={["Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <CalculatorPage />
             </PrivateRoute>
           }
@@ -130,7 +150,7 @@ export default function App() {
         <Route
           path="ai-supervisor"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Supervisor", "Operator"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor", "Operator"]}>
               <AiChatPage />
             </PrivateRoute>
           }

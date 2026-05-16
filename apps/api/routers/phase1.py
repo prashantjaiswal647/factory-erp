@@ -263,8 +263,13 @@ def upsert_final_product_stock(
             factory_id=current_user.factory_id,
             product_size_ml=payload.product_size_ml,
             packaging_size_name=packaging_size_name,
+            current_quantity=payload.total_boxes,
+            total_boxes=payload.total_boxes,
+            loose_packets=payload.loose_packets,
+            packets_per_box_limit=payload.packets_per_box_limit,
         )
         db.add(stock)
+    stock.current_quantity = payload.total_boxes
     stock.total_boxes = payload.total_boxes
     stock.loose_packets = payload.loose_packets
     stock.packets_per_box_limit = payload.packets_per_box_limit

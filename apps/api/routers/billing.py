@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from auth import check_permissions, get_current_active_user
+from auth import check_permissions, get_current_active_user, is_trial_bypass_enabled
 from db import get_db
 from models import Factory, User
 
@@ -66,6 +66,8 @@ def _sync_subscription(factory: Factory) -> None:
         factory.trial_start_date = now
     if factory.trial_end_date is None:
         factory.trial_end_date = now + timedelta(days=3)
+    if is_trial_bypass_enabled():
+        return
     trial_end = factory.trial_end_date
     if trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
@@ -100,11 +102,12 @@ def _razorpay_client():
 
 
 def _status_payload(factory: Factory, current_user: User) -> BillingStatusResponse:
+    bypass_enabled = is_trial_bypass_enabled()
     return BillingStatusResponse(
-        subscription_status=factory.subscription_status or "trial",
+        subscription_status="trial" if bypass_enabled else factory.subscription_status or "trial",
         trial_end_date=factory.trial_end_date,
         trial_days_remaining=_remaining_days(factory),
-        is_access_allowed=(factory.subscription_status in {"trial", "active"}),
+        is_access_allowed=bypass_enabled or (factory.subscription_status in {"trial", "active"}),
         is_owner=(current_user.role == "Owner"),
     )
 

@@ -16,3 +16,6 @@ langchain-openai
 pydantic
 google-auth
 razorpay
+httpx
+reportlab
+fastapi-mail

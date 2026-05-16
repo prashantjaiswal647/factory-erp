@@ -1,17 +1,21 @@
 import { AlertTriangle, Check, Factory } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { createDailyProduction, getDashboardMachines, getDashboardWorkers } from "../lib/api";
-import type { DailyProductionCreate, DashboardMachine, DashboardWorker } from "../lib/api";
+import { createDailyProduction, getDashboardMachines, getDashboardWorkers, getFinalStockOptions } from "../lib/api";
+import type { DailyProductionCreate, DashboardMachine, DashboardWorker, FinalStockOption } from "../lib/api";
 
 const initialForm: DailyProductionCreate = {
   date: new Date().toISOString().slice(0, 10),
   worker_id: 0,
   machine_id: 0,
+  product_id: null,
+  product_size_ml: null,
   variety: "Plain White",
+  packaging_size: "210ml Standard Box",
   packaging_size_name: "210ml Standard Box",
   pieces_per_packet: 50,
   packets_per_box_limit: 20,
+  shift: "Day",
   total_boxes_made: 0,
   loose_packets_made: 0,
   blank_used_bori: 0,
@@ -23,6 +27,7 @@ export default function ProductionPage() {
   const [form, setForm] = useState<DailyProductionCreate>(initialForm);
   const [workers, setWorkers] = useState<DashboardWorker[]>([]);
   const [machines, setMachines] = useState<DashboardMachine[]>([]);
+  const [finalStockOptions, setFinalStockOptions] = useState<FinalStockOption[]>([]);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -32,14 +37,23 @@ export default function ProductionPage() {
   }, []);
 
   async function loadOptions() {
-    const [workerRes, machineRes] = await Promise.all([getDashboardWorkers(), getDashboardMachines()]);
+    const [workerRes, machineRes, finalStockRes] = await Promise.all([getDashboardWorkers(), getDashboardMachines(), getFinalStockOptions()]);
+    const variations = finalStockRes.data;
+    const firstVariation = variations[0];
     setWorkers(workerRes.data);
     setMachines(machineRes.data);
+    setFinalStockOptions(variations);
     setForm((current) => ({
       ...current,
       worker_id: current.worker_id || workerRes.data[0]?.id || 0,
       machine_id: current.machine_id || machineRes.data[0]?.id || 0,
-      packaging_size_name: machineRes.data[0]?.mould_size_ml ? `${machineRes.data[0].mould_size_ml}ml Standard Box` : current.packaging_size_name
+      product_id: current.product_id || firstVariation?.id || null,
+      product_size_ml: current.product_size_ml || firstVariation?.product_size_ml || machineRes.data[0]?.mould_size_ml || null,
+      variety: current.variety || firstVariation?.variety || "Plain White",
+      packaging_size: current.packaging_size || firstVariation?.packaging_size || firstVariation?.packaging_size_name || current.packaging_size_name,
+      packaging_size_name: firstVariation?.packaging_size_name || (machineRes.data[0]?.mould_size_ml ? `${machineRes.data[0].mould_size_ml}ml Standard Box` : current.packaging_size_name),
+      pieces_per_packet: firstVariation?.pieces_per_packet || current.pieces_per_packet,
+      packets_per_box_limit: firstVariation?.packets_per_box || firstVariation?.packets_per_box_limit || current.packets_per_box_limit
     }));
   }
 
@@ -49,7 +63,18 @@ export default function ProductionPage() {
     try {
       await createDailyProduction(form);
       setToast("Production saved");
-      setForm({ ...initialForm, worker_id: workers[0]?.id || 0, machine_id: machines[0]?.id || 0 });
+      setForm({
+        ...initialForm,
+        worker_id: workers[0]?.id || 0,
+        machine_id: machines[0]?.id || 0,
+        product_id: finalStockOptions[0]?.id || null,
+        product_size_ml: finalStockOptions[0]?.product_size_ml || null,
+        variety: finalStockOptions[0]?.variety || initialForm.variety,
+        packaging_size: finalStockOptions[0]?.packaging_size || finalStockOptions[0]?.packaging_size_name || initialForm.packaging_size,
+        packaging_size_name: finalStockOptions[0]?.packaging_size_name || initialForm.packaging_size_name,
+        pieces_per_packet: finalStockOptions[0]?.pieces_per_packet || initialForm.pieces_per_packet,
+        packets_per_box_limit: finalStockOptions[0]?.packets_per_box || finalStockOptions[0]?.packets_per_box_limit || initialForm.packets_per_box_limit
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Production save failed");
     } finally {
@@ -100,8 +125,43 @@ export default function ProductionPage() {
               </option>
             ))}
           </SelectField>
-          <StringSelectField label="Variety" value={form.variety} onChange={(variety) => setForm({ ...form, variety })} options={["Plain White", "Multicolor", "Custom Print"]} />
-          <Field label="Packaging" value={form.packaging_size_name} onChange={(packaging_size_name) => setForm({ ...form, packaging_size_name })} />
+          <ProductSelectField
+            label="Product"
+            value={form.product_id || 0}
+            options={finalStockOptions}
+            onChange={(product_id) => {
+              const selected = finalStockOptions.find((item) => item.id === product_id);
+              setForm({
+                ...form,
+                product_id,
+                product_size_ml: selected?.product_size_ml || form.product_size_ml,
+                variety: selected?.variety || form.variety,
+                packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
+                packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
+                pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
+                packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
+              });
+            }}
+          />
+          <VariationSelectField
+            label="Packaging Size Variation"
+            value={form.product_id || 0}
+            options={finalStockOptions}
+            onChange={(product_id) => {
+              const selected = finalStockOptions.find((item) => item.id === product_id);
+              setForm({
+                ...form,
+                product_id,
+                product_size_ml: selected?.product_size_ml || form.product_size_ml,
+                variety: selected?.variety || form.variety,
+                packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
+                packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
+                pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
+                packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
+              });
+            }}
+          />
+          <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" })} options={["Day", "Night"]} />
           <NumberField label="Pieces per Packet" value={form.pieces_per_packet} onChange={(pieces_per_packet) => setForm({ ...form, pieces_per_packet })} />
           <NumberField label="Packets per Box" value={form.packets_per_box_limit} onChange={(packets_per_box_limit) => setForm({ ...form, packets_per_box_limit })} />
           <NumberField label="Total Boxes Made" value={form.total_boxes_made} onChange={(total_boxes_made) => setForm({ ...form, total_boxes_made })} />
@@ -176,7 +236,40 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
-      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" inputMode="decimal" type="number" value={value} onFocus={(event) => event.target.select()} onChange={(event) => onChange(Number(event.target.value))} />
+      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" inputMode="decimal" placeholder="0" type="number" value={value === 0 ? "" : value} onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))} />
+    </label>
+  );
+}
+
+function ProductSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
+  const uniqueProducts = Array.from(new Map(options.map((item) => [`${item.product_size_ml}-${item.variety}`, item])).values());
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
+        <option value={0}>Select Product</option>
+        {uniqueProducts.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.product_size_ml}ml - {option.variety}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function VariationSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
+        <option value={0}>Select Variation</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.product_size_ml}ml - {option.pieces_per_packet || 0} Pcs/Pkt - {option.packaging_size || option.packaging_size_name}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

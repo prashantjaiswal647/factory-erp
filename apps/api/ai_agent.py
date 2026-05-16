@@ -64,7 +64,7 @@ def initialize_groq_llm():
 
     try:
         return ChatGroq(
-            model=os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant",
+            model=os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile",
             temperature=0,
             api_key=groq_api_key,
         )

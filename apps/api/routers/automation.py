@@ -3,6 +3,7 @@ from decimal import Decimal
 import os
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func as sql_func
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from auth import require_owner
 from db import get_db
 from models import Customer, Order, SalesInvoice, User
+from routers.sales import pending_payment_dues
 
 
 router = APIRouter(prefix="/api", tags=["automation"])
@@ -28,6 +30,12 @@ class CustomerWeeklyReport(BaseModel):
     total_orders_this_week: int
     cash_paid: Decimal
     current_outstanding_balance: Decimal
+
+
+class PaymentReminderTriggerResponse(BaseModel):
+    message: str
+    reminders_pushed: int
+    webhook_url: str
 
 
 def generate_customer_portal_token() -> str:
@@ -106,3 +114,39 @@ def customer_weekly_report(
         cash_paid=cash_paid,
         current_outstanding_balance=Decimal(customer.balance_amount or 0),
     )
+
+
+@router.post("/automation/trigger-payment-reminders", response_model=PaymentReminderTriggerResponse)
+async def trigger_payment_reminders(
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    webhook_url = (os.getenv("N8N_PAYMENT_REMINDER_WEBHOOK") or "http://localhost:5678/webhook/payment-reminder").strip()
+    fallback_webhook_url = "http://n8n:5678/webhook/payment-reminder"
+    try:
+        dues = pending_payment_dues(db, current_user.factory_id)
+        sent_count = 0
+        async with httpx.AsyncClient(timeout=10) as client:
+            for due in dues:
+                payload = {
+                    "factory_id": current_user.factory_id,
+                    "customer_name": due.customer_name,
+                    "customer_phone": due.customer_phone,
+                    "invoice_id": due.invoice_id,
+                    "pending_amount": str(due.pending_amount),
+                    "total_amount": str(due.total_amount),
+                }
+                try:
+                    await client.post(webhook_url, json=payload)
+                except httpx.RequestError:
+                    await client.post(fallback_webhook_url, json=payload)
+                sent_count += 1
+        return PaymentReminderTriggerResponse(
+            message="Automated follow-up cues pushed to n8n successfully!",
+            reminders_pushed=sent_count,
+            webhook_url=webhook_url,
+        )
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Payment reminder trigger failed: {exc}") from exc

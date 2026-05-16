@@ -1,8 +1,9 @@
-import { BellRing, IndianRupee, Search, WalletCards, X } from "lucide-react";
+import { BellRing, ChevronDown, IndianRupee, Search, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
-import type { OutstandingCustomer, PaymentCreate } from "../lib/api";
+import { clearOutstandingBill, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
+import { useDataRefresh } from "../context/DataRefreshContext";
+import type { OutstandingBill, OutstandingCustomer, PaymentCreate } from "../lib/api";
 
 const initialPayment: PaymentCreate = {
   customer_phone: "",
@@ -20,16 +21,28 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
 }
 
+function Summary({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <span className="text-sm md:text-right">
+      <span className="block text-xs font-medium uppercase text-zinc-400">{label}</span>
+      <span className={strong ? "font-semibold text-red-700" : "font-medium text-zinc-700"}>{value}</span>
+    </span>
+  );
+}
+
 export default function OutstandingPage() {
   const [rows, setRows] = useState<OutstandingCustomer[]>([]);
   const [grandTotal, setGrandTotal] = useState("0");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<OutstandingCustomer | null>(null);
+  const [selectedBill, setSelectedBill] = useState<OutstandingBill | null>(null);
+  const [expandedCustomerId, setExpandedCustomerId] = useState<number | null>(null);
   const [payment, setPayment] = useState<PaymentCreate>(initialPayment);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const { refreshVersion, triggerDataRefresh } = useDataRefresh();
 
   async function load() {
     setIsLoading(true);
@@ -47,7 +60,7 @@ export default function OutstandingPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [refreshVersion]);
 
   const filteredRows = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -57,12 +70,14 @@ export default function OutstandingPage() {
     );
   }, [query, rows]);
 
-  function openPaymentModal(row: OutstandingCustomer) {
+  function openPaymentModal(row: OutstandingCustomer, bill?: OutstandingBill) {
     setSelected(row);
+    setSelectedBill(bill || null);
     setPayment({
       ...initialPayment,
       customer_phone: row.customer_phone,
-      amount_paid: Number(row.current_pending_balance)
+      sale_id: bill?.order_id,
+      amount_paid: Number(bill?.remaining_balance ?? row.current_pending_balance)
     });
   }
 
@@ -93,12 +108,32 @@ export default function OutstandingPage() {
       await recordPayment(payment);
       setToast("Payment saved");
       setSelected(null);
+      setSelectedBill(null);
       setPayment(initialPayment);
+      triggerDataRefresh();
       await load();
     } catch {
       setError("Payment save nahi ho paaya.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function clearBill(row: OutstandingCustomer, bill: OutstandingBill) {
+    const confirmed = window.confirm("Warning: This will manually clear the outstanding balance for this bill. This action cannot be undone. Proceed?");
+    if (!confirmed) return;
+
+    setError("");
+    try {
+      await clearOutstandingBill(bill.order_id);
+      setToast("Outstanding bill manually cleared");
+      triggerDataRefresh();
+      await load();
+      if (expandedCustomerId === row.customer_id && row.bills?.length === 1) {
+        setExpandedCustomerId(null);
+      }
+    } catch {
+      setError("Outstanding bill clear nahi ho paaya.");
     }
   }
 
@@ -157,42 +192,72 @@ export default function OutstandingPage() {
           <div className="p-6 text-sm text-zinc-500">Koi pending udhaar nahi hai.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-zinc-200 text-sm">
-              <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
-                <tr>
-                  <th className="px-5 py-3">Name</th>
-                  <th className="px-5 py-3">Phone</th>
-                  <th className="px-5 py-3 text-right">Total Bill</th>
-                  <th className="px-5 py-3 text-right">Total Paid</th>
-                  <th className="px-5 py-3 text-right">Pending</th>
-                  <th className="px-5 py-3">Last Reminded</th>
-                  <th className="px-5 py-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {filteredRows.map((row) => (
-                  <tr key={row.customer_id}>
-                    <td className="px-5 py-3 font-medium text-zinc-900">{row.customer_name}</td>
-                    <td className="px-5 py-3 text-zinc-600">{row.customer_phone}</td>
-                    <td className="px-5 py-3 text-right text-zinc-700">{money(row.total_bill_amount)}</td>
-                    <td className="px-5 py-3 text-right text-zinc-700">{money(row.total_paid)}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-red-700">{money(row.current_pending_balance)}</td>
-                    <td className="px-5 py-3 text-zinc-600">{formatDateTime(row.last_reminded_at)}</td>
-                    <td className="px-5 py-3 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row)}>
-                          Quick Pay
-                        </button>
-                        <button className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100" type="button" onClick={() => triggerReminder(row)}>
-                          <BellRing className="h-3.5 w-3.5" />
-                          Send Reminder
-                        </button>
+            <div className="divide-y divide-zinc-100">
+              {filteredRows.map((row) => {
+                const isExpanded = expandedCustomerId === row.customer_id;
+                return (
+                  <div key={row.customer_id}>
+                    <button className="grid w-full gap-3 px-5 py-4 text-left hover:bg-zinc-50 md:grid-cols-[1fr_140px_140px_140px_auto]" type="button" onClick={() => setExpandedCustomerId(isExpanded ? null : row.customer_id)}>
+                      <div>
+                        <p className="font-semibold text-zinc-950">{row.customer_name}</p>
+                        <p className="text-sm text-zinc-500">{row.customer_phone} · {row.place || "-"}</p>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <Summary label="Total Bill" value={money(row.total_bill_amount)} />
+                      <Summary label="Total Paid" value={money(row.total_paid)} />
+                      <Summary label="Pending" value={money(row.current_pending_balance)} strong />
+                      <span className="flex items-center justify-end gap-2 text-sm font-semibold text-brand-700">
+                        {(row.bills || []).length} bills
+                        <ChevronDown className={`h-4 w-4 transition ${isExpanded ? "rotate-180" : ""}`} />
+                      </span>
+                    </button>
+
+                    {isExpanded ? (
+                      <div className="bg-zinc-50 px-5 pb-5">
+                        <div className="overflow-hidden rounded-md border border-zinc-200 bg-white">
+                          <table className="min-w-full divide-y divide-zinc-200 text-sm">
+                            <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
+                              <tr>
+                                <th className="px-4 py-3">Order ID</th>
+                                <th className="px-4 py-3">Date</th>
+                                <th className="px-4 py-3 text-right">Bill Amount</th>
+                                <th className="px-4 py-3 text-right">Remaining</th>
+                                <th className="px-4 py-3 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-100">
+                              {(row.bills || []).map((bill) => (
+                                <tr key={bill.order_id}>
+                                  <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id}</td>
+                                  <td className="px-4 py-3 text-zinc-600">{formatDateTime(bill.order_date)}</td>
+                                  <td className="px-4 py-3 text-right text-zinc-700">{money(bill.bill_amount)}</td>
+                                  <td className="px-4 py-3 text-right font-semibold text-red-700">{money(bill.remaining_balance)}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    <div className="flex justify-end gap-2">
+                                      <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row, bill)}>
+                                        Pay Bill
+                                      </button>
+                                      <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => clearBill(row, bill)}>
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mt-3 flex justify-end gap-2">
+                          <button className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100" type="button" onClick={() => triggerReminder(row)}>
+                            <BellRing className="h-3.5 w-3.5" />
+                            Send Reminder
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
@@ -204,6 +269,7 @@ export default function OutstandingPage() {
               <div>
                 <h2 className="text-lg font-semibold text-zinc-950">Record Payment</h2>
                 <p className="text-sm text-zinc-500">{selected.customer_name} - {selected.customer_phone}</p>
+                {selectedBill ? <p className="mt-1 text-xs font-medium text-brand-700">Order #{selectedBill.order_id}</p> : null}
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600" type="button" onClick={() => setSelected(null)}>
                 <X className="h-4 w-4" />
@@ -213,7 +279,7 @@ export default function OutstandingPage() {
             <div className="mt-5 grid gap-4">
               <label className="grid gap-1 text-sm font-medium text-zinc-700">
                 Amount Paid
-                <input className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="number" value={payment.amount_paid} onFocus={(event) => event.target.select()} onChange={(event) => setPayment((current) => ({ ...current, amount_paid: Number(event.target.value) }))} />
+                <input className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="number" value={payment.amount_paid === 0 ? "" : payment.amount_paid} onChange={(event) => setPayment((current) => ({ ...current, amount_paid: event.target.value === "" ? 0 : Number(event.target.value) }))} />
               </label>
               <label className="grid gap-1 text-sm font-medium text-zinc-700">
                 Payment Mode

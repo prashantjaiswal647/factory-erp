@@ -64,6 +64,7 @@ class User(Base):
     user_id = Column(String(36), nullable=True, unique=True, index=True)
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
     username = Column(String(100), nullable=False, unique=True, index=True)
+    email = Column(String(255), nullable=True, unique=True, index=True)
     phone_number = Column(String(50), nullable=True, unique=True, index=True)
     full_name = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
@@ -75,7 +76,7 @@ class User(Base):
     owned_factory = relationship("Factory", back_populates="owner", foreign_keys="Factory.owner_phone_number")
 
     __table_args__ = (
-        CheckConstraint("role IN ('Owner', 'Supervisor', 'Operator')", name="ck_users_role"),
+        CheckConstraint("role IN ('Owner', 'Sub-Owner', 'Supervisor', 'Operator')", name="ck_users_role"),
     )
 
 
@@ -163,6 +164,7 @@ class Customer(TenantMixin, Base):
     previous_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     total_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     contact_number = Column(String(50), nullable=True)
+    telegram_id = Column(String(100), nullable=True, index=True)
     firm_name = Column(String(255), nullable=True, index=True)
     store_token = Column(String(255), nullable=True, unique=True, index=True)
     is_portal_approved = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
@@ -214,7 +216,10 @@ class Inventory(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     item_name = Column(String(255), nullable=False, index=True)
-    category = Column(String(50), nullable=False, index=True)
+    category = Column(String(50), nullable=True, index=True)
+    packaging_size = Column(String(100), nullable=True, index=True)
+    pieces_per_packet = Column(Integer, nullable=True, default=1, server_default="1")
+    packets_per_box = Column(Integer, nullable=True, default=0, server_default="0")
     unit = Column(String(50), nullable=False)
     quantity = Column(Numeric(14, 3), nullable=False, default=0)
     price_per_unit = Column(Numeric(14, 2), nullable=False, default=0)
@@ -447,6 +452,20 @@ class ExpenseLog(TenantMixin, Base):
     )
 
 
+class FactoryExpense(TenantMixin, Base):
+    __tablename__ = "factory_expenses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    expense_name = Column(String(255), nullable=False, index=True)
+    amount = Column(Numeric(14, 2), nullable=False)
+    category = Column(String(100), nullable=False, default="General", server_default="General", index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="ck_factory_expenses_amount_non_negative"),
+    )
+
+
 class Employee(TenantMixin, Base):
     __tablename__ = "employees"
 
@@ -630,22 +649,29 @@ class Order(TenantMixin, Base):
         server_default=func.now(),
         index=True,
     )
-    status = Column(String(50), nullable=False, default="Pending", server_default="Pending", index=True)
+    status = Column(String(50), nullable=False, default="pending_owner", server_default="pending_owner", index=True)
     payment_method = Column(String(50), nullable=False)
     total_amount = Column(Numeric(14, 2), nullable=False, default=0)
+    amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    balance_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    payment_status = Column(String(50), nullable=False, default="Unpaid", server_default="Unpaid", index=True)
+    pending_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     terms_accepted = Column(Boolean, nullable=False, default=False)
     is_discount_revoked = Column(Boolean, nullable=False, default=False, server_default="false")
+    owner_confirmed_at = Column(DateTime(timezone=True), nullable=True)
 
     customer = relationship("Customer", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
 
     __table_args__ = (
-        CheckConstraint("status IN ('Pending', 'Approved', 'Rejected')", name="ck_orders_status"),
+        CheckConstraint("status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected')", name="ck_orders_status"),
         CheckConstraint(
             "payment_method IN ('Normal_Credit', 'Full_Advance_UPI', 'Full_Advance_Doorstep')",
             name="ck_orders_payment_method",
         ),
         CheckConstraint("total_amount >= 0", name="ck_orders_total_amount_non_negative"),
+        CheckConstraint("amount_paid >= 0", name="ck_orders_amount_paid_non_negative"),
+        CheckConstraint("balance_amount >= 0", name="ck_orders_balance_amount_non_negative"),
     )
 
 
@@ -654,10 +680,17 @@ class OrderItem(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, index=True)
-    product_id = Column(Integer, ForeignKey("finished_goods_stock.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("finished_goods_stock.id"), nullable=True, index=True)
     quantity = Column(Integer, nullable=False)
     base_rate = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     final_rate = Column(Numeric(14, 2), nullable=False)
+    product_size_ml = Column(Integer, nullable=True, index=True)
+    variety = Column(String(100), nullable=True, index=True)
+    packaging_size_name = Column(String(100), nullable=True, index=True)
+    boxes_sold = Column(Integer, nullable=False, default=0, server_default="0")
+    loose_packets_sold = Column(Integer, nullable=False, default=0, server_default="0")
+    rate_per_box = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    rate_per_packet = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
 
     order = relationship("Order", back_populates="items")
     product = relationship("FinishedGoodsStock", back_populates="order_items")
@@ -666,6 +699,10 @@ class OrderItem(TenantMixin, Base):
         CheckConstraint("quantity > 0", name="ck_order_items_quantity_positive"),
         CheckConstraint("base_rate >= 0", name="ck_order_items_base_rate_non_negative"),
         CheckConstraint("final_rate >= 0", name="ck_order_items_final_rate_non_negative"),
+        CheckConstraint("boxes_sold >= 0", name="ck_order_items_boxes_sold_non_negative"),
+        CheckConstraint("loose_packets_sold >= 0", name="ck_order_items_loose_packets_sold_non_negative"),
+        CheckConstraint("rate_per_box >= 0", name="ck_order_items_rate_per_box_non_negative"),
+        CheckConstraint("rate_per_packet >= 0", name="ck_order_items_rate_per_packet_non_negative"),
     )
 
 
@@ -799,6 +836,8 @@ class FinalProductStock(TenantMixin, Base):
     product_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
+    pieces_per_packet = Column(Integer, nullable=False, default=1, server_default="1")
+    current_quantity = Column(Integer, nullable=False, default=0, server_default="0")
     total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
     loose_packets = Column(Integer, nullable=False, default=0, server_default="0")
     packets_per_box_limit = Column(Integer, nullable=False)
@@ -809,6 +848,7 @@ class FinalProductStock(TenantMixin, Base):
         CheckConstraint("product_size_ml > 0", name="ck_final_product_size_positive"),
         CheckConstraint("loose_packets >= 0", name="ck_final_product_loose_non_negative"),
         CheckConstraint("packets_per_box_limit > 0", name="ck_final_product_packets_limit_positive"),
+        CheckConstraint("pieces_per_packet > 0", name="ck_final_product_pieces_per_packet_positive"),
     )
 
 

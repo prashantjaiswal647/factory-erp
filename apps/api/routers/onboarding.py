@@ -113,6 +113,37 @@ class OnboardingCustomerSummary(BaseModel):
     total_due: Decimal
 
 
+class FinalProductOpeningStockRequest(BaseModel):
+    product_id: Optional[int] = Field(default=None, gt=0)
+    product_size_ml: Optional[int] = Field(default=None, gt=0)
+    variety: str = Field(default="Standard/White", max_length=100)
+    packaging_size: Optional[str] = Field(default=None, max_length=100)
+    packaging_size_name: Optional[str] = Field(default=None, max_length=100)
+    initial_quantity: int = Field(default=0, ge=0)
+    current_quantity: Optional[int] = Field(default=None, ge=0)
+    total_boxes: Optional[int] = Field(default=None, ge=0)
+    loose_packets: int = Field(default=0, ge=0)
+    pieces_per_packet: int = Field(default=1, gt=0)
+    packets_per_box: Optional[int] = Field(default=None, gt=0)
+    packets_per_box_limit: Optional[int] = Field(default=None, gt=0)
+    category: Optional[str] = None
+
+
+class FinalProductOpeningStockResponse(BaseModel):
+    id: int
+    factory_id: int
+    product_size_ml: Optional[int] = None
+    variety: Optional[str] = None
+    packaging_size: Optional[str] = None
+    packaging_size_name: Optional[str] = None
+    pieces_per_packet: Optional[int] = None
+    packets_per_box: Optional[int] = None
+    current_quantity: Optional[int] = None
+    total_boxes: Optional[int] = None
+    loose_packets: Optional[int] = None
+    packets_per_box_limit: Optional[int] = None
+
+
 class BottomStockCreate(BaseModel):
     bottom_size_mm: int = Field(..., gt=0)
     bag_weight_kg: Optional[Decimal] = Field(default=None, ge=0)
@@ -162,6 +193,91 @@ def onboarding_overview(
             .all()
         ),
     )
+
+
+@router.post("/final-stock", response_model=FinalProductOpeningStockResponse)
+def save_final_product_opening_stock(
+    payload: FinalProductOpeningStockRequest,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    try:
+        packaging_size_name = (payload.packaging_size_name or payload.packaging_size or "").strip()
+        packets_per_box_limit = payload.packets_per_box_limit or payload.packets_per_box
+        quantity = payload.current_quantity
+        if quantity is None:
+            quantity = payload.total_boxes
+        if quantity is None:
+            quantity = payload.initial_quantity
+
+        if payload.product_id:
+            stock = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == current_user.factory_id)
+                .filter(FinalProductStock.id == payload.product_id)
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock item not found")
+        else:
+            if payload.product_size_ml is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="product_size_ml is required")
+            if not packaging_size_name:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packaging_size or packaging_size_name is required")
+            if packets_per_box_limit is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packets_per_box or packets_per_box_limit is required")
+            stock = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == current_user.factory_id)
+                .filter(FinalProductStock.product_size_ml == payload.product_size_ml)
+                .filter(FinalProductStock.variety == payload.variety)
+                .filter(FinalProductStock.packaging_size_name == packaging_size_name)
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                stock = FinalProductStock(
+                    factory_id=current_user.factory_id,
+                    product_size_ml=payload.product_size_ml,
+                    variety=payload.variety,
+                    packaging_size_name=packaging_size_name,
+                    pieces_per_packet=payload.pieces_per_packet,
+                    packets_per_box_limit=packets_per_box_limit,
+                )
+                db.add(stock)
+
+        if packaging_size_name:
+            stock.packaging_size_name = packaging_size_name
+        if packets_per_box_limit is not None:
+            stock.packets_per_box_limit = packets_per_box_limit
+        stock.variety = payload.variety
+        stock.pieces_per_packet = payload.pieces_per_packet
+        stock.current_quantity = quantity
+        stock.total_boxes = quantity
+        stock.loose_packets = payload.loose_packets
+        db.commit()
+        db.refresh(stock)
+        return FinalProductOpeningStockResponse(
+            id=stock.id,
+            factory_id=stock.factory_id,
+            product_size_ml=stock.product_size_ml,
+            variety=stock.variety or "Standard/White",
+            packaging_size=stock.packaging_size_name,
+            packaging_size_name=stock.packaging_size_name,
+            pieces_per_packet=stock.pieces_per_packet,
+            packets_per_box=stock.packets_per_box_limit,
+            current_quantity=stock.current_quantity if stock.current_quantity is not None else 0,
+            total_boxes=stock.total_boxes or 0,
+            loose_packets=stock.loose_packets or 0,
+            packets_per_box_limit=stock.packets_per_box_limit,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/workers", response_model=List[OnboardingWorkerSummary])
@@ -685,6 +801,7 @@ def onboarding_step3_materials(
                     factory_id=factory_id,
                     product_size_ml=item.cup_size_ml,
                     packaging_size_name=packaging_size_name,
+                    current_quantity=0,
                     total_boxes=0,
                     loose_packets=0,
                     packets_per_box_limit=item.cups_per_box,

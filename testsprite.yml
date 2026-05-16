@@ -1,0 +1,9 @@
+version: "1.0"
+project:
+  name: "Factory ERP SaaS"
+  prd: "docs/testsprite-prd.md"
+api:
+  base_url: "http://localhost:8000"
+  openapi_spec: "http://localhost:8000/openapi.json"
+frontend:
+  base_url: "http://localhost:5173"

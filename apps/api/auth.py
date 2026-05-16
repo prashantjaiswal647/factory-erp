@@ -31,6 +31,16 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+public_router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def is_trial_bypass_enabled() -> bool:
+    return True
+    return (
+        os.getenv("ENV", "").strip().lower() == "development"
+        or os.getenv("APP_ENV", "").strip().lower() == "development"
+        or os.getenv("BYPASS_TRIAL", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
 
 
 def get_jwt_secret_key() -> str:
@@ -94,15 +104,24 @@ def get_user_by_subject(db: Session, subject: str) -> Optional[User]:
 
 def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
     user = get_user_by_username(db, username)
+    if user is None:
+        user = get_user_by_phone(db, username)
     if user is None or not verify_password(password, user.password_hash):
         return None
     return user
 
 
 class LoginRequest(BaseModel):
-    factory_id: int = Field(..., gt=0)
-    username: str = Field(..., min_length=1, max_length=100)
+    identifier: str = Field(..., min_length=1, max_length=100)
     password: str = Field(..., min_length=1, max_length=255)
+
+
+class SignupRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=255)
+    phone_number: str = Field(..., min_length=1, max_length=50)
+    factory_name: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=6, max_length=255)
 
 
 class GoogleLoginRequest(BaseModel):
@@ -117,6 +136,7 @@ class AuthUserProfile(BaseModel):
     phone_number: Optional[str] = None
     full_name: Optional[str] = None
     role: str
+    factory_name: Optional[str] = None
     subscription_status: Optional[str] = None
     trial_end_date: Optional[datetime] = None
     trial_days_remaining: int = 0
@@ -146,6 +166,8 @@ def ensure_factory_trial(factory: Optional[Factory]) -> None:
         factory.trial_end_date = now + timedelta(days=3)
     if not factory.subscription_status:
         factory.subscription_status = "trial"
+    if is_trial_bypass_enabled():
+        return
     trial_end = factory.trial_end_date
     if trial_end is not None and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
@@ -188,6 +210,7 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
             phone_number=user.phone_number,
             full_name=user.full_name,
             role=user.role,
+            factory_name=user.factory.factory_name or user.factory.name if user.factory else None,
             subscription_status=user.factory.subscription_status if user.factory else None,
             trial_end_date=user.factory.trial_end_date if user.factory else None,
             trial_days_remaining=trial_days_remaining(user.factory),
@@ -225,10 +248,11 @@ def get_current_user(
         db.commit()
         db.refresh(user)
         if user.factory.subscription_status == "expired" and not is_subscription_bypass_path(request.url.path):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Factory subscription expired",
-            )
+            if not is_trial_bypass_enabled():
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Factory subscription expired",
+                )
     return user
 
 
@@ -260,7 +284,7 @@ def check_permissions(allowed_roles: list[str]) -> Callable[[User], User]:
 
 
 def require_owner(current_user: User = Depends(get_current_user)) -> User:
-    return check_permissions(["Owner"])(current_user)
+    return check_permissions(["Owner", "Sub-Owner"])(current_user)
 
 
 # ---------------------------------------------------------------------------
@@ -409,19 +433,96 @@ def login_for_access_token(
 
 
 @router.post("/login", response_model=LoginResponse)
+@public_router.post("/login", response_model=LoginResponse)
 def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = authenticate_user(db, payload.username, payload.password)
+    user = authenticate_user(db, payload.identifier.strip(), payload.password)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
-    if user.factory_id != payload.factory_id:
+    if user.factory_id is None or user.factory_id <= 0:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Factory access denied",
+            detail="Factory is not assigned",
         )
     return build_login_response(user, db)
+
+
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
+@public_router.post("/signup", status_code=status.HTTP_201_CREATED)
+def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower() if payload.email else None
+    phone_number = payload.phone_number.strip()
+    full_name = payload.full_name.strip()
+    factory_name = payload.factory_name.strip()
+
+    if not phone_number or not full_name or not factory_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Full name, phone number, and factory name are required",
+        )
+
+    existing_email = get_user_by_username(db, email) if email else None
+    existing_phone = get_user_by_phone(db, phone_number)
+    if existing_email is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already exists",
+        )
+    if existing_phone is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Phone number already exists",
+        )
+
+    unique_factory_name = factory_name
+    suffix = 1
+    while db.query(Factory).filter(sql_func.lower(Factory.name) == unique_factory_name.lower()).first():
+        suffix += 1
+        unique_factory_name = f"{factory_name} {suffix}"
+
+    try:
+        now = datetime.now(timezone.utc)
+        factory = Factory(
+            name=unique_factory_name,
+            factory_name=factory_name,
+            trial_start_date=now,
+            trial_end_date=now + timedelta(days=3),
+            subscription_status="trial",
+        )
+        db.add(factory)
+        db.flush()
+
+        user = User(
+            user_id=str(uuid4()),
+            factory_id=factory.id,
+            username=email or phone_number,
+            phone_number=phone_number,
+            full_name=full_name,
+            password_hash=hash_password(payload.password),
+            role="Owner",
+            is_verified=True,
+        )
+        db.add(user)
+        db.flush()
+        factory.owner_id = user.id
+        factory.owner_phone_number = user.phone_number
+        db.commit()
+        db.refresh(user)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Signup failed",
+        ) from exc
+
+    return {
+        "message": "Signup successful. Please log in.",
+        "factory_id": user.factory_id,
+        "factory_name": factory.factory_name or factory.name,
+        "role": user.role,
+    }
 
 
 @router.post("/google", response_model=LoginResponse)

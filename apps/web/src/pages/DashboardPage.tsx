@@ -1,8 +1,9 @@
-import { AlertTriangle, Bot, Boxes, Factory, IndianRupee, PackageCheck, RefreshCw, Trash2, UserRound, WalletCards, Wrench } from "lucide-react";
+import { AlertTriangle, Bell, Bot, Boxes, Check, Factory, IndianRupee, PackageCheck, RefreshCw, Trash2, UserRound, WalletCards, Wrench, X } from "lucide-react";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { useAuth } from "../context/AuthContext";
 import {
   getDashboardMachines,
   getDashboardMaterials,
@@ -11,13 +12,17 @@ import {
   getInventory,
   getProductionAlerts,
   getAiDashboardInsights,
-  getBillingStatus,
   deleteDashboardCustomer,
   deleteDashboardMachine,
   deleteDashboardRawMaterial,
-  deleteDashboardWorker
+  deleteDashboardWorker,
+  getPendingSales,
+  approveSalesOrder,
+  rejectSalesOrder,
+  getPendingPaymentDues,
+  triggerPaymentReminders
 } from "../lib/api";
-import type { AiDashboardInsights, BillingStatus, DashboardCustomer, DashboardMachine, DashboardMaterials, DashboardWorker, LiveStockRow, ProductionAlertsResponse } from "../lib/api";
+import type { AiDashboardInsights, DashboardCustomer, DashboardMachine, DashboardMaterials, DashboardWorker, LiveStockRow, PendingDue, PendingSale, ProductionAlertsResponse } from "../lib/api";
 
 export default function DashboardPage() {
   const [workers, setWorkers] = useState<DashboardWorker[]>([]);
@@ -26,12 +31,16 @@ export default function DashboardPage() {
   const [materials, setMaterials] = useState<DashboardMaterials>({ raw_material_metrics: [], packaging_metrics: [] });
   const [inventory, setInventory] = useState<LiveStockRow[]>([]);
   const [productionAlerts, setProductionAlerts] = useState<ProductionAlertsResponse | null>(null);
+  const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
+  const [pendingDues, setPendingDues] = useState<PendingDue[]>([]);
+  const [isApprovalsOpen, setIsApprovalsOpen] = useState(false);
+  const [isTriggeringReminders, setIsTriggeringReminders] = useState(false);
   const [aiInsights, setAiInsights] = useState<AiDashboardInsights | null>(null);
-  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   const [typedInsight, setTypedInsight] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -42,7 +51,7 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError("");
     try {
-      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, billingRes] = await Promise.all([
+      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, pendingRes, duesRes] = await Promise.all([
         getDashboardWorkers(),
         getDashboardMachines(),
         getDashboardMaterials(),
@@ -50,7 +59,8 @@ export default function DashboardPage() {
         getInventory(),
         getProductionAlerts(),
         getAiDashboardInsights(),
-        getBillingStatus()
+        user?.role === "Owner" ? getPendingSales() : Promise.resolve({ data: [] as PendingSale[] }),
+        user?.role === "Owner" ? getPendingPaymentDues() : Promise.resolve({ data: [] as PendingDue[] })
       ]);
       setWorkers(workerRes.data);
       setMachines(machineRes.data);
@@ -59,7 +69,8 @@ export default function DashboardPage() {
       setInventory(inventoryRes.data);
       setProductionAlerts(alertRes.data);
       setAiInsights(aiRes.data);
-      setBillingStatus(billingRes.data);
+      setPendingSales(pendingRes.data);
+      setPendingDues(duesRes.data);
     } catch (caught) {
       if (axios.isAxiosError(caught) && caught.response?.status === 401) {
         localStorage.clear();
@@ -108,6 +119,33 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleApproval(orderId: number, action: "approve" | "reject") {
+    try {
+      const response = action === "approve" ? await approveSalesOrder(orderId) : await rejectSalesOrder(orderId);
+      setPendingSales((current) => current.filter((sale) => sale.order_id !== orderId));
+      setToast({
+        type: "success",
+        message: action === "approve" ? "Bill sent to Customer via WhatsApp." : response.data.message
+      });
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Approval action failed";
+      setToast({ type: "error", message });
+    }
+  }
+
+  async function handleTriggerPaymentReminders() {
+    setIsTriggeringReminders(true);
+    try {
+      const response = await triggerPaymentReminders();
+      setToast({ type: "success", message: response.data.message });
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Payment reminder trigger failed";
+      setToast({ type: "error", message });
+    } finally {
+      setIsTriggeringReminders(false);
+    }
+  }
+
   const stockStatus = useMemo(() => {
     if (inventory.length === 0) return "Not initialized";
     if (inventory.some((row) => Number(row.quantity) < 0)) return "Negative stock";
@@ -153,16 +191,6 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
-      {billingStatus?.subscription_status === "trial" ? (
-        <div className="sticky top-0 z-20 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <span>
-            You are on a free trial. {billingStatus.trial_days_remaining} day{billingStatus.trial_days_remaining === 1 ? "" : "s"} remaining.
-          </span>
-          <Link className="inline-flex h-9 items-center justify-center rounded-md bg-[#004D40] px-3 font-semibold text-white hover:bg-[#00695C]" to="/billing">
-            Upgrade Now
-          </Link>
-        </div>
-      ) : null}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-950">Live Factory Overview</h1>
@@ -173,6 +201,111 @@ export default function DashboardPage() {
           Refresh
         </button>
       </header>
+
+      {user?.role === "Owner" ? <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm">
+        <button className="flex w-full items-center justify-between gap-4 text-left" type="button" onClick={() => setIsApprovalsOpen((current) => !current)}>
+          <span className="flex items-center gap-3">
+            <span className="relative grid h-10 w-10 place-items-center rounded-md bg-amber-100 text-amber-800">
+              <Bell className="h-5 w-5" />
+              {pendingSales.length > 0 ? <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-xs font-bold text-white">{pendingSales.length}</span> : null}
+            </span>
+            <span>
+              <span className="block text-base font-semibold text-amber-950">Pending Approvals</span>
+              <span className="text-sm text-amber-800">{pendingSales.length} sales waiting for owner confirmation</span>
+            </span>
+          </span>
+          <span className="text-sm font-semibold text-amber-900">{isApprovalsOpen ? "Hide" : "View"}</span>
+        </button>
+
+        {isApprovalsOpen ? (
+          <div className="mt-4 space-y-3">
+            {pendingSales.length === 0 ? (
+              <p className="rounded-md bg-white/70 p-4 text-sm text-amber-900">No pending sales.</p>
+            ) : (
+              pendingSales.map((sale) => (
+                <div key={sale.order_id} className="rounded-md border border-amber-200 bg-white p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="font-semibold text-zinc-950">Order #{sale.order_id} - {sale.customer_name}</p>
+                      <p className="mt-1 text-sm text-zinc-600">{sale.customer_phone || "No phone"} · Rs {Number(sale.total_amount).toLocaleString("en-IN")}</p>
+                      <div className="mt-2 space-y-1 text-sm text-zinc-600">
+                        {sale.items.map((item, index) => (
+                          <p key={`${sale.order_id}-${index}`}>
+                            {item.product_size_ml || "-"}ml {item.variety || ""} {item.packaging_size_name || ""} · {item.boxes_sold} boxes {item.loose_packets_sold ? `+ ${item.loose_packets_sold} loose` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700" type="button" onClick={() => handleApproval(sale.order_id, "approve")}>
+                        <Check className="h-4 w-4" />
+                        Approve
+                      </button>
+                      <button className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 hover:bg-red-50" type="button" onClick={() => handleApproval(sale.order_id, "reject")}>
+                        <X className="h-4 w-4" />
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+      </section> : null}
+
+      {user?.role === "Owner" ? (
+        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <SectionTitle icon={WalletCards} title="Outstanding Payment Dues Tracker" />
+            <button
+              className="inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+              disabled={isTriggeringReminders}
+              type="button"
+              onClick={handleTriggerPaymentReminders}
+            >
+              {isTriggeringReminders ? "Pushing reminders..." : "⚡ Trigger Automated WhatsApp Reminders Now"}
+            </button>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-200">
+              <thead className="bg-zinc-50">
+                <tr>
+                  <Th>Customer Name</Th>
+                  <Th>Phone</Th>
+                  <Th>Invoice Reference</Th>
+                  <Th align="right">Total Bill</Th>
+                  <Th align="right">Pending Balance</Th>
+                  <Th>Status</Th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {pendingDues.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-5 text-sm text-zinc-500" colSpan={6}>No unpaid or half-paid invoices.</td>
+                  </tr>
+                ) : (
+                  pendingDues.map((due) => (
+                    <tr key={due.invoice_id} className="hover:bg-zinc-50">
+                      <Td strong>{due.customer_name}</Td>
+                      <Td>{due.customer_phone || "-"}</Td>
+                      <Td>INV-{due.invoice_id}</Td>
+                      <Td align="right">Rs {Number(due.total_amount || 0).toLocaleString("en-IN")}</Td>
+                      <Td align="right">Rs {Number(due.pending_amount || 0).toLocaleString("en-IN")}</Td>
+                      <Td>
+                        <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${due.payment_status === "Half-Paid" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                          {due.payment_status}
+                        </span>
+                      </Td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="overflow-hidden rounded-lg border border-[#004D40]/30 bg-[#07100f] text-white shadow-sm">
         <div className="grid gap-5 p-5 lg:grid-cols-[auto_1fr]">

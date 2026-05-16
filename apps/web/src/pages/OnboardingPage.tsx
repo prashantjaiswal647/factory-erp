@@ -1,9 +1,9 @@
-import { Check, Factory, Plus, Settings, Trash2, UserRound } from "lucide-react";
-import { useState } from "react";
+import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker } from "../lib/api";
-import type { BoxPackagingStockCreate, MachineCreate, PlasticStockCreate, WorkerCreate } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, saveFinalProductOpeningStock } from "../lib/api";
+import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, PlasticStockCreate, WorkerCreate } from "../lib/api";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 
 const todayWorker: WorkerCreate = { name: "", daily_wages: 0, duty_hours: 8 };
@@ -11,6 +11,7 @@ const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20,
 const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
 const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", quantity: 0, price_per_box: 0 };
 const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
+const finalProductStockDraft = { product_id: 0, initial_quantity: 0 };
 const machineDraft: MachineCreate = {
   machine_type: "Paper Cup",
   machine_number: "",
@@ -29,8 +30,23 @@ export default function OnboardingPage() {
   const [bottomStock, setBottomStock] = useState(bottomStockDraft);
   const [boxStock, setBoxStock] = useState<BoxPackagingStockCreate>(boxStockDraft);
   const [plasticStock, setPlasticStock] = useState<PlasticStockCreate>(plasticStockDraft);
+  const [finalProductStock, setFinalProductStock] = useState(finalProductStockDraft);
+  const [finalProducts, setFinalProducts] = useState<FinalStockOption[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    void loadFinalProducts();
+  }, []);
+
+  async function loadFinalProducts() {
+    const response = await getFinalStockOptions();
+    setFinalProducts(response.data);
+    setFinalProductStock((current) => ({
+      ...current,
+      product_id: current.product_id || response.data[0]?.id || 0
+    }));
+  }
 
   async function saveWorker() {
     if (!worker.name.trim()) return;
@@ -85,6 +101,16 @@ export default function OnboardingPage() {
     setIsSaving(false);
   }
 
+  async function addFinalProductStock() {
+    if (!finalProductStock.product_id) return;
+    setIsSaving(true);
+    await saveFinalProductOpeningStock(finalProductStock);
+    setToast("Final product opening stock saved");
+    setFinalProductStock(finalProductStockDraft);
+    await loadFinalProducts();
+    setIsSaving(false);
+  }
+
   function updateBottomStock(patch: Partial<typeof bottomStockDraft>) {
     const previousSuggestedRolls = (bottomStock.rolls_per_bag || 0) * (bottomStock.total_bags || 0);
     const previousSuggestedWeight = Number(((bottomStock.bag_weight_kg || 0) * (bottomStock.total_bags || 0)).toFixed(3));
@@ -115,8 +141,8 @@ export default function OnboardingPage() {
 
       <ConfigurationOverview />
 
-      <div className="grid gap-3 md:grid-cols-3">
-        {["Workers", "Machines", "Raw Materials"].map((label, index) => (
+      <div className="grid gap-3 md:grid-cols-4">
+        {["Workers", "Machines", "Raw Materials", "Final Product Stock"].map((label, index) => (
           <button
             key={label}
             className={`flex h-12 items-center justify-center rounded-md border text-sm font-semibold ${
@@ -222,6 +248,27 @@ export default function OnboardingPage() {
           </div>
         </Panel>
       ) : null}
+
+      {step === 3 ? (
+        <Panel icon={PackageCheck} title="Final Product Stock">
+          <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
+            <SelectInput
+              label="Product"
+              value={String(finalProductStock.product_id)}
+              options={finalProducts.map((product) => ({
+                label: `${product.product_size_ml}ml ${product.variety} / ${product.packaging_size_name} - current ${product.current_quantity ?? product.total_boxes} boxes`,
+                value: String(product.id)
+              }))}
+              onChange={(product_id) => setFinalProductStock({ ...finalProductStock, product_id: Number(product_id) })}
+            />
+            <NumberInput label="Initial Quantity (Boxes)" value={finalProductStock.initial_quantity} onChange={(initial_quantity) => setFinalProductStock({ ...finalProductStock, initial_quantity })} />
+          </div>
+          {finalProducts.length === 0 ? (
+            <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">Add product packaging metrics first so finished goods products are available here.</p>
+          ) : null}
+          <SaveButton label="Save Opening Stock" isSaving={isSaving} disabled={finalProducts.length === 0} onClick={addFinalProductStock} />
+        </Panel>
+      ) : null}
     </div>
   );
 
@@ -254,7 +301,7 @@ function NumberInput({ label, value, onChange, readOnly = false }: { label: stri
   return (
     <label className="block text-sm">
       {label ? <span className="font-medium text-zinc-700">{label}</span> : null}
-      <input className={`${label ? "mt-1" : ""} h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 read-only:bg-zinc-50 read-only:text-zinc-500`} type="number" value={value} readOnly={readOnly} onChange={(event) => onChange(Number(event.target.value))} />
+      <input className={`${label ? "mt-1" : ""} h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 read-only:bg-zinc-50 read-only:text-zinc-500`} placeholder="0" type="number" value={!readOnly && value === 0 ? "" : value} readOnly={readOnly} onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))} />
     </label>
   );
 }
@@ -266,6 +313,7 @@ function OptionalNumberInput({ label, value, onChange }: { label: string; value:
       <input
         className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
         type="number"
+        placeholder="0"
         value={value ?? ""}
         onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
       />
@@ -273,20 +321,23 @@ function OptionalNumberInput({ label, value, onChange }: { label: string; value:
   );
 }
 
-function SelectInput({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+function SelectInput({ label, value, options, onChange }: { label: string; value: string; options: Array<string | { label: string; value: string }>; onChange: (value: string) => void }) {
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
       <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => <option key={option}>{option}</option>)}
+        {options.map((option) => {
+          const normalized = typeof option === "string" ? { label: option, value: option } : option;
+          return <option key={normalized.value} value={normalized.value}>{normalized.label}</option>;
+        })}
       </select>
     </label>
   );
 }
 
-function SaveButton({ label, isSaving, onClick }: { label: string; isSaving: boolean; onClick: () => void }) {
+function SaveButton({ label, isSaving, disabled = false, onClick }: { label: string; isSaving: boolean; disabled?: boolean; onClick: () => void }) {
   return (
-    <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving} type="button" onClick={onClick}>
+    <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving || disabled} type="button" onClick={onClick}>
       <Check className="h-4 w-4" />
       {isSaving ? "Saving..." : label}
     </button>
