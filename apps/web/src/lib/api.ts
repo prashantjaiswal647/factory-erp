@@ -1,10 +1,20 @@
 import axios from "axios";
 
+// Runtime logic: Browser detect karega ki server ka IP kya hai
+const getBaseURL = () => {
+  // Production server ka IP check
+  if (typeof window !== 'undefined' && window.location.hostname === '187.127.165.219') {
+    return 'http://187.127.165.219:8000';
+  }
+  return import.meta.env.VITE_API_URL || 'http://localhost:8000';
+};
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || "http://localhost:8000",
+  baseURL: getBaseURL(),
   timeout: 10000
 });
 
+// Interceptor: Har request ke sath Token bhejne ke liye (Security)
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
   if (token) {
