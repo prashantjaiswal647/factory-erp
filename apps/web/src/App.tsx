@@ -12,6 +12,7 @@ import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import FactoryExpensesPage from "./pages/FactoryExpensesPage";
 import InventoryPage from "./pages/InventoryPage";
+import Integrations from "./pages/Integrations";
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 import OnboardingPage from "./pages/OnboardingPage";
@@ -64,6 +65,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner"]}>
               <StaffManagement />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="integrations"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <Integrations />
             </PrivateRoute>
           }
         />

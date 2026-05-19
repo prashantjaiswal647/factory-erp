@@ -75,6 +75,7 @@ from routers import attendance
 from routers import billing
 from routers import staff
 from routers import expenses
+from routers import integrations
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 
@@ -126,6 +127,7 @@ app.include_router(attendance.router)
 app.include_router(billing.router)
 app.include_router(staff.router)
 app.include_router(expenses.router)
+app.include_router(integrations.router)
 
 
 @app.exception_handler(Exception)
@@ -979,6 +981,7 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial'",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_customer_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_subscription_id VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(255)",
         "UPDATE factories SET factory_name = name WHERE factory_name IS NULL",
         (
             "CREATE TABLE IF NOT EXISTS machines ("

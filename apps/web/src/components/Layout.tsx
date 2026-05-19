@@ -1,4 +1,4 @@
-import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, ReceiptText, Search, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
+import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, PlugZap, ReceiptText, Search, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
@@ -26,6 +26,7 @@ const navigation: NavigationItem[] = [
   { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner"], section: "Admin" },
+  { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },
   { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] }
 ];
 
@@ -82,8 +83,8 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-zinc-100 text-zinc-950">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-zinc-200 bg-white lg:block">
-        <div className="flex h-16 items-center gap-3 border-b border-zinc-200 px-5">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden h-screen w-64 flex-col border-r border-zinc-200 bg-white lg:flex">
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-zinc-200 px-5">
           <div className="grid h-9 w-9 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
             AI
           </div>
@@ -93,7 +94,7 @@ export default function Layout() {
           </div>
         </div>
 
-        <nav className="space-y-1 px-3 py-4">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4">
           {navItems}
         </nav>
       </aside>
@@ -106,8 +107,8 @@ export default function Layout() {
             aria-label="Close navigation"
             onClick={() => setIsMobileNavOpen(false)}
           />
-          <aside className="relative h-full w-72 border-r border-zinc-200 bg-white shadow-xl">
-            <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-5">
+          <aside className="relative flex h-full max-h-screen w-72 flex-col border-r border-zinc-200 bg-white shadow-xl">
+            <div className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-200 px-5">
               <div className="flex items-center gap-3">
                 <div className="grid h-9 w-9 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
                   AI
@@ -127,36 +128,38 @@ export default function Layout() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <nav className="space-y-1 px-3 py-4">{navItems}</nav>
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4">{navItems}</nav>
           </aside>
         </div>
       ) : null}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-zinc-200 bg-white/95 px-4 pr-20 backdrop-blur sm:pr-80 lg:px-8 lg:pr-80">
-          <button
-            className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 lg:hidden"
-            type="button"
-            aria-label="Open navigation"
-            title="Open navigation"
-            onClick={() => setIsMobileNavOpen(true)}
-          >
-            <Menu className="h-4 w-4" />
-          </button>
+        <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between lg:px-8">
+          <div className="flex w-full items-center gap-3 md:min-w-0 md:flex-1">
+            <button
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-zinc-200 text-zinc-600 lg:hidden"
+              type="button"
+              aria-label="Open navigation"
+              title="Open navigation"
+              onClick={() => setIsMobileNavOpen(true)}
+            >
+              <Menu className="h-4 w-4" />
+            </button>
 
-          <div className="relative max-w-md flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <input
-              className="h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 pl-9 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
-              placeholder="Search materials, orders, suppliers"
-              type="search"
-            />
+            <div className="relative min-w-0 flex-1 md:max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <input
+                className="h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 pl-9 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
+                placeholder="Search materials, orders, suppliers"
+                type="search"
+              />
+            </div>
           </div>
 
-          <div className="absolute right-4 top-1/2 z-40 flex -translate-y-1/2 items-center justify-end gap-4 lg:right-8">
+          <div className="z-20 flex w-full items-center justify-between gap-3 md:w-auto md:shrink-0 md:justify-end">
             {user?.subscription_status === "trial" ? (
               <button
-                className="inline-flex h-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-900 shadow-sm transition hover:border-amber-300 hover:bg-amber-100"
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-900 shadow-sm transition hover:border-amber-300 hover:bg-amber-100"
                 type="button"
                 onClick={() => navigate("/billing")}
               >

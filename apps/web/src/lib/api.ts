@@ -135,6 +135,11 @@ export type RazorpayOrder = {
   currency: string;
 };
 
+export type TelegramIntegration = {
+  telegram_bot_token?: string | null;
+  is_configured: boolean;
+};
+
 export type DailySaleCreate = {
   date: string;
   customer_id: number;
@@ -819,4 +824,12 @@ export function verifyBillingPayment(payload: {
   razorpay_signature: string;
 }) {
   return api.post<BillingStatus & { razorpay_payment_id: string }>("/api/billing/verify", payload);
+}
+
+export function getTelegramIntegration() {
+  return api.get<TelegramIntegration>("/api/integrations/telegram");
+}
+
+export function saveTelegramIntegration(payload: { telegram_bot_token: string }) {
+  return api.post<TelegramIntegration>("/api/integrations/telegram", payload);
 }
