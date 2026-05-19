@@ -6,9 +6,9 @@ AI ERP System is a factory operations web application for managing a disposable 
 
 ## Test Targets
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:8000`
-- OpenAPI spec: `http://localhost:8000/openapi.json`
+- Frontend: `http://187.127.165.219:5173`
+- Backend: `http://187.127.165.219:8000`
+- OpenAPI spec: `http://187.127.165.219:8000/openapi.json`
 
 ## User Roles
 

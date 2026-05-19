@@ -1,0 +1,16 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "serverMode": "development",
+  "serverPort": 60543,
+  "localEndpoint": "http://187.127.165.219:5173",
+  "scope": "codebase",
+  "executionArgs": {
+    "projectName": "ai-erp-system",
+    "projectPath": "C:\\Users\\Prashant\\OneDrive\\Desktop\\Coding Projects\\ai-erp-system",
+    "testIds": [],
+    "additionalInstruction": "Test both frontend and backend for the Paper Cup Factory SaaS project. Frontend base URL: http://187.127.165.219:5173. Backend base URL: http://187.127.165.219:8000. OpenAPI spec: http://187.127.165.219:8000/openapi.json. Product requirements document: docs/testsprite-prd.md. Cover authentication/trial bypass, inventory variation serialization, production entry stock increment, sales invoice variation stock deduction, pending dues tracker, and automation reminder trigger flows.",
+    "serverMode": "development",
+    "envs": {}
+  }
+}

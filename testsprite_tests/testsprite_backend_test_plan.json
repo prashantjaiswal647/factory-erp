@@ -1,0 +1,81 @@
+[
+  {
+    "id": "BE001",
+    "title": "Health and OpenAPI endpoints are reachable",
+    "description": "Verify backend service health and OpenAPI discovery are available on the configured remote backend.",
+    "category": "smoke",
+    "priority": "High",
+    "steps": [
+      "Call GET http://187.127.165.219:8000/health",
+      "Call GET http://187.127.165.219:8000/openapi.json",
+      "Verify both responses are successful or OpenAPI is at least reachable with HTTP 200"
+    ]
+  },
+  {
+    "id": "BE002",
+    "title": "Inventory endpoint serializes nullable variation fields",
+    "description": "Verify GET /api/inventory/ returns inventory records without 500 errors when variation fields contain nulls.",
+    "category": "integration",
+    "priority": "High",
+    "steps": [
+      "Authenticate with valid test credentials",
+      "Call GET http://187.127.165.219:8000/api/inventory/",
+      "Verify response status is 200",
+      "Verify returned records include safe values for packaging_size, pieces_per_packet, packets_per_box, and category"
+    ]
+  },
+  {
+    "id": "BE003",
+    "title": "Final stock endpoint accepts packaging variation payload",
+    "description": "Verify POST /api/inventory/final-stock accepts packaging_size, pieces_per_packet, packets_per_box, category, and quantity data.",
+    "category": "integration",
+    "priority": "High",
+    "steps": [
+      "Authenticate with valid test credentials",
+      "POST a final stock variation payload to /api/inventory/final-stock",
+      "Verify the request does not fail with CORS, network reset, or 500",
+      "Verify the response contains persisted variation data"
+    ]
+  },
+  {
+    "id": "BE004",
+    "title": "Production entry increments stock for selected variation",
+    "description": "Verify POST /api/production/entry adds produced boxes to the inventory/final stock row scoped by factory_id, product_id, and packaging_size.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      "Authenticate with valid test credentials",
+      "Read existing inventory for a variation",
+      "POST a daily production entry with product_id, packaging_size, produced boxes, and shift",
+      "Read inventory again and verify current_quantity increased by the produced boxes"
+    ]
+  },
+  {
+    "id": "BE005",
+    "title": "Sales invoice approval deducts variation stock and blocks negative stock",
+    "description": "Verify sales order approval deducts stock for the exact variation and returns 400 when stock is insufficient.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      "Authenticate with valid test credentials",
+      "Create or use an inventory variation with known stock",
+      "Submit or approve a sales order for fewer boxes than available and verify stock decreases",
+      "Submit or approve a sales order exceeding available stock",
+      "Verify backend returns HTTP 400 with insufficient stock detail"
+    ]
+  },
+  {
+    "id": "BE006",
+    "title": "Pending dues and reminder automation routes work",
+    "description": "Verify GET /api/sales/dues/pending and POST /api/automation/trigger-payment-reminders return structured responses scoped to the authenticated factory.",
+    "category": "integration",
+    "priority": "Medium",
+    "steps": [
+      "Authenticate with valid test credentials",
+      "Call GET /api/sales/dues/pending",
+      "Verify response contains only Unpaid or Half-Paid invoices with pending_amount greater than 0",
+      "Call POST /api/automation/trigger-payment-reminders",
+      "Verify the response reports attempted reminder dispatches without crashing"
+    ]
+  }
+]

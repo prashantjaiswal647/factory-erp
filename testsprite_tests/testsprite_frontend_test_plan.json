@@ -1,0 +1,70 @@
+[
+  {
+    "id": "FE001",
+    "title": "Frontend application loads and exposes login flow",
+    "description": "Verify the React/Vite frontend loads from the configured remote URL and the login page is reachable.",
+    "category": "smoke",
+    "priority": "High",
+    "steps": [
+      "Open http://187.127.165.219:5173",
+      "Navigate to /login",
+      "Verify the page renders without a network or JavaScript fatal error",
+      "Verify login form controls are visible"
+    ]
+  },
+  {
+    "id": "FE002",
+    "title": "Inventory UI consumes variation inventory safely",
+    "description": "Verify authenticated inventory views can load data with packaging variation fields and no visible 500 crash.",
+    "category": "integration",
+    "priority": "High",
+    "steps": [
+      "Authenticate with configured test credentials if required",
+      "Navigate to the inventory section",
+      "Verify inventory data loads from GET /api/inventory/",
+      "Verify product variation fields such as packaging size, pieces per packet, packets per box, and category do not break rendering"
+    ]
+  },
+  {
+    "id": "FE003",
+    "title": "Production entry supports variation selection",
+    "description": "Verify the daily production page allows selecting product variation and shift details before submitting production boxes.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      "Authenticate with configured test credentials if required",
+      "Navigate to the production entry page",
+      "Open product and packaging variation selectors",
+      "Enter produced boxes and shift",
+      "Submit the form and verify the UI does not show a failed API/network error"
+    ]
+  },
+  {
+    "id": "FE004",
+    "title": "Sales invoice warns on insufficient variation stock",
+    "description": "Verify the billing/sales form selects inventory variations and warns when entered boxes exceed available stock.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      "Authenticate with configured test credentials if required",
+      "Navigate to the sales or billing page",
+      "Select a product variation from inventory-backed options",
+      "Enter a sold box quantity larger than available stock",
+      "Verify an Insufficient Stock warning appears and submission is blocked"
+    ]
+  },
+  {
+    "id": "FE005",
+    "title": "Outstanding payment dues tracker renders and triggers reminders",
+    "description": "Verify the dashboard dues tracker displays pending dues and calls the automation reminder route.",
+    "category": "integration",
+    "priority": "Medium",
+    "steps": [
+      "Authenticate as an owner or permitted user",
+      "Navigate to the dashboard",
+      "Locate Outstanding Payment Dues Tracker",
+      "Verify table columns for customer, phone, invoice reference, total bill, pending balance, and status",
+      "Click Trigger Automated WhatsApp Reminders Now and verify a success or handled error toast"
+    ]
+  }
+]

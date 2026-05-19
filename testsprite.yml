@@ -3,7 +3,7 @@ project:
   name: "Factory ERP SaaS"
   prd: "docs/testsprite-prd.md"
 api:
-  base_url: "http://localhost:8000"
-  openapi_spec: "http://localhost:8000/openapi.json"
+  base_url: "http://187.127.165.219:8000"
+  openapi_spec: "http://187.127.165.219:8000/openapi.json"
 frontend:
-  base_url: "http://localhost:5173"
+  base_url: "http://187.127.165.219:5173"

@@ -1,0 +1,16 @@
+# AI ERP System TestSprite PRD
+
+Frontend base URL: http://187.127.165.219:5173
+Backend base URL: http://187.127.165.219:8000
+OpenAPI spec: http://187.127.165.219:8000/openapi.json
+
+The app is a Paper Cup Factory SaaS with authenticated factory-scoped workflows for onboarding, inventory variation tracking, daily production entries, sales invoices, automatic stock deduction, pending payment dues, and reminder automation.
+
+Critical flows:
+- Login must allow a valid test user without trial-expiration blocking.
+- Inventory GET must serialize old rows with null variation fields safely.
+- Final stock onboarding must accept packaging variation fields.
+- Production entry must add stock for a specific product and packaging variation.
+- Sales invoice/order approval must deduct stock for the selected variation and reject insufficient stock.
+- Pending dues API must return Unpaid and Half-Paid invoices with customer details.
+- Reminder trigger must post pending dues to the n8n webhook route and return a structured result.
