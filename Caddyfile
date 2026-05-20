@@ -1,11 +1,19 @@
-http://munshiai.co.in, http://www.munshiai.co.in {
+munshiai.co.in, www.munshiai.co.in {
     reverse_proxy web:5173
 }
 
-http://api.munshiai.co.in {
+api.munshiai.co.in {
     reverse_proxy api:8000
 }
 
-http://n8n.munshiai.co.in {
+n8n.munshiai.co.in {
     reverse_proxy n8n:5678
+}
+
+db.munshiai.co.in {
+    basicauth {
+        admin $2a$14$dU.IHlaKBRe1i3WZe6NkJecPFEQ8wH0s0zm7GPLg16En2Sp2zrNdK
+    }
+
+    reverse_proxy adminer:8080
 }

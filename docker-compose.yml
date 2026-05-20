@@ -29,7 +29,7 @@ services:
         condition: service_healthy
     env_file: .env
     ports:
-      - "${LOCAL_API_PORT_MAP:-8000:8000}" # 👈 Local par khulega, VPS par safe rahega
+      - "${LOCAL_API_PORT_MAP:-127.0.0.1:8000:8000}"
     networks:
       - ai-erp-network
 
@@ -38,7 +38,7 @@ services:
     build: ./apps/web
     restart: always
     ports:
-      - "${LOCAL_WEB_PORT_MAP:-5173:5173}" # 👈 Local par khulega, VPS par safe rahega
+      - "${LOCAL_WEB_PORT_MAP:-127.0.0.1:5173:5173}"
     networks:
       - ai-erp-network
 
@@ -47,21 +47,32 @@ services:
     image: n8nio/n8n:latest
     restart: always
     environment:
-      - N8N_HOST=0.0.0.0
+      - N8N_HOST=${N8N_HOST:-n8n.munshiai.co.in}
       - N8N_PORT=5678
-      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
-      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
+      - N8N_USER_MANAGEMENT_DISABLED=false
+      - N8N_SECURE_COOKIE=true
+      - WEBHOOK_URL=${WEBHOOK_URL:-https://n8n.munshiai.co.in/}
       - GENERIC_TIMEZONE=Asia/Kolkata
       - ERP_API_BASE_URL=http://api:8000
       - ERP_API_KEY=${N8N_API_KEY}
     ports:
-      - "${LOCAL_N8N_PORT_MAP:-5678:5678}" # 👈 Local par khulega, VPS par safe rahega
+      - "${LOCAL_N8N_PORT_MAP:-127.0.0.1:5678:5678}"
     volumes:
       - n8n-data:/home/node/.n8n
     networks:
       - ai-erp-network
 
-  # 5. Caddy (Reverse Proxy - Runs everywhere, but handles traffic via Env)
+  # 5. Database Admin UI
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "${LOCAL_ADMINER_PORT_MAP:-127.0.0.1:8080:8080}"
+    networks:
+      - ai-erp-network
+
+  # 6. Caddy Reverse Proxy
   caddy:
     image: caddy:latest
     restart: always
