@@ -1,7 +1,10 @@
 version: '3.8'
 
 services:
+<<<<<<< HEAD
   # 1. Database
+=======
+>>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
   postgres:
     image: postgres:16-alpine
     container_name: ai-erp-postgres
@@ -20,7 +23,10 @@ services:
       timeout: 5s
       retries: 5
 
+<<<<<<< HEAD
   # 2. API Backend
+=======
+>>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
   api:
     build: ./apps/api
     restart: always
@@ -28,6 +34,15 @@ services:
       postgres:
         condition: service_healthy
     env_file: .env
+<<<<<<< HEAD
+=======
+    networks:
+      - ai-erp-network
+
+  web:
+    build: ./apps/web
+    restart: always
+>>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
     networks:
       - ai-erp-network
 
@@ -55,7 +70,10 @@ services:
     networks:
       - ai-erp-network
 
+<<<<<<< HEAD
   # 5. Caddy (Reverse Proxy - For Automatic HTTPS)
+=======
+>>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
   caddy:
     image: caddy:latest
     restart: always
@@ -75,4 +93,8 @@ networks:
 volumes:
   postgres-data:
   n8n-data:
+<<<<<<< HEAD
   caddy_data:
+=======
+  caddy_data:
+>>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d

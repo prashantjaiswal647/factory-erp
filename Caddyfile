@@ -1,0 +1,11 @@
+http://munshiai.co.in, http://www.munshiai.co.in {
+    reverse_proxy web:5173
+}
+
+http://api.munshiai.co.in {
+    reverse_proxy api:8000
+}
+
+http://n8n.munshiai.co.in {
+    reverse_proxy n8n:5678
+}
