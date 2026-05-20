@@ -95,3 +95,8 @@ volumes:
   postgres-data:
   n8n-data:
   caddy_data:
+
+api:
+    build: ./apps/api
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers
+    restart: always
