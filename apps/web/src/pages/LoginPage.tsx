@@ -23,9 +23,10 @@ declare global {
 type AuthTab = "login" | "signup";
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, login, loginWithGoogle, completeGoogleSignup: completeGoogleSignupAuth } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const [activeTab, setActiveTab] = useState<AuthTab>("login");
   const [identifier, setIdentifier] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -38,6 +39,13 @@ export default function LoginPage() {
     confirm_password: ""
   });
   const [signupCountryCode, setSignupCountryCode] = useState("+91");
+  const [googleCompletion, setGoogleCompletion] = useState<{
+    credential: string;
+    email: string;
+    full_name: string;
+    countryCode: string;
+    phoneNumber: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -72,12 +80,16 @@ export default function LoginPage() {
       setError("Password and Confirm Password do not match.");
       return;
     }
+    if (!signupForm.email.trim()) {
+      setError("Email address required hai.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       await api.post("/api/auth/signup", {
         full_name: signupForm.full_name.trim(),
-        email: signupForm.email.trim() || null,
+        email: signupForm.email.trim(),
         phone_number: `${signupCountryCode}${signupForm.phone_number.trim()}`,
         factory_name: signupForm.factory_name.trim(),
         password: signupForm.password
@@ -119,9 +131,9 @@ export default function LoginPage() {
   }
 
   async function startGoogleSignup() {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      setError("VITE_GOOGLE_CLIENT_ID is not configured.");
+    if (!googleClientId) {
+      console.error("VITE_GOOGLE_CLIENT_ID is not configured. Google OAuth button is disabled.");
+      setError("Google login abhi configure nahi hai. Normal sign up use karein.");
       return;
     }
     setIsSubmitting(true);
@@ -130,7 +142,7 @@ export default function LoginPage() {
     try {
       await loadGoogleScript();
       window.google?.accounts.id.initialize({
-        client_id: clientId,
+        client_id: googleClientId,
         callback: async (response) => {
           if (!response.credential) {
             setError("Google sign up cancelled.");
@@ -138,11 +150,21 @@ export default function LoginPage() {
             return;
           }
           try {
-            await api.post("/api/auth/google", { credential: response.credential });
-            setNotice("Google sign up successful. Please log in.");
-            setActiveTab("login");
-          } catch {
-            setError("Google sign up failed.");
+            const googleResponse = await api.post("/api/auth/google", { credential: response.credential });
+            if (googleResponse.data?.requires_phone_number) {
+              setGoogleCompletion({
+                credential: response.credential,
+                email: googleResponse.data.email,
+                full_name: googleResponse.data.full_name,
+                countryCode: "+91",
+                phoneNumber: ""
+              });
+              return;
+            }
+            await loginWithGoogle(response.credential);
+            navigate("/dashboard", { replace: true });
+          } catch (caught) {
+            setError(getErrorMessage(caught, "Google sign up failed."));
           } finally {
             setIsSubmitting(false);
           }
@@ -189,6 +211,11 @@ export default function LoginPage() {
                 <Field label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" type="password" />
               </div>
               <Messages error={error} notice={notice} />
+              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Login with Google"} onClick={startGoogleSignup} type="button">
+                <span className="text-lg font-bold text-[#4285F4]">G</span>
+                Log in with Google
+              </button>
+              {!googleClientId ? <p className="mt-2 text-xs text-zinc-500">Google login setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
               <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] shadow-[0_0_28px_rgba(178,255,89,.35)] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
                 <LogIn className="h-4 w-4" />
                 {isSubmitting ? "Signing in..." : "Login"}
@@ -198,7 +225,7 @@ export default function LoginPage() {
             <form onSubmit={submitSignup}>
               <div className="space-y-4">
                 <Field label="Full Name" value={signupForm.full_name} onChange={(full_name) => setSignupForm({ ...signupForm, full_name })} autoComplete="name" />
-                <Field label="Email (Optional)" value={signupForm.email} onChange={(email) => setSignupForm({ ...signupForm, email })} autoComplete="email" required={false} type="email" />
+                <Field label="Email" value={signupForm.email} onChange={(email) => setSignupForm({ ...signupForm, email })} autoComplete="email" type="email" />
                 <PhoneField
                   countryCode={signupCountryCode}
                   phoneNumber={signupForm.phone_number}
@@ -214,14 +241,42 @@ export default function LoginPage() {
                 <Check className="h-4 w-4" />
                 {isSubmitting ? "Creating..." : "Sign Up"}
               </button>
-              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} onClick={startGoogleSignup} type="button">
+              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Sign up with Google"} onClick={startGoogleSignup} type="button">
                 <span className="text-lg font-bold text-[#4285F4]">G</span>
                 Sign up with Google
               </button>
+              {!googleClientId ? <p className="mt-2 text-xs text-zinc-500">Google sign up setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
             </form>
           )}
         </div>
       </section>
+      {googleCompletion ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 px-4">
+          <form className="w-full max-w-md rounded-lg border border-[#B2FF59]/20 bg-zinc-950 p-6 shadow-[0_0_60px_rgba(0,77,64,.45)]" onSubmit={completeGoogleSignup}>
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold">Verify Phone Number</h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                Munshi AI uses phone numbers as the global owner identity. Add your phone number to finish Google sign up for {googleCompletion.email}.
+              </p>
+            </div>
+            <PhoneField
+              countryCode={googleCompletion.countryCode}
+              phoneNumber={googleCompletion.phoneNumber}
+              onCountryCodeChange={(countryCode) => setGoogleCompletion({ ...googleCompletion, countryCode })}
+              onPhoneNumberChange={(phoneNumber) => setGoogleCompletion({ ...googleCompletion, phoneNumber })}
+            />
+            <Messages error={error} notice={notice} />
+            <div className="mt-6 flex gap-3">
+              <button className="h-11 flex-1 rounded-md border border-white/15 px-4 text-sm font-semibold text-zinc-200 hover:bg-white/10" type="button" onClick={() => setGoogleCompletion(null)}>
+                Cancel
+              </button>
+              <button className="h-11 flex-1 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
+                {isSubmitting ? "Creating..." : "Complete Sign Up"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </main>
   );
 
@@ -229,6 +284,25 @@ export default function LoginPage() {
     setActiveTab(tab);
     setError(null);
     setNotice(null);
+  }
+
+  async function completeGoogleSignup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!googleCompletion) return;
+    setIsSubmitting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await completeGoogleSignupAuth(
+        googleCompletion.credential,
+        `${googleCompletion.countryCode}${googleCompletion.phoneNumber.trim()}`
+      );
+      navigate("/dashboard", { replace: true });
+    } catch (caught) {
+      setError(getErrorMessage(caught, "Google sign up failed."));
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 }
 

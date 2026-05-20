@@ -2,9 +2,11 @@ import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, saveFinalProductOpeningStock } from "../lib/api";
-import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, PlasticStockCreate, WorkerCreate } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock } from "../lib/api";
+import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate } from "../lib/api";
 import ConfigurationOverview from "../components/ConfigurationOverview";
+import { useAuth } from "../context/AuthContext";
+import { useUpgrade } from "../context/UpgradeContext";
 
 const todayWorker: WorkerCreate = { name: "", daily_wages: 0, duty_hours: 8 };
 const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20, total_sacks: 0 };
@@ -19,6 +21,7 @@ const machineDraft: MachineCreate = {
   bottom_size_mm: 68,
   speed_per_minute: 55
 };
+type DynamicField = { label: string; value: string; source: "template" | "custom" };
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
@@ -26,18 +29,29 @@ export default function OnboardingPage() {
   const [worker, setWorker] = useState<WorkerCreate>(todayWorker);
   const [machine, setMachine] = useState<MachineCreate>(machineDraft);
   const [machines, setMachines] = useState<MachineCreate[]>([]);
+  const [machineTemplates, setMachineTemplates] = useState<MachineTemplateRecord[]>([]);
+  const [dynamicMachineFields, setDynamicMachineFields] = useState<DynamicField[]>([]);
   const [blankStock, setBlankStock] = useState(blankStockDraft);
   const [bottomStock, setBottomStock] = useState(bottomStockDraft);
   const [boxStock, setBoxStock] = useState<BoxPackagingStockCreate>(boxStockDraft);
   const [plasticStock, setPlasticStock] = useState<PlasticStockCreate>(plasticStockDraft);
   const [finalProductStock, setFinalProductStock] = useState(finalProductStockDraft);
   const [finalProducts, setFinalProducts] = useState<FinalStockOption[]>([]);
+  const [machineUsage, setMachineUsage] = useState<MachineLimitUsage | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const navigate = useNavigate();
+  const { showToast, showUpgradeModal } = useUpgrade();
+  const { updateUser } = useAuth();
 
   useEffect(() => {
     void loadFinalProducts();
+    void loadMachineUsage();
+    void loadMachineTemplates();
   }, []);
+
+  useEffect(() => {
+    applyTemplateFields(machine.machine_type);
+  }, [machineTemplates]);
 
   async function loadFinalProducts() {
     const response = await getFinalStockOptions();
@@ -46,6 +60,38 @@ export default function OnboardingPage() {
       ...current,
       product_id: current.product_id || response.data[0]?.id || 0
     }));
+  }
+
+  async function loadMachineUsage() {
+    const response = await getMachineLimits();
+    setMachineUsage(response.data);
+    updateUser({
+      machines_used: response.data.used,
+      machine_limit: response.data.limit,
+      machine_plan: response.data.plan
+    });
+    if (response.data.nearing_limit && !response.data.limit_reached) {
+      showToast(`You have ${response.data.used}/${response.data.limit} machines used`, "warning");
+    }
+  }
+
+  async function loadMachineTemplates() {
+    const templates = await listMachineTemplates();
+    setMachineTemplates(templates.filter((template) => template.status === "approved"));
+  }
+
+  function applyTemplateFields(machineType: MachineCreate["machine_type"]) {
+    const template = machineTemplates.find((item) => item.machine_type === machineType && item.status === "approved");
+    if (!template) {
+      setDynamicMachineFields([]);
+      return;
+    }
+    const fields = Object.keys({ ...template.base_config, ...template.custom_fields }).map((label) => ({
+      label,
+      value: "",
+      source: "template" as const
+    }));
+    setDynamicMachineFields(fields);
   }
 
   async function saveWorker() {
@@ -61,12 +107,37 @@ export default function OnboardingPage() {
 
   async function saveMachines() {
     if (machines.length === 0 && !machine.machine_number.trim()) return;
+    const saveCount = machines.length ? machines.length : 1;
+    if (machineUsage && machineUsage.used + saveCount > machineUsage.limit) {
+      showUpgradeModal({
+        code: "UPGRADE_REQUIRED",
+        message: `You have reached your limit of ${machineUsage.limit} machines.`,
+        used: machineUsage.used,
+        limit: machineUsage.limit,
+        plan: machineUsage.plan
+      });
+      return;
+    }
     setIsSaving(true);
-    await createMachines(machines.length ? machines : [machine]);
-    setToast("Machines saved");
-    setStep(2);
-    navigate("/");
-    setIsSaving(false);
+    try {
+      await createMachines(machines.length ? machines : [machine]);
+      if (dynamicMachineFields.length > 0) {
+        await createMachineOnboarding({
+          machine_type: machine.machine_type,
+          base_config: {},
+          custom_fields: dynamicMachineFields.reduce<Record<string, string>>((acc, field) => {
+            if (field.label.trim()) acc[field.label.trim()] = field.value;
+            return acc;
+          }, {})
+        });
+      }
+      setToast("Machines saved");
+      setStep(2);
+      await loadMachineUsage();
+      navigate("/");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function addBlankStock() {
@@ -169,19 +240,84 @@ export default function OnboardingPage() {
 
       {step === 1 ? (
         <Panel icon={Factory} title="Machines">
+          {machineUsage ? (
+            <div className={`mb-4 rounded-md border px-4 py-3 text-sm ${machineUsage.limit_reached ? "border-red-200 bg-red-50 text-red-700" : machineUsage.nearing_limit ? "border-amber-200 bg-amber-50 text-amber-800" : "border-zinc-200 bg-zinc-50 text-zinc-600"}`}>
+              {machineUsage.limit_reached
+                ? `You have reached your limit of ${machineUsage.limit} machines.`
+                : `Machine usage: ${machineUsage.used}/${machineUsage.limit}`}
+            </div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-5">
             <TextInput label="Machine no." value={machine.machine_number} onChange={(machine_number) => setMachine({ ...machine, machine_number })} />
-            <SelectInput label="Type" value={machine.machine_type} options={["Paper Cup", "Dona", "Paper Bag"]} onChange={(machine_type) => setMachine({ ...machine, machine_type: machine_type as MachineCreate["machine_type"] })} />
+            <SelectInput label="Type" value={machine.machine_type} options={["Paper Cup", "Dona", "Paper Bag"]} onChange={(machine_type) => {
+              const nextType = machine_type as MachineCreate["machine_type"];
+              setMachine({ ...machine, machine_type: nextType });
+              applyTemplateFields(nextType);
+            }} />
             <NumberInput label="Mould ml" value={machine.mould_size_ml} onChange={(mould_size_ml) => setMachine({ ...machine, mould_size_ml })} />
             <NumberInput label="Bottom mm" value={machine.bottom_size_mm} onChange={(bottom_size_mm) => setMachine({ ...machine, bottom_size_mm })} />
             <NumberInput label="Speed/min" value={machine.speed_per_minute} onChange={(speed_per_minute) => setMachine({ ...machine, speed_per_minute })} />
+          </div>
+          <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-zinc-800">Template Fields</p>
+                <p className="mt-1 text-xs text-zinc-500">Fields load from approved machine templates. Add extra parameters when needed.</p>
+              </div>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700"
+                type="button"
+                onClick={() => setDynamicMachineFields([...dynamicMachineFields, { label: "", value: "", source: "custom" }])}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Custom Field
+              </button>
+            </div>
+            {dynamicMachineFields.length > 0 ? (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {dynamicMachineFields.map((field, index) => (
+                  <div key={`${field.source}-${field.label}-${index}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                    <input
+                      className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      placeholder="Label"
+                      value={field.label}
+                      readOnly={field.source === "template"}
+                      onChange={(event) => setDynamicMachineFields(dynamicMachineFields.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
+                    />
+                    <input
+                      className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      placeholder="Value"
+                      value={field.value}
+                      onChange={(event) => setDynamicMachineFields(dynamicMachineFields.map((item, itemIndex) => itemIndex === index ? { ...item, value: event.target.value } : item))}
+                    />
+                    <button className="grid h-10 w-10 place-items-center rounded-md border border-zinc-200 text-zinc-500 hover:text-red-600" type="button" onClick={() => setDynamicMachineFields(dynamicMachineFields.filter((_, itemIndex) => itemIndex !== index))}>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-zinc-500">No approved template fields found for this machine type yet.</p>
+            )}
           </div>
           <div className="mt-4 flex gap-2">
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700"
               type="button"
+              disabled={machineUsage ? machineUsage.used + machines.length >= machineUsage.limit : false}
+              title={machineUsage && machineUsage.used + machines.length >= machineUsage.limit ? "Machine limit reached" : "Add row"}
               onClick={() => {
                 if (!machine.machine_number.trim()) return;
+                if (machineUsage && machineUsage.used + machines.length >= machineUsage.limit) {
+                  showUpgradeModal({
+                    code: "UPGRADE_REQUIRED",
+                    message: `You have reached your limit of ${machineUsage.limit} machines.`,
+                    used: machineUsage.used,
+                    limit: machineUsage.limit,
+                    plan: machineUsage.plan
+                  });
+                  return;
+                }
                 setMachines([...machines, machine]);
                 setMachine({ ...machineDraft, machine_number: "" });
               }}
@@ -189,7 +325,7 @@ export default function OnboardingPage() {
               <Plus className="h-4 w-4" />
               Add row
             </button>
-            <SaveButton label="Save Machines" isSaving={isSaving} onClick={saveMachines} />
+            <SaveButton label="Save Machines" isSaving={isSaving} disabled={Boolean(machineUsage?.limit_reached)} onClick={saveMachines} />
           </div>
           <List rows={machines.map((row) => `${row.machine_number} / ${row.mould_size_ml}ml / ${row.speed_per_minute} per min`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
         </Panel>

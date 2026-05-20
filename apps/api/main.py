@@ -76,6 +76,8 @@ from routers import billing
 from routers import staff
 from routers import expenses
 from routers import integrations
+from routers import machine_onboarding
+from routers import machine_templates
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 
@@ -128,6 +130,8 @@ app.include_router(billing.router)
 app.include_router(staff.router)
 app.include_router(expenses.router)
 app.include_router(integrations.router)
+app.include_router(machine_onboarding.router)
+app.include_router(machine_templates.router)
 
 
 @app.exception_handler(Exception)
@@ -1088,6 +1092,20 @@ def ensure_runtime_schema():
             "timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         ),
+        (
+            "CREATE TABLE IF NOT EXISTS machine_templates ("
+            "id SERIAL PRIMARY KEY, "
+            "creator_id INTEGER NOT NULL REFERENCES users(id), "
+            "machine_type VARCHAR(100) NOT NULL, "
+            "base_config JSONB NOT NULL DEFAULT '{}', "
+            "custom_fields JSONB NOT NULL DEFAULT '{}', "
+            "status VARCHAR(20) NOT NULL DEFAULT 'processing', "
+            "ai_confidence DOUBLE PRECISION, "
+            "ai_review JSONB NOT NULL DEFAULT '{}', "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), "
+            "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
         "CREATE INDEX IF NOT EXISTS ix_factory_expenses_factory_id ON factory_expenses (factory_id)",
         "CREATE INDEX IF NOT EXISTS ix_factory_expenses_timestamp ON factory_expenses (timestamp)",
         "ALTER TABLE factory_expenses DROP CONSTRAINT IF EXISTS ck_factory_expenses_amount_non_negative",
@@ -1194,6 +1212,15 @@ def ensure_runtime_schema():
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS speed_bpm INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS current_mould_size VARCHAR(100)",
         "ALTER TABLE machines ADD COLUMN IF NOT EXISTS current_bottom_size VARCHAR(100)",
+        "ALTER TABLE machine_templates ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'processing'",
+        "ALTER TABLE machine_templates ADD COLUMN IF NOT EXISTS ai_confidence DOUBLE PRECISION",
+        "ALTER TABLE machine_templates ADD COLUMN IF NOT EXISTS ai_review JSONB NOT NULL DEFAULT '{}'",
+        "ALTER TABLE machine_templates DROP CONSTRAINT IF EXISTS ck_machine_templates_status",
+        "ALTER TABLE machine_templates ADD CONSTRAINT ck_machine_templates_status CHECK (status IN ('processing', 'pending', 'approved', 'rejected'))",
+        "CREATE INDEX IF NOT EXISTS ix_machine_templates_status ON machine_templates (status)",
+        "CREATE INDEX IF NOT EXISTS ix_machine_templates_machine_type ON machine_templates (machine_type)",
+        "CREATE INDEX IF NOT EXISTS ix_machine_templates_creator_id ON machine_templates (creator_id)",
+        "CREATE INDEX IF NOT EXISTS ix_machine_templates_custom_fields_gin ON machine_templates USING GIN (custom_fields)",
         "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS type VARCHAR(50)",
         "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS size_ml INTEGER",
         "ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS gsm INTEGER",

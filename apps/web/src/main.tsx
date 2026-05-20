@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
 import { DataRefreshProvider } from "./context/DataRefreshContext";
+import { UpgradeProvider } from "./context/UpgradeContext";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -12,7 +13,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <AuthProvider>
       <DataRefreshProvider>
         <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-          <App />
+          <UpgradeProvider>
+            <App />
+          </UpgradeProvider>
         </BrowserRouter>
       </DataRefreshProvider>
     </AuthProvider>

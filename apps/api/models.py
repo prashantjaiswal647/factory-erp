@@ -12,7 +12,10 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     Text,
+    JSON,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import relationship
 
 from db import Base
@@ -120,6 +123,62 @@ class Machine(TenantMixin, Base):
         UniqueConstraint("factory_id", "name", name="uq_machines_factory_name"),
         UniqueConstraint("factory_id", "machine_sequence_number", name="uq_machines_factory_sequence"),
     )
+
+
+class MachineOnboarding(TenantMixin, Base):
+    __tablename__ = "machine_onboardings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    machine_type = Column(String(100), nullable=False, index=True)
+    base_config = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    custom_fields = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class MachineTemplate(Base):
+    __tablename__ = "machine_templates"
+    __table_args__ = (
+        CheckConstraint("status IN ('processing', 'pending', 'approved', 'rejected')", name="ck_machine_templates_status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    creator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    machine_type = Column(String(100), nullable=False, index=True)
+    base_config = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    custom_fields = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    status = Column(String(20), nullable=False, default="processing", server_default="processing", index=True)
+    ai_confidence = Column(Float, nullable=True)
+    ai_review = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    creator = relationship("User", foreign_keys=[creator_id])
 
 
 class FactorySettings(TenantMixin, Base):

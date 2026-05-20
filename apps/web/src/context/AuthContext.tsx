@@ -17,6 +17,9 @@ type AuthUser = {
   subscription_status?: "trial" | "active" | "expired" | null;
   trial_end_date?: string | null;
   trial_days_remaining?: number;
+  machines_used?: number;
+  machine_limit?: number;
+  machine_plan?: string;
 };
 
 type AuthContextValue = {
@@ -24,6 +27,7 @@ type AuthContextValue = {
   isLoading: boolean;
   login: (identifier: string, password: string) => Promise<AuthUser>;
   loginWithGoogle: (credential: string) => Promise<AuthUser>;
+  completeGoogleSignup: (credential: string, phoneNumber: string) => Promise<AuthUser>;
   updateUser: (patch: Partial<AuthUser>) => void;
   logout: () => void;
 };
@@ -88,6 +92,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return persistAuth(response.data);
   }
 
+  async function completeGoogleSignup(credential: string, phoneNumber: string) {
+    const response = await api.post<TokenResponse>("/api/auth/google/complete", {
+      credential,
+      phone_number: phoneNumber
+    });
+    return persistAuth(response.data);
+  }
+
   function persistAuth(data: TokenResponse) {
     const role = normalizeRole(data.user.role);
     const nextUser: AuthUser = {
@@ -135,6 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       loginWithGoogle,
+      completeGoogleSignup,
       updateUser,
       logout
     }),

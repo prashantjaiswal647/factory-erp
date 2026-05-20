@@ -17,5 +17,6 @@ pydantic
 google-auth
 razorpay
 httpx
+pytest
 reportlab
 fastapi-mail

@@ -71,6 +71,8 @@ services:
       - "${LOCAL_ADMINER_PORT_MAP:-127.0.0.1:8080:8080}"
     networks:
       - ai-erp-network
+    depends_on:
+      - postgres
 
   # 6. Caddy Reverse Proxy
   caddy:
@@ -93,13 +95,3 @@ volumes:
   postgres-data:
   n8n-data:
   caddy_data:
-  
-adminer:
-    image: adminer
-    restart: always
-    ports:
-      - "127.0.0.1:8080:8080"
-    networks:
-      - ai-erp-network
-    depends_on:
-      - postgres

@@ -118,7 +118,7 @@ class LoginRequest(BaseModel):
 
 class SignupRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
-    email: Optional[str] = Field(default=None, max_length=255)
+    email: str = Field(..., min_length=3, max_length=255)
     phone_number: str = Field(..., min_length=1, max_length=50)
     factory_name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=6, max_length=255)
@@ -126,6 +126,11 @@ class SignupRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     credential: str = Field(..., min_length=1)
+
+
+class GoogleSignupCompleteRequest(BaseModel):
+    credential: str = Field(..., min_length=1)
+    phone_number: str = Field(..., min_length=5, max_length=50)
 
 
 class AuthUserProfile(BaseModel):
@@ -525,8 +530,7 @@ def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/google", response_model=LoginResponse)
-def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+def verify_google_credential(credential: str) -> dict:
     if google_id_token is None or google_requests is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -540,8 +544,8 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
         )
 
     try:
-        claims = google_id_token.verify_oauth2_token(
-            payload.credential,
+        return google_id_token.verify_oauth2_token(
+            credential,
             google_requests.Request(),
             google_client_id,
         )
@@ -551,6 +555,10 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
             detail="Invalid Google token",
         ) from exc
 
+
+@router.post("/google")
+def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+    claims = verify_google_credential(payload.credential)
     email = str(claims.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(
@@ -560,42 +568,67 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
 
     user = get_user_by_username(db, email)
     if user is None:
-        now = datetime.now(timezone.utc)
-        display_name = str(claims.get("name") or email.split("@")[0]).strip()
-        base_factory_name = f"{display_name} Factory"
-        factory_name = base_factory_name
-        suffix = 1
-        while db.query(Factory).filter(sql_func.lower(Factory.name) == factory_name.lower()).first():
-            suffix += 1
-            factory_name = f"{base_factory_name} {suffix}"
-
-        factory = Factory(
-            name=factory_name,
-            factory_name=factory_name,
-            trial_start_date=now,
-            trial_end_date=now + timedelta(days=3),
-            subscription_status="trial",
-        )
-        db.add(factory)
-        db.flush()
-
-        user = User(
-            factory_id=factory.id,
-            username=email,
-            phone_number=None,
-            full_name=display_name,
-            password_hash=hash_password(uuid4().hex),
-            role="Owner",
-            is_verified=True,
-        )
-        db.add(user)
-        db.flush()
-        factory.owner_id = user.id
-        db.commit()
-        db.refresh(user)
+        return {
+            "requires_phone_number": True,
+            "email": email,
+            "full_name": str(claims.get("name") or email.split("@")[0]).strip(),
+            "message": "Phone number is required to complete Google sign up.",
+        }
     else:
         ensure_factory_trial(user.factory)
         db.commit()
         db.refresh(user)
 
+    return build_login_response(user, db)
+
+
+@router.post("/google/complete", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = Depends(get_db)):
+    claims = verify_google_credential(payload.credential)
+    email = str(claims.get("email") or "").strip().lower()
+    phone_number = payload.phone_number.strip()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Google account email is required")
+    if not phone_number:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Phone number is required")
+    if get_user_by_username(db, email) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+    if get_user_by_phone(db, phone_number) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already exists")
+
+    now = datetime.now(timezone.utc)
+    display_name = str(claims.get("name") or email.split("@")[0]).strip()
+    base_factory_name = f"{display_name} Factory"
+    factory_name = base_factory_name
+    suffix = 1
+    while db.query(Factory).filter(sql_func.lower(Factory.name) == factory_name.lower()).first():
+        suffix += 1
+        factory_name = f"{base_factory_name} {suffix}"
+
+    factory = Factory(
+        name=factory_name,
+        factory_name=factory_name,
+        trial_start_date=now,
+        trial_end_date=now + timedelta(days=3),
+        subscription_status="trial",
+    )
+    db.add(factory)
+    db.flush()
+
+    user = User(
+        user_id=str(uuid4()),
+        factory_id=factory.id,
+        username=email,
+        phone_number=phone_number,
+        full_name=display_name,
+        password_hash=hash_password(uuid4().hex),
+        role="Owner",
+        is_verified=True,
+    )
+    db.add(user)
+    db.flush()
+    factory.owner_id = user.id
+    factory.owner_phone_number = user.phone_number
+    db.commit()
+    db.refresh(user)
     return build_login_response(user, db)

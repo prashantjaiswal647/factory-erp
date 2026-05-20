@@ -14,6 +14,14 @@ export const api = axios.create({
   timeout: 10000
 });
 
+export type UpgradeRequiredDetail = {
+  code: "UPGRADE_REQUIRED";
+  message: string;
+  used: number;
+  limit: number;
+  plan: string;
+};
+
 // Interceptor: Har request ke sath Token bhejne ke liye (Security)
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
@@ -22,6 +30,17 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const detail = error?.response?.data?.detail;
+    if (error?.response?.status === 403 && detail?.code === "UPGRADE_REQUIRED" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent<UpgradeRequiredDetail>("upgrade-required", { detail }));
+    }
+    return Promise.reject(error);
+  }
+);
 
 export type WorkerCreate = {
   name: string;
@@ -36,6 +55,68 @@ export type MachineCreate = {
   bottom_size_mm: number;
   speed_per_minute: number;
 };
+
+export type MachineLimitUsage = {
+  used: number;
+  limit: number;
+  plan: string;
+  nearing_limit: boolean;
+  limit_reached: boolean;
+};
+
+export type MachineOnboardingPayload = {
+  machine_type: string;
+  base_config: Record<string, string | number | boolean>;
+  custom_fields: Record<string, string>;
+};
+
+export type MachineOnboardingRecord = MachineOnboardingPayload & {
+  id: number;
+  factory_id: number;
+};
+
+export type TemplateStatus = "processing" | "pending" | "approved" | "rejected";
+
+export type MachineTemplateRecord = MachineOnboardingPayload & {
+  id: number;
+  creator_id: number;
+  status: TemplateStatus;
+  ai_confidence?: number | null;
+  ai_review?: Record<string, unknown>;
+};
+
+export async function createMachineOnboarding(payload: MachineOnboardingPayload) {
+  const response = await api.post<MachineOnboardingRecord>("/api/machine-onboardings", payload);
+  return response.data;
+}
+
+export async function listMachineOnboardings(params?: {
+  custom_field_key?: string;
+  custom_field_value?: string;
+}) {
+  const response = await api.get<MachineOnboardingRecord[]>("/api/machine-onboardings", { params });
+  return response.data;
+}
+
+export async function submitMachineTemplate(payload: MachineOnboardingPayload) {
+  const response = await api.post<MachineTemplateRecord>("/templates/submit", payload);
+  return response.data;
+}
+
+export async function listMachineTemplates() {
+  const response = await api.get<MachineTemplateRecord[]>("/templates");
+  return response.data;
+}
+
+export async function getMachineTemplate(templateId: number) {
+  const response = await api.get<MachineTemplateRecord>(`/templates/${templateId}`);
+  return response.data;
+}
+
+export async function approveMachineTemplate(templateId: number) {
+  const response = await api.patch<MachineTemplateRecord>(`/admin/templates/${templateId}/approve`);
+  return response.data;
+}
 
 export type Step3MaterialsCreate = {
   raw_material_metrics: Array<{
@@ -485,6 +566,10 @@ export function createMachines(machines: MachineCreate[]) {
       can_swap_moulds: false
     }))
   });
+}
+
+export function getMachineLimits() {
+  return api.get<MachineLimitUsage>("/api/onboarding/machines/limits");
 }
 
 export function saveMaterialMetrics(payload: Step3MaterialsCreate) {

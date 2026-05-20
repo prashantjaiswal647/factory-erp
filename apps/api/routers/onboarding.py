@@ -53,6 +53,7 @@ from schemas import (
     WorkerPayload,
     WorkerResponse,
 )
+from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -102,6 +103,14 @@ class OnboardingOverviewResponse(BaseModel):
     machines: List[OnboardingMachineSummary]
     raw_material_metrics: List[OnboardingRawMetricSummary]
     packaging_metrics: List[OnboardingPackagingMetricSummary]
+
+
+class MachineLimitResponse(BaseModel):
+    used: int
+    limit: int
+    plan: str
+    nearing_limit: bool
+    limit_reached: bool
 
 
 class OnboardingCustomerSummary(BaseModel):
@@ -304,6 +313,21 @@ def list_onboarding_machines(
         .filter(Machine.factory_id == current_user.factory_id)
         .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
         .all()
+    )
+
+
+@router.get("/machines/limits", response_model=MachineLimitResponse)
+def get_machine_limits(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    usage = get_machine_limit_usage(db, current_user.factory_id)
+    return MachineLimitResponse(
+        used=usage.used,
+        limit=usage.limit,
+        plan=usage.plan,
+        nearing_limit=usage.used >= max(usage.limit - 1, 0),
+        limit_reached=usage.used >= usage.limit,
     )
 
 
@@ -652,6 +676,7 @@ def onboarding_step2_machines(
     db: Session = Depends(get_db),
 ):
     factory_id = current_user.factory_id
+    check_machine_limit(factory_id, db, requested_count=len(payload.machines))
 
     for item in payload.machines:
         seq = item.machine_sequence_number.strip().upper()

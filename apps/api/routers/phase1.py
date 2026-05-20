@@ -39,6 +39,7 @@ from schemas import (
     WorkerCreate,
     WorkerResponse,
 )
+from subscription_limits import check_machine_limit
 
 
 router = APIRouter(prefix="/api/setup", tags=["phase-1-setup"])
@@ -87,6 +88,7 @@ def create_machine(
     db: Session = Depends(get_db),
 ):
     factory_id = current_user.factory_id
+    check_machine_limit(factory_id, db)
     machine_number = normalize_name(payload.machine_number).upper()
     existing = (
         db.query(Machine)
