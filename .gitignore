@@ -111,3 +111,20 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+
+# ==============================================================================
+# NEW AUTOMATIC ROUTING CONFIGURATION (FOR DOCKER)
+# ==============================================================================
+# Ports Configuration for Local Development
+LOCAL_API_PORT_MAP=8000:8000
+LOCAL_WEB_PORT_MAP=5173:5173
+LOCAL_N8N_PORT_MAP=5678:5678
+
+# Dummy ports for Caddy so it doesn't conflict locally
+CADDY_HTTP_PORT=8080:80
+CADDY_HTTPS_PORT=8443:443
+
+# Local n8n network settings
+N8N_PROTOCOL=http
+WEBHOOK_URL=http://localhost:5678/

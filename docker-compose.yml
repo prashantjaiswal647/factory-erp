@@ -1,10 +1,7 @@
 version: '3.8'
 
 services:
-<<<<<<< HEAD
   # 1. Database
-=======
->>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
   postgres:
     image: postgres:16-alpine
     container_name: ai-erp-postgres
@@ -23,10 +20,7 @@ services:
       timeout: 5s
       retries: 5
 
-<<<<<<< HEAD
   # 2. API Backend
-=======
->>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
   api:
     build: ./apps/api
     restart: always
@@ -34,15 +28,8 @@ services:
       postgres:
         condition: service_healthy
     env_file: .env
-<<<<<<< HEAD
-=======
-    networks:
-      - ai-erp-network
-
-  web:
-    build: ./apps/web
-    restart: always
->>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
+    ports:
+      - "${LOCAL_API_PORT_MAP:-8000:8000}" # 👈 Local par khulega, VPS par safe rahega
     networks:
       - ai-erp-network
 
@@ -50,6 +37,8 @@ services:
   web:
     build: ./apps/web
     restart: always
+    ports:
+      - "${LOCAL_WEB_PORT_MAP:-5173:5173}" # 👈 Local par khulega, VPS par safe rahega
     networks:
       - ai-erp-network
 
@@ -60,26 +49,25 @@ services:
     environment:
       - N8N_HOST=0.0.0.0
       - N8N_PORT=5678
-      - N8N_PROTOCOL=https
-      - WEBHOOK_URL=https://n8n.munshiai.co.in/
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - WEBHOOK_URL=${WEBHOOK_URL}
       - GENERIC_TIMEZONE=Asia/Kolkata
       - ERP_API_BASE_URL=http://api:8000
       - ERP_API_KEY=${N8N_API_KEY}
+    ports:
+      - "${LOCAL_N8N_PORT_MAP:-5678:5678}" # 👈 Local par khulega, VPS par safe rahega
     volumes:
       - n8n-data:/home/node/.n8n
     networks:
       - ai-erp-network
 
-<<<<<<< HEAD
-  # 5. Caddy (Reverse Proxy - For Automatic HTTPS)
-=======
->>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
+  # 5. Caddy (Reverse Proxy - Runs everywhere, but handles traffic via Env)
   caddy:
     image: caddy:latest
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_PORT:-80:80}"
+      - "${CADDY_HTTPS_PORT:-443:443}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
@@ -93,8 +81,4 @@ networks:
 volumes:
   postgres-data:
   n8n-data:
-<<<<<<< HEAD
   caddy_data:
-=======
-  caddy_data:
->>>>>>> c661bbe17739eb76033265b4de3229b52a21d95d
