@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import "@testing-library/jest-dom";
 
 import { UpgradeProvider } from "../src/context/UpgradeContext";
 
