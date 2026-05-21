@@ -1001,6 +1001,9 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_customer_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_subscription_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_token VARCHAR(500)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_username VARCHAR(255)",
         (
             "CREATE TABLE IF NOT EXISTS custom_plan_enquiries ("
             "id SERIAL PRIMARY KEY, "

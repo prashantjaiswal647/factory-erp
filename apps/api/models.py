@@ -57,6 +57,9 @@ class Factory(Base):
     razorpay_customer_id = Column(String(255), nullable=True)
     razorpay_subscription_id = Column(String(255), nullable=True)
     telegram_bot_token = Column(String(255), nullable=True)
+    telegram_token = Column(String(500), nullable=True)
+    telegram_chat_id = Column(String(255), nullable=True)
+    telegram_bot_username = Column(String(255), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
