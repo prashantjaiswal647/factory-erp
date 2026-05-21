@@ -1,5 +1,5 @@
 munshiai.co.in, www.munshiai.co.in {
-    reverse_proxy web:5173
+    reverse_proxy web:80
 }
 
 api.munshiai.co.in {

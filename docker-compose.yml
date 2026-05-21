@@ -39,7 +39,7 @@ services:
     build: ./apps/web
     restart: always
     ports:
-      - "${LOCAL_WEB_PORT_MAP:-127.0.0.1:5173:5173}"
+      - "${LOCAL_WEB_PORT_MAP:-127.0.0.1:5173:80}"
     networks:
       - ai-erp-network
 
