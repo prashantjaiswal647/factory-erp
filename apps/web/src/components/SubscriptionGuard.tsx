@@ -23,7 +23,12 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
         updateUser({
           subscription_status: response.data.subscription_status,
           trial_end_date: response.data.trial_end_date,
-          trial_days_remaining: response.data.trial_days_remaining
+          trial_days_remaining: response.data.trial_days_remaining,
+          active_plan: response.data.active_plan,
+          billing_cycle: response.data.billing_cycle,
+          subscription_start_date: response.data.subscription_start_date,
+          subscription_end_date: response.data.subscription_end_date,
+          payment_status: response.data.payment_status
         });
       } finally {
         if (isMounted) setIsLoading(false);
@@ -39,7 +44,9 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
     return <LoadingState label="Checking subscription..." />;
   }
 
-  if (!status || status.is_access_allowed) {
+  const hasAllowedStatus = status?.subscription_status === "active" || (status?.subscription_status === "trial_active" && status?.active_plan === "basic");
+
+  if (!status || (status.is_access_allowed && hasAllowedStatus)) {
     return <>{children}</>;
   }
 
@@ -47,12 +54,12 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
     return <>{children}</>;
   }
 
-  if (location.pathname === "/subscription-expired") {
+  if (location.pathname === "/plans" && user?.role === "Owner") {
     return <>{children}</>;
   }
 
-  if (user?.role === "Owner") {
-    return <Navigate to="/billing" replace />;
+  if (location.pathname === "/subscription-expired") {
+    return <>{children}</>;
   }
 
   return <Navigate to="/subscription-expired" replace />;

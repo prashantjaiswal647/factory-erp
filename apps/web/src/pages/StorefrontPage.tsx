@@ -34,9 +34,9 @@ type CheckoutResponse = {
 };
 
 const fallbackPrints = [
-  "linear-gradient(135deg, #0f766e, #14b8a6)",
+  "linear-gradient(135deg, #6D28D9, #4C1D95)",
   "linear-gradient(135deg, #b45309, #f59e0b)",
-  "linear-gradient(135deg, #1d4ed8, #38bdf8)",
+  "linear-gradient(135deg, #F3E8FF, #6D28D9)",
   "linear-gradient(135deg, #be123c, #fb7185)"
 ];
 

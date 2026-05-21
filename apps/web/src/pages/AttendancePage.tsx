@@ -122,7 +122,7 @@ export default function AttendancePage() {
 
   return (
     <div className="space-y-6">
-      {toast ? <button className="fixed right-5 top-20 z-50 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={() => setToast("")}>{toast}</button> : null}
+      {toast ? <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={() => setToast("")}>{toast}</button> : null}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-950">Attendance & Worker Ledger</h1>
@@ -200,7 +200,7 @@ export default function AttendancePage() {
 
             <div className="flex-1 overflow-auto p-5">
               <div className="mb-4 flex justify-end">
-                <button className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700" type="button" onClick={() => setSettlementOpen(true)}>
+                <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#16A34A] px-4 text-sm font-semibold text-white hover:bg-[#16A34A]/90" type="button" onClick={() => setSettlementOpen(true)}>
                   <ReceiptIndianRupee className="h-4 w-4" />
                   Clear Hisab
                 </button>
@@ -276,7 +276,7 @@ export default function AttendancePage() {
           ) : null}
           <div className="mt-5 flex justify-end gap-3">
             <button className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-700" type="button" onClick={previewSettlement} disabled={isSaving}>Preview</button>
-            <button className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white disabled:bg-zinc-300" type="button" onClick={confirmSettlement} disabled={isSaving || !settlementPreview}>
+            <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#16A34A] px-4 text-sm font-semibold text-white hover:bg-[#16A34A]/90 disabled:bg-[#E5E7EB]" type="button" onClick={confirmSettlement} disabled={isSaving || !settlementPreview}>
               <Check className="h-4 w-4" />
               Confirm Settlement
             </button>

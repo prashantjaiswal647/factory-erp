@@ -181,11 +181,11 @@ export default function DashboardPage() {
   }, [aiInsights?.insights]);
 
   if (isLoading) {
-    return <div className="rounded-lg border border-zinc-200 bg-white p-8 text-sm text-zinc-500">Loading live factory overview...</div>;
+    return <div className="rounded-lg border border-[#E5E7EB] bg-white p-8 text-sm text-[#4B5563]">Loading live factory overview...</div>;
   }
 
   if (error) {
-    return <div className="rounded-lg border border-red-200 bg-red-50 p-8 text-sm font-medium text-red-700">{error}</div>;
+    return <div className="rounded-lg border border-[#DC2626]/30 bg-[#DC2626]/10 p-8 text-sm font-medium text-[#DC2626]">{error}</div>;
   }
 
   return (
@@ -193,10 +193,10 @@ export default function DashboardPage() {
       {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-950">Live Factory Overview</h1>
-          <p className="mt-1 text-sm text-zinc-500">Workers, machines, material mapping, and opening stock status.</p>
+          <h1 className="text-2xl font-semibold text-[#111827]">Live Factory Overview</h1>
+          <p className="mt-1 text-sm text-[#4B5563]">Workers, machines, material mapping, and opening stock status.</p>
         </div>
-        <button className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={load}>
+        <button className="inline-flex h-10 items-center gap-2 rounded-md border border-[#E5E7EB] bg-white px-4 text-sm font-semibold text-[#4B5563] hover:bg-[#FFF7ED]" type="button" onClick={load}>
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>
@@ -237,7 +237,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <button className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700" type="button" onClick={() => handleApproval(sale.order_id, "approve")}>
+                      <button className="inline-flex h-9 items-center gap-2 rounded-md bg-[#16A34A] px-3 text-sm font-semibold text-white hover:bg-[#16A34A]/90" type="button" onClick={() => handleApproval(sale.order_id, "approve")}>
                         <Check className="h-4 w-4" />
                         Approve
                       </button>
@@ -307,19 +307,19 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
-      <section className="overflow-hidden rounded-lg border border-[#004D40]/30 bg-[#07100f] text-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-[#6D28D9]/25 bg-[#4C1D95] text-white shadow-sm">
         <div className="grid gap-5 p-5 lg:grid-cols-[auto_1fr]">
-          <div className="grid h-20 w-20 place-items-center rounded-lg border border-[#B2FF59]/30 bg-[#004D40] text-[#B2FF59] shadow-[0_0_30px_rgba(178,255,89,.25)]">
+          <div className="grid h-20 w-20 place-items-center rounded-lg border border-white/20 bg-[#6D28D9] text-white shadow-[0_0_30px_rgba(109,40,217,.35)]">
             <Bot className="h-10 w-10" />
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold">Munshi AI Advisor</h2>
-              <span className="rounded-full border border-[#B2FF59]/30 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-[#B2FF59]">
+              <span className="rounded-full border border-white/25 bg-white/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-[#F3E8FF]">
                 {aiInsights?.source || "loading"}
               </span>
             </div>
-            <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-7 text-zinc-200">
+            <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-7 text-[#F3E8FF]">
               {typedInsight || "Malik, factory ke hisaab-kitab dekh raha hoon..."}
             </pre>
           </div>
@@ -440,7 +440,7 @@ export default function DashboardPage() {
                   </span>
                 </div>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100">
-                  <div className={`h-full rounded-full ${mapping.percent === 100 ? "bg-emerald-600" : "bg-amber-500"}`} style={{ width: `${mapping.percent}%` }} />
+                  <div className={`h-full rounded-full ${mapping.percent === 100 ? "bg-[#16A34A]" : "bg-[#F59E0B]"}`} style={{ width: `${mapping.percent}%` }} />
                 </div>
               </div>
             ))}
@@ -565,7 +565,7 @@ function Td({ children, align = "left", strong = false }: { children: React.Reac
 function Toast({ type, message, onClose }: { type: "success" | "error"; message: string; onClose: () => void }) {
   return (
     <button
-      className={`fixed right-5 top-20 z-50 rounded-md px-4 py-3 text-sm font-semibold text-white shadow-lg ${type === "success" ? "bg-emerald-600" : "bg-red-600"}`}
+      className={`fixed right-5 top-20 z-50 rounded-md px-4 py-3 text-sm font-semibold text-white shadow-lg ${type === "success" ? "bg-[#16A34A]" : "bg-[#DC2626]"}`}
       type="button"
       onClick={onClose}
     >

@@ -40,7 +40,7 @@ export default function ProfilePage() {
     <div className="space-y-6">
       {toast ? (
         <button
-          className="fixed right-5 top-20 z-50 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg"
+          className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg"
           type="button"
           onClick={() => setToast("")}
         >

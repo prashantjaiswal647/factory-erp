@@ -1,6 +1,6 @@
 import { Bot, Check, LockKeyhole, LogIn, UserPlus } from "lucide-react";
 import axios from "axios";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { roleHomePath } from "../components/PrivateRoute";
@@ -49,6 +49,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("tab") === "signup" || params.get("plan")) {
+      setActiveTab("signup");
+    }
+  }, [location.search]);
 
   if (user) {
     return <Navigate to={roleHomePath(user.role)} replace />;
@@ -178,29 +185,29 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-[#07100f] px-4 py-10 text-white">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_25%_20%,rgba(178,255,89,0.14),transparent_28%),radial-gradient(circle_at_75%_10%,rgba(0,77,64,0.55),transparent_35%),linear-gradient(135deg,#07100f_0%,#111827_60%,#001f1b_100%)]" />
+    <main className="grid min-h-screen place-items-center bg-[#FFF7ED] px-4 py-10 text-[#111827]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_25%_20%,rgba(109,40,217,0.16),transparent_30%),radial-gradient(circle_at_80%_10%,rgba(245,230,211,0.75),transparent_36%),linear-gradient(135deg,#FFF7ED_0%,#F5E6D3_58%,#F3E8FF_100%)]" />
       <section className="relative z-10 w-full max-w-md">
-        <Link className="mb-8 inline-flex items-center gap-3 text-sm font-semibold text-zinc-300 hover:text-[#B2FF59]" to="/">
-          <span className="grid h-9 w-9 place-items-center rounded-md bg-[#004D40] text-[#B2FF59]">
+        <Link className="mb-8 inline-flex items-center gap-3 text-sm font-bold text-[#4C1D95] hover:text-[#6D28D9]" to="/">
+          <span className="grid h-9 w-9 place-items-center rounded-md bg-[#F3E8FF] text-[#6D28D9]">
             <Bot className="h-5 w-5" />
           </span>
           Munshi AI
         </Link>
 
-        <div className="rounded-lg border border-[#B2FF59]/20 bg-zinc-950/85 p-6 shadow-[0_0_60px_rgba(0,77,64,.35)] backdrop-blur">
-          <div className="mb-6 grid grid-cols-2 rounded-md border border-white/10 bg-white/5 p-1">
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-2xl shadow-orange-100/70">
+          <div className="mb-6 grid grid-cols-2 rounded-lg border border-[#E5E7EB] bg-[#FFF7ED] p-1">
             <TabButton active={activeTab === "login"} label="Login" onClick={() => switchTab("login")} />
             <TabButton active={activeTab === "signup"} label="Sign Up" onClick={() => switchTab("signup")} />
           </div>
 
           <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-md bg-[#004D40] text-[#B2FF59] shadow-[0_0_24px_rgba(178,255,89,.2)]">
+            <div className="grid h-11 w-11 place-items-center rounded-lg bg-[#F3E8FF] text-[#6D28D9]">
               {activeTab === "login" ? <LockKeyhole className="h-5 w-5" /> : <UserPlus className="h-5 w-5" />}
             </div>
             <div>
-              <h1 className="text-xl font-semibold">{activeTab === "login" ? "Secure Login" : "Create Owner Account"}</h1>
-              <p className="text-sm text-zinc-400">{activeTab === "login" ? "Use email or phone number" : "Start a new factory workspace"}</p>
+              <h1 className="text-xl font-black text-[#111827]">{activeTab === "login" ? "Secure Login" : "Create Owner Account"}</h1>
+              <p className="text-sm text-[#4B5563]">{activeTab === "login" ? "Use email or phone number" : "Start a new factory workspace"}</p>
             </div>
           </div>
 
@@ -211,12 +218,12 @@ export default function LoginPage() {
                 <Field label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" type="password" />
               </div>
               <Messages error={error} notice={notice} />
-              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Login with Google"} onClick={startGoogleSignup} type="button">
+              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED] disabled:cursor-not-allowed disabled:bg-[#E5E7EB]" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Login with Google"} onClick={startGoogleSignup} type="button">
                 <span className="text-lg font-bold text-[#4285F4]">G</span>
                 Log in with Google
               </button>
-              {!googleClientId ? <p className="mt-2 text-xs text-zinc-500">Google login setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
-              <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] shadow-[0_0_28px_rgba(178,255,89,.35)] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
+              {!googleClientId ? <p className="mt-2 text-xs text-[#4B5563]">Google login setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
+              <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#6D28D9] px-4 text-sm font-bold text-white shadow-lg shadow-purple-200 hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]" disabled={isSubmitting} type="submit">
                 <LogIn className="h-4 w-4" />
                 {isSubmitting ? "Signing in..." : "Login"}
               </button>
@@ -237,25 +244,25 @@ export default function LoginPage() {
                 <Field label="Confirm Password" value={signupForm.confirm_password} onChange={(confirm_password) => setSignupForm({ ...signupForm, confirm_password })} autoComplete="new-password" type="password" />
               </div>
               <Messages error={error} notice={notice} />
-              <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] shadow-[0_0_28px_rgba(178,255,89,.35)] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
+              <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#6D28D9] px-4 text-sm font-bold text-white shadow-lg shadow-purple-200 hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]" disabled={isSubmitting} type="submit">
                 <Check className="h-4 w-4" />
                 {isSubmitting ? "Creating..." : "Sign Up"}
               </button>
-              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white px-4 text-sm font-bold text-zinc-950 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Sign up with Google"} onClick={startGoogleSignup} type="button">
+              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED] disabled:cursor-not-allowed disabled:bg-[#E5E7EB]" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Sign up with Google"} onClick={startGoogleSignup} type="button">
                 <span className="text-lg font-bold text-[#4285F4]">G</span>
                 Sign up with Google
               </button>
-              {!googleClientId ? <p className="mt-2 text-xs text-zinc-500">Google sign up setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
+              {!googleClientId ? <p className="mt-2 text-xs text-[#4B5563]">Google sign up setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
             </form>
           )}
         </div>
       </section>
       {googleCompletion ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 px-4">
-          <form className="w-full max-w-md rounded-lg border border-[#B2FF59]/20 bg-zinc-950 p-6 shadow-[0_0_60px_rgba(0,77,64,.45)]" onSubmit={completeGoogleSignup}>
+          <form className="w-full max-w-md rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-2xl shadow-purple-200/70" onSubmit={completeGoogleSignup}>
             <div className="mb-5">
-              <h2 className="text-xl font-semibold">Verify Phone Number</h2>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
+              <h2 className="text-xl font-black text-[#111827]">Verify Phone Number</h2>
+              <p className="mt-2 text-sm leading-6 text-[#4B5563]">
                 Munshi AI uses phone numbers as the global owner identity. Add your phone number to finish Google sign up for {googleCompletion.email}.
               </p>
             </div>
@@ -267,10 +274,10 @@ export default function LoginPage() {
             />
             <Messages error={error} notice={notice} />
             <div className="mt-6 flex gap-3">
-              <button className="h-11 flex-1 rounded-md border border-white/15 px-4 text-sm font-semibold text-zinc-200 hover:bg-white/10" type="button" onClick={() => setGoogleCompletion(null)}>
+              <button className="h-11 flex-1 rounded-lg border border-[#E5E7EB] px-4 text-sm font-semibold text-[#111827] hover:bg-[#FFF7ED]" type="button" onClick={() => setGoogleCompletion(null)}>
                 Cancel
               </button>
-              <button className="h-11 flex-1 rounded-md bg-[#B2FF59] px-4 text-sm font-bold text-[#07100f] hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-500" disabled={isSubmitting} type="submit">
+              <button className="h-11 flex-1 rounded-lg bg-[#6D28D9] px-4 text-sm font-bold text-white hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]" disabled={isSubmitting} type="submit">
                 {isSubmitting ? "Creating..." : "Complete Sign Up"}
               </button>
             </div>
@@ -308,7 +315,7 @@ export default function LoginPage() {
 
 function TabButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
   return (
-    <button className={`h-10 rounded-md text-sm font-semibold transition ${active ? "bg-[#B2FF59] text-[#07100f]" : "text-zinc-300 hover:bg-white/10 hover:text-white"}`} type="button" onClick={onClick}>
+    <button className={`h-10 rounded-md text-sm font-bold transition ${active ? "bg-[#6D28D9] text-white shadow-sm" : "text-[#4B5563] hover:bg-white hover:text-[#111827]"}`} type="button" onClick={onClick}>
       {label}
     </button>
   );
@@ -317,8 +324,8 @@ function TabButton({ active, label, onClick }: { active: boolean; label: string;
 function Messages({ error, notice }: { error: string | null; notice: string | null }) {
   return (
     <>
-      {error ? <p className="mt-4 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200">{error}</p> : null}
-      {notice ? <p className="mt-4 rounded-md border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200">{notice}</p> : null}
+      {error ? <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-[#DC2626]">{error}</p> : null}
+      {notice ? <p className="mt-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-[#16A34A]">{notice}</p> : null}
     </>
   );
 }
@@ -343,10 +350,10 @@ function getErrorMessage(caught: unknown, fallback: string) {
 function Field({ label, value, onChange, type = "text", autoComplete, required = true }: { label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string; required?: boolean }) {
   return (
     <label className="block text-sm">
-      <span className="font-medium text-zinc-200">{label}</span>
+      <span className="font-semibold text-[#111827]">{label}</span>
       <input
         autoComplete={autoComplete}
-        className="mt-1 h-11 w-full rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-[#B2FF59]/70 focus:ring-2 focus:ring-[#B2FF59]/15"
+        className="mt-1 h-11 w-full rounded-lg border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827] outline-none transition placeholder:text-[#9CA3AF] focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
         onChange={(event) => onChange(event.target.value)}
         required={required}
         type={type}
@@ -369,21 +376,21 @@ function PhoneField({
 }) {
   return (
     <label className="block text-sm">
-      <span className="font-medium text-zinc-200">Phone Number</span>
-      <div className="mt-1 flex h-11 overflow-hidden rounded-md border border-white/10 bg-white/5 focus-within:border-[#B2FF59]/70 focus-within:ring-2 focus-within:ring-[#B2FF59]/15">
+      <span className="font-semibold text-[#111827]">Phone Number</span>
+      <div className="mt-1 flex h-11 overflow-hidden rounded-lg border border-[#E5E7EB] bg-white focus-within:border-[#6D28D9] focus-within:ring-2 focus-within:ring-[#F3E8FF]">
         <select
-          className="w-24 border-r border-white/10 bg-white/10 px-3 text-sm font-semibold text-white outline-none"
+          className="w-24 border-r border-[#E5E7EB] bg-[#FFF7ED] px-3 text-sm font-semibold text-[#111827] outline-none"
           value={countryCode}
           onChange={(event) => onCountryCodeChange(event.target.value)}
         >
-          <option className="text-zinc-950" value="+91">+91</option>
-          <option className="text-zinc-950" value="+1">+1</option>
-          <option className="text-zinc-950" value="+44">+44</option>
-          <option className="text-zinc-950" value="+971">+971</option>
+          <option value="+91">+91</option>
+          <option value="+1">+1</option>
+          <option value="+44">+44</option>
+          <option value="+971">+971</option>
         </select>
         <input
           autoComplete="tel-national"
-          className="min-w-0 flex-1 bg-transparent px-3 text-sm text-white outline-none placeholder:text-zinc-500"
+          className="min-w-0 flex-1 bg-transparent px-3 text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
           inputMode="tel"
           required
           type="tel"

@@ -59,9 +59,9 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             className={[
               "w-80 rounded-lg border px-4 py-3 text-sm font-medium shadow-lg",
-              toast.tone === "warning" ? "border-amber-200 bg-amber-50 text-amber-900" : "",
-              toast.tone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "",
-              toast.tone === "info" ? "border-zinc-200 bg-white text-zinc-800" : ""
+              toast.tone === "warning" ? "border-[#F59E0B]/30 bg-[#F59E0B]/10 text-[#111827]" : "",
+              toast.tone === "success" ? "border-[#16A34A]/30 bg-[#16A34A]/10 text-[#166534]" : "",
+              toast.tone === "info" ? "border-[#E5E7EB] bg-white text-[#111827]" : ""
             ].join(" ")}
           >
             {toast.message}
@@ -69,37 +69,37 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
         ))}
       </div>
       {upgradeDetail ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/50 px-4">
-          <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/50 px-4">
+          <div className="w-full max-w-lg rounded-lg border border-[#E5E7EB] bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold text-zinc-950">Upgrade Required</h2>
-                <p className="mt-2 text-sm text-zinc-600">{upgradeDetail.message}</p>
+                <h2 className="text-lg font-semibold text-[#111827]">Upgrade Required</h2>
+                <p className="mt-2 text-sm text-[#4B5563]">{upgradeDetail.message}</p>
               </div>
-              <button className="text-sm font-semibold text-zinc-500" type="button" onClick={() => setUpgradeDetail(null)}>
+              <button className="text-sm font-semibold text-[#4B5563] hover:text-[#6D28D9]" type="button" onClick={() => setUpgradeDetail(null)}>
                 Close
               </button>
             </div>
 
-            <div className="mt-5 rounded-lg border border-zinc-200">
+            <div className="mt-5 rounded-lg border border-[#E5E7EB]">
               {[
                 ["Current plan", `${upgradeDetail.used}/${upgradeDetail.limit} machines used`],
                 ["Next plan", "Higher machine capacity"],
                 ["Includes", "More factories, staff roles, AI automation, and priority scaling"]
               ].map(([label, value]) => (
-                <div key={label} className="grid grid-cols-[130px_1fr] border-b border-zinc-200 px-4 py-3 last:border-b-0">
-                  <span className="text-sm font-semibold text-zinc-700">{label}</span>
-                  <span className="text-sm text-zinc-600">{value}</span>
+                <div key={label} className="grid grid-cols-[130px_1fr] border-b border-[#E5E7EB] px-4 py-3 last:border-b-0">
+                  <span className="text-sm font-semibold text-[#111827]">{label}</span>
+                  <span className="text-sm text-[#4B5563]">{value}</span>
                 </div>
               ))}
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
-              <button className="h-10 rounded-md border border-zinc-300 px-4 text-sm font-semibold text-zinc-700" type="button" onClick={() => setUpgradeDetail(null)}>
+              <button className="h-10 rounded-md border border-[#E5E7EB] px-4 text-sm font-semibold text-[#4B5563] hover:bg-[#FFF7ED]" type="button" onClick={() => setUpgradeDetail(null)}>
                 Not now
               </button>
               <button
-                className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700"
+                className="h-10 rounded-md bg-[#6D28D9] px-4 text-sm font-semibold text-white hover:bg-[#4C1D95]"
                 type="button"
                 onClick={() => {
                   setUpgradeDetail(null);

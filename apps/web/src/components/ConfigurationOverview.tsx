@@ -32,9 +32,9 @@ export default function ConfigurationOverview() {
 
   if (isLoading) {
     return (
-      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-3 text-sm text-zinc-500">
-          <RefreshCw className="h-4 w-4 animate-spin" />
+      <section className="rounded-lg border border-[#E5E7EB] bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-3 text-sm text-[#4B5563]">
+          <RefreshCw className="h-4 w-4 animate-spin text-[#6D28D9]" />
           Loading configuration...
         </div>
       </section>
@@ -46,25 +46,25 @@ export default function ConfigurationOverview() {
   }
 
   return (
-    <section className="space-y-4 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+    <section className="space-y-4 rounded-lg border border-[#E5E7EB] bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-950">Configuration Overview</h2>
-          <p className="mt-1 text-sm text-zinc-500">Current onboarding setup saved for this factory.</p>
+          <h2 className="text-lg font-semibold text-[#111827]">Configuration Overview</h2>
+          <p className="mt-1 text-sm text-[#4B5563]">Current onboarding setup saved for this factory.</p>
         </div>
-        <button className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={load}>
+        <button className="inline-flex h-10 items-center gap-2 rounded-md border border-[#E5E7EB] px-3 text-sm font-semibold text-[#4B5563] hover:bg-[#FFF7ED]" type="button" onClick={load}>
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>
       </div>
 
       <div>
-        <div className="mb-2 flex items-center justify-between text-xs font-semibold text-zinc-500">
+        <div className="mb-2 flex items-center justify-between text-xs font-semibold text-[#4B5563]">
           <span>{completion}% complete</span>
           <span>{data.workers.length + data.machines.length + data.raw_material_metrics.length + data.packaging_metrics.length} records</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
-          <div className="h-full rounded-full bg-brand-600" style={{ width: `${completion}%` }} />
+        <div className="h-2 overflow-hidden rounded-full bg-[#F3E8FF]">
+          <div className="h-full rounded-full bg-[#6D28D9]" style={{ width: `${completion}%` }} />
         </div>
       </div>
 
@@ -111,19 +111,19 @@ function SummaryCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+    <div className="rounded-lg border border-[#E5E7EB] bg-[#FFF7ED] p-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-md bg-white text-brand-700 shadow-sm">
+        <span className="grid h-10 w-10 place-items-center rounded-md bg-white text-[#6D28D9] shadow-sm">
           <Icon className="h-5 w-5" />
         </span>
-        {complete ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <span className="h-2 w-2 rounded-full bg-zinc-300" />}
+        {complete ? <CheckCircle2 className="h-5 w-5 text-[#16A34A]" /> : <span className="h-2 w-2 rounded-full bg-[#E5E7EB]" />}
       </div>
       <div className="mt-4">
-        <p className="text-sm font-medium text-zinc-500">{title}</p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-950">{count}</p>
+        <p className="text-sm font-medium text-[#4B5563]">{title}</p>
+        <p className="mt-1 text-2xl font-semibold text-[#111827]">{count}</p>
       </div>
       <div className="mt-4 space-y-2">
-        {count === 0 ? <p className="text-sm text-zinc-400">No records yet</p> : children}
+        {count === 0 ? <p className="text-sm text-[#4B5563]">No records yet</p> : children}
       </div>
     </div>
   );
@@ -132,8 +132,8 @@ function SummaryCard({
 function Line({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
-      <span className="truncate text-zinc-700">{label}</span>
-      <span className="shrink-0 font-medium text-zinc-950">{value}</span>
+      <span className="truncate text-[#4B5563]">{label}</span>
+      <span className="shrink-0 font-medium text-[#111827]">{value}</span>
     </div>
   );
 }

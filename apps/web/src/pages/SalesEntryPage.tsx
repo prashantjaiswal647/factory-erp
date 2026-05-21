@@ -324,7 +324,7 @@ function ReadOnlyValue({ label, value }: { label: string; value: string }) {
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
-    <button className="fixed right-5 top-20 z-50 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
+    <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
       {message}
     </button>
   );

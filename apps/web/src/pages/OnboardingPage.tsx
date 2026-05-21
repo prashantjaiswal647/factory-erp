@@ -217,7 +217,7 @@ export default function OnboardingPage() {
           <button
             key={label}
             className={`flex h-12 items-center justify-center rounded-md border text-sm font-semibold ${
-              step === index ? "border-brand-600 bg-brand-50 text-brand-700" : "border-zinc-200 bg-white text-zinc-600"
+              step === index ? "border-[#6D28D9] bg-[#F3E8FF] text-[#4C1D95]" : "border-[#E5E7EB] bg-white text-[#4B5563]"
             }`}
             type="button"
             onClick={() => setStep(index)}
@@ -507,13 +507,13 @@ function MaterialCard({ title, children }: { title: string; children: React.Reac
 
 function StockButton({ label, color, isSaving, onClick }: { label: string; color: "green" | "teal" | "blue" | "purple"; isSaving: boolean; onClick: () => void }) {
   const colors = {
-    green: "bg-emerald-600 hover:bg-emerald-700",
-    teal: "bg-teal-600 hover:bg-teal-700",
-    blue: "bg-blue-600 hover:bg-blue-700",
-    purple: "bg-purple-600 hover:bg-purple-700"
+    green: "bg-[#6D28D9] hover:bg-[#4C1D95]",
+    teal: "bg-[#6D28D9] hover:bg-[#4C1D95]",
+    blue: "bg-[#6D28D9] hover:bg-[#4C1D95]",
+    purple: "bg-[#6D28D9] hover:bg-[#4C1D95]"
   };
   return (
-    <button className={`inline-flex h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white disabled:bg-zinc-300 ${colors[color]}`} disabled={isSaving} type="button" onClick={onClick}>
+    <button className={`inline-flex h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white disabled:bg-[#E5E7EB] ${colors[color]}`} disabled={isSaving} type="button" onClick={onClick}>
       <Plus className="h-4 w-4" />
       {isSaving ? "Saving..." : `+ ${label}`}
     </button>
@@ -531,7 +531,7 @@ function Readout({ label, value }: { label: string; value: number }) {
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
-    <button className="fixed right-5 top-20 z-50 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
+    <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
       {message}
     </button>
   );

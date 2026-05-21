@@ -25,7 +25,7 @@ class Factory(Base):
     __tablename__ = "factories"
     __table_args__ = (
         CheckConstraint(
-            "subscription_status IN ('trial', 'active', 'expired')",
+            "subscription_status IN ('trial_active', 'trial_expired', 'active', 'expired', 'cancelled', 'payment_pending', 'trial')",
             name="ck_factories_subscription_status",
         ),
     )
@@ -48,13 +48,63 @@ class Factory(Base):
     )
     trial_start_date = Column(DateTime(timezone=True), nullable=True, server_default=func.now())
     trial_end_date = Column(DateTime(timezone=True), nullable=True)
-    subscription_status = Column(String(50), nullable=False, default="trial", server_default="trial", index=True)
+    subscription_status = Column(String(50), nullable=False, default="trial_active", server_default="trial_active", index=True)
+    active_plan = Column(String(50), nullable=True)
+    billing_cycle = Column(String(20), nullable=True)
+    subscription_start_date = Column(DateTime(timezone=True), nullable=True)
+    subscription_end_date = Column(DateTime(timezone=True), nullable=True, index=True)
+    payment_status = Column(String(50), nullable=False, default="payment_pending", server_default="payment_pending", index=True)
     razorpay_customer_id = Column(String(255), nullable=True)
     razorpay_subscription_id = Column(String(255), nullable=True)
     telegram_bot_token = Column(String(255), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
+
+
+class CustomPlanEnquiry(Base):
+    __tablename__ = "custom_plan_enquiries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=True, index=True)
+    owner_name = Column(String(255), nullable=False)
+    factory_name = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=False, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    number_of_machines = Column(Integer, nullable=False)
+    requirement_details = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class DemoBookingRequest(Base):
+    __tablename__ = "demo_booking_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=True, index=True)
+    owner_name = Column(String(255), nullable=False)
+    factory_name = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=False, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    preferred_plan = Column(String(50), nullable=True)
+    message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    plan_code = Column(String(50), nullable=False, index=True)
+    billing_cycle = Column(String(20), nullable=False)
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String(10), nullable=False, default="INR", server_default="INR")
+    payment_status = Column(String(50), nullable=False, default="paid", server_default="paid", index=True)
+    provider = Column(String(50), nullable=True)
+    provider_payment_id = Column(String(255), nullable=True, index=True)
+    subscription_start_date = Column(DateTime(timezone=True), nullable=False)
+    subscription_end_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 
 class TenantMixin:

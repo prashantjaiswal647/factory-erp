@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { api } from "../lib/api";
 
 export type UserRole = "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
+export type SubscriptionStatus = "trial_active" | "trial_expired" | "active" | "expired" | "cancelled" | "payment_pending" | "trial";
 
 type AuthUser = {
   id?: number;
@@ -14,9 +15,14 @@ type AuthUser = {
   role: UserRole;
   factory_id?: number;
   factory_name?: string | null;
-  subscription_status?: "trial" | "active" | "expired" | null;
+  subscription_status?: SubscriptionStatus | null;
   trial_end_date?: string | null;
   trial_days_remaining?: number;
+  active_plan?: string | null;
+  billing_cycle?: "monthly" | "yearly" | null;
+  subscription_start_date?: string | null;
+  subscription_end_date?: string | null;
+  payment_status?: string | null;
   machines_used?: number;
   machine_limit?: number;
   machine_plan?: string;
@@ -44,7 +50,7 @@ type TokenResponse = {
     phone_number?: string | null;
     full_name?: string | null;
     role: string;
-    subscription_status?: "trial" | "active" | "expired" | null;
+    subscription_status?: SubscriptionStatus | null;
     trial_end_date?: string | null;
     trial_days_remaining?: number;
   };

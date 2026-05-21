@@ -48,15 +48,15 @@ function normalizeKey(label: string) {
 
 function statusBadgeClass(statusValue: TemplateStatus) {
   if (statusValue === "approved") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "border-[#16A34A]/30 bg-[#16A34A]/10 text-[#166534]";
   }
   if (statusValue === "processing") {
-    return "border-sky-200 bg-sky-50 text-sky-700";
+    return "border-[#6D28D9]/30 bg-[#F3E8FF] text-[#4C1D95]";
   }
   if (statusValue === "rejected") {
-    return "border-red-200 bg-red-50 text-red-700";
+    return "border-[#DC2626]/30 bg-[#DC2626]/10 text-[#DC2626]";
   }
-  return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-[#F59E0B]/30 bg-[#F59E0B]/10 text-[#111827]";
 }
 
 function statusLabel(statusValue: TemplateStatus) {
@@ -154,41 +154,41 @@ export default function MachineOnboardingPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-normal text-zinc-950">Template Studio</h1>
-        <p className="mt-1 text-sm text-zinc-500">Create AI-verified machine templates for factory onboarding.</p>
+        <h1 className="text-2xl font-semibold tracking-normal text-[#111827]">Template Studio</h1>
+        <p className="mt-1 text-sm text-[#4B5563]">Create AI-verified machine templates for factory onboarding.</p>
       </div>
 
       {submittedTemplate ? (
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+        <div className="rounded-lg border border-[#E5E7EB] bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm font-medium text-zinc-800">Template #{submittedTemplate.id}</p>
+            <p className="text-sm font-medium text-[#111827]">Template #{submittedTemplate.id}</p>
             <span className={`inline-flex w-fit items-center rounded-full border px-3 py-1 text-xs font-semibold capitalize ${statusBadgeClass(submittedTemplate.status)}`}>
               {statusLabel(submittedTemplate.status)}
             </span>
           </div>
           {submittedTemplate.status === "processing" ? (
-            <p className="mt-2 text-sm text-sky-800">AI is verifying format, duplicate risk, and machine logic.</p>
+            <p className="mt-2 text-sm text-[#4C1D95]">AI is verifying format, duplicate risk, and machine logic.</p>
           ) : null}
           {submittedTemplate.status === "approved" ? (
-            <p className="mt-2 text-sm text-emerald-700">Approved. This template is now globally active.</p>
+            <p className="mt-2 text-sm text-[#166534]">Approved. This template is now globally active.</p>
           ) : null}
           {submittedTemplate.status === "pending" ? (
-            <p className="mt-2 text-sm text-amber-800">Your custom template is under admin review.</p>
+            <p className="mt-2 text-sm text-[#111827]">Your custom template is under admin review.</p>
           ) : null}
           {submittedTemplate.ai_confidence !== null && submittedTemplate.ai_confidence !== undefined ? (
-            <p className="mt-2 text-xs text-zinc-500">AI confidence: {(submittedTemplate.ai_confidence * 100).toFixed(0)}%</p>
+            <p className="mt-2 text-xs text-[#4B5563]">AI confidence: {(submittedTemplate.ai_confidence * 100).toFixed(0)}%</p>
           ) : null}
         </div>
       ) : null}
 
       <form className="space-y-6" onSubmit={handleSubmit}>
-        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
-          <label className="block text-sm font-medium text-zinc-700" htmlFor="machine-type">
+        <section className="rounded-lg border border-[#E5E7EB] bg-white p-5 shadow-sm">
+          <label className="block text-sm font-medium text-[#4B5563]" htmlFor="machine-type">
             Machine Type
           </label>
           <select
             id="machine-type"
-            className="mt-2 h-11 w-full max-w-sm rounded-md border border-zinc-300 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+            className="mt-2 h-11 w-full max-w-sm rounded-md border border-[#E5E7EB] bg-white px-3 text-sm outline-none transition focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
             value={machineType}
             onChange={(event) => {
               setMachineType(event.target.value as MachineType);
@@ -204,10 +204,10 @@ export default function MachineOnboardingPage() {
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             {selectedFields.map((field) => (
-              <label key={field.key} className="block text-sm font-medium text-zinc-700">
+              <label key={field.key} className="block text-sm font-medium text-[#4B5563]">
                 {field.label}
                 <input
-                  className="mt-2 h-11 w-full rounded-md border border-zinc-300 px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  className="mt-2 h-11 w-full rounded-md border border-[#E5E7EB] px-3 text-sm outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
                   type={field.type}
                   min={field.type === "number" ? 0 : undefined}
                   placeholder={field.placeholder}
@@ -219,14 +219,14 @@ export default function MachineOnboardingPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <section className="rounded-lg border border-[#E5E7EB] bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-base font-semibold text-zinc-950">Custom Fields</h2>
-              <p className="mt-1 text-sm text-zinc-500">Add values that are unique to this machine or factory.</p>
+              <h2 className="text-base font-semibold text-[#111827]">Custom Fields</h2>
+              <p className="mt-1 text-sm text-[#4B5563]">Add values that are unique to this machine or factory.</p>
             </div>
             <button
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-[#E5E7EB] bg-white px-3 text-sm font-medium text-[#4B5563] transition hover:bg-[#FFF7ED]"
               type="button"
               onClick={addCustomField}
             >
@@ -239,19 +239,19 @@ export default function MachineOnboardingPage() {
             {customFields.map((field) => (
               <div key={field.id} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <input
-                  className="h-11 rounded-md border border-zinc-300 px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  className="h-11 rounded-md border border-[#E5E7EB] px-3 text-sm outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
                   placeholder="Label, e.g. Voltage"
                   value={field.label}
                   onChange={(event) => updateCustomField(field.id, { label: event.target.value })}
                 />
                 <input
-                  className="h-11 rounded-md border border-zinc-300 px-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  className="h-11 rounded-md border border-[#E5E7EB] px-3 text-sm outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
                   placeholder="Value, e.g. 220v"
                   value={field.value}
                   onChange={(event) => updateCustomField(field.id, { value: event.target.value })}
                 />
                 <button
-                  className="grid h-11 w-11 place-items-center rounded-md border border-zinc-300 text-zinc-500 transition hover:bg-red-50 hover:text-red-600"
+                  className="grid h-11 w-11 place-items-center rounded-md border border-[#E5E7EB] text-[#4B5563] transition hover:bg-[#DC2626]/10 hover:text-[#DC2626]"
                   type="button"
                   aria-label="Remove custom field"
                   title="Remove custom field"
@@ -266,15 +266,15 @@ export default function MachineOnboardingPage() {
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[#6D28D9] px-4 text-sm font-semibold text-white transition hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:opacity-70"
             type="submit"
             disabled={status === "saving"}
           >
             <Save className="h-4 w-4" />
             {status === "saving" ? "Submitting" : "Submit Template"}
           </button>
-          {status === "saved" ? <p className="text-sm font-medium text-sky-700">Machine template submitted for AI verification.</p> : null}
-          {status === "error" ? <p className="text-sm font-medium text-red-600">{errorMessage}</p> : null}
+          {status === "saved" ? <p className="text-sm font-medium text-[#4C1D95]">Machine template submitted for AI verification.</p> : null}
+          {status === "error" ? <p className="text-sm font-medium text-[#DC2626]">{errorMessage}</p> : null}
         </div>
       </form>
     </div>

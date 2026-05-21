@@ -58,6 +58,7 @@ export default function App() {
         }
       >
         <Route path="billing" element={<BillingPage />} />
+        <Route path="plans" element={<BillingPage />} />
         <Route path="subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="dashboard" element={<RoleLanding />} />
         <Route path="profile" element={<ProfilePage />} />

@@ -19,7 +19,8 @@ def extend_trial(phone_number: str, days: int) -> None:
         now = datetime.now(timezone.utc)
         factory.trial_start_date = now
         factory.trial_end_date = now + timedelta(days=days)
-        factory.subscription_status = "trial"
+        factory.subscription_status = "trial_active"
+        factory.payment_status = "payment_pending"
         db.commit()
 
         print(

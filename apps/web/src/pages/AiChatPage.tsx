@@ -329,7 +329,7 @@ export default function AiChatPage() {
 function Toast({ type, message, onClose }: { type: "success" | "error"; message: string; onClose: () => void }) {
   return (
     <button
-      className={`fixed right-5 top-20 z-50 rounded-md px-4 py-3 text-sm font-semibold text-white shadow-lg ${type === "success" ? "bg-emerald-600" : "bg-red-600"}`}
+      className={`fixed right-5 top-20 z-50 rounded-md px-4 py-3 text-sm font-semibold text-white shadow-lg ${type === "success" ? "bg-[#16A34A]" : "bg-[#DC2626]"}`}
       type="button"
       onClick={onClose}
     >

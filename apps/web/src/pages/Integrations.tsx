@@ -62,7 +62,7 @@ export default function Integrations() {
         <form className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm sm:p-6" onSubmit={handleSubmit}>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 gap-3">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-sky-50 text-sky-700">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-[#F3E8FF] text-[#6D28D9]">
                 <Send className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="min-w-0">

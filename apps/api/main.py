@@ -981,11 +981,72 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS factory_name VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS owner_id INTEGER",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_start_date TIMESTAMP WITH TIME ZONE DEFAULT NOW()",
-        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '3 days')",
-        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial'",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '7 days')",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial_active'",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS active_plan VARCHAR(50)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(20)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_start_date TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_end_date TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) NOT NULL DEFAULT 'payment_pending'",
+        "ALTER TABLE factories DROP CONSTRAINT IF EXISTS ck_factories_subscription_status",
+        (
+            "ALTER TABLE factories ADD CONSTRAINT ck_factories_subscription_status "
+            "CHECK (subscription_status IN ('trial_active', 'trial_expired', 'active', 'expired', 'cancelled', 'payment_pending', 'trial'))"
+        ),
+        "UPDATE factories SET subscription_status = 'trial_active' WHERE subscription_status = 'trial'",
+        (
+            "UPDATE factories SET subscription_status = 'trial_expired', payment_status = 'payment_pending' "
+            "WHERE subscription_status = 'expired' AND subscription_end_date IS NULL"
+        ),
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_customer_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS razorpay_subscription_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(255)",
+        (
+            "CREATE TABLE IF NOT EXISTS custom_plan_enquiries ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER REFERENCES factories(id), "
+            "owner_name VARCHAR(255) NOT NULL, "
+            "factory_name VARCHAR(255) NOT NULL, "
+            "phone VARCHAR(50) NOT NULL, "
+            "email VARCHAR(255) NOT NULL, "
+            "number_of_machines INTEGER NOT NULL, "
+            "requirement_details TEXT NOT NULL, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS demo_booking_requests ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER REFERENCES factories(id), "
+            "owner_name VARCHAR(255) NOT NULL, "
+            "factory_name VARCHAR(255), "
+            "phone VARCHAR(50) NOT NULL, "
+            "email VARCHAR(255) NOT NULL, "
+            "preferred_plan VARCHAR(50), "
+            "message TEXT, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS subscription_payments ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "plan_code VARCHAR(50) NOT NULL, "
+            "billing_cycle VARCHAR(20) NOT NULL, "
+            "amount_paise INTEGER NOT NULL, "
+            "currency VARCHAR(10) NOT NULL DEFAULT 'INR', "
+            "payment_status VARCHAR(50) NOT NULL DEFAULT 'paid', "
+            "provider VARCHAR(50), "
+            "provider_payment_id VARCHAR(255), "
+            "subscription_start_date TIMESTAMP WITH TIME ZONE NOT NULL, "
+            "subscription_end_date TIMESTAMP WITH TIME ZONE NOT NULL, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        "CREATE INDEX IF NOT EXISTS ix_custom_plan_enquiries_factory_id ON custom_plan_enquiries (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_demo_booking_requests_factory_id ON demo_booking_requests (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_subscription_payments_factory_id ON subscription_payments (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_factories_subscription_end_date ON factories (subscription_end_date)",
         "UPDATE factories SET factory_name = name WHERE factory_name IS NULL",
         (
             "CREATE TABLE IF NOT EXISTS machines ("

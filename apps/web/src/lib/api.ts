@@ -179,11 +179,33 @@ export type AiDashboardInsights = {
 };
 
 export type BillingStatus = {
-  subscription_status: "trial" | "active" | "expired";
+  subscription_status: "trial_active" | "trial_expired" | "active" | "expired" | "cancelled" | "payment_pending" | "trial";
+  trial_start_date?: string | null;
   trial_end_date?: string | null;
   trial_days_remaining: number;
   is_access_allowed: boolean;
   is_owner: boolean;
+  active_plan?: string | null;
+  billing_cycle?: "monthly" | "yearly" | null;
+  subscription_start_date?: string | null;
+  subscription_end_date?: string | null;
+  payment_status?: string | null;
+};
+
+export type PricingPlan = {
+  code: string;
+  name: string;
+  machine_limit_label: string;
+  monthly_label: string;
+  yearly_label?: string | null;
+  features: string[];
+  price: {
+    monthly: number;
+    yearly_original?: number | null;
+    yearly_discounted?: number | null;
+    starts_from?: number | null;
+  };
+  is_custom: boolean;
 };
 
 export type StaffRoleCreate = "sub_owner" | "supervisor" | "worker";
@@ -224,7 +246,11 @@ export type RazorpayOrder = {
   order_id: string;
   amount: number;
   currency: string;
+  plan_code: string;
+  billing_cycle: "monthly" | "yearly";
 };
+
+export type ExpiringSoonSubscription = BillingStatus;
 
 export type TelegramIntegration = {
   telegram_bot_token?: string | null;
@@ -889,6 +915,10 @@ export function getBillingStatus() {
   return api.get<BillingStatus>("/api/billing/status");
 }
 
+export function getPricingPlans() {
+  return api.get<PricingPlan[]>("/api/billing/plans");
+}
+
 export function getStaffMembers() {
   return api.get<StaffMember[]>("/api/staff");
 }
@@ -909,16 +939,57 @@ export function createFactoryExpense(payload: FactoryExpenseCreate) {
   return api.post<FactoryExpense>("/api/expenses", payload);
 }
 
-export function createBillingOrder() {
-  return api.post<RazorpayOrder>("/api/billing/create-order");
+export function createBillingOrder(payload: { plan_code: string; billing_cycle: "monthly" | "yearly" }) {
+  return api.post<RazorpayOrder>("/api/billing/create-order", payload);
+}
+
+export function startFreeTrial(payload: { plan_code?: string } = { plan_code: "basic" }) {
+  return api.post<BillingStatus>("/api/billing/start-free-trial", payload);
 }
 
 export function verifyBillingPayment(payload: {
   razorpay_order_id: string;
   razorpay_payment_id: string;
   razorpay_signature: string;
+  plan_code: string;
+  billing_cycle: "monthly" | "yearly";
 }) {
   return api.post<BillingStatus & { razorpay_payment_id: string }>("/api/billing/verify", payload);
+}
+
+export function activateSubscription(payload: {
+  plan_code: string;
+  billing_cycle: "monthly" | "yearly";
+  provider_payment_id?: string;
+  payment_status?: "paid" | "payment_pending";
+}) {
+  return api.post<BillingStatus>("/api/billing/activate", payload);
+}
+
+export function getExpiringSoonSubscriptions() {
+  return api.get<ExpiringSoonSubscription[]>("/api/billing/expiring-soon");
+}
+
+export function submitCustomPlanEnquiry(payload: {
+  owner_name: string;
+  factory_name: string;
+  phone: string;
+  email: string;
+  number_of_machines: number;
+  requirement_details: string;
+}) {
+  return api.post<{ id: number; message: string }>("/api/billing/custom-enquiry", payload);
+}
+
+export function submitDemoBooking(payload: {
+  owner_name: string;
+  factory_name?: string;
+  phone: string;
+  email: string;
+  preferred_plan?: string;
+  message?: string;
+}) {
+  return api.post<{ id: number; message: string }>("/api/billing/demo-booking", payload);
 }
 
 export function getTelegramIntegration() {

@@ -45,6 +45,15 @@ export default function Layout() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "U";
+  const isTrialActive = user?.subscription_status === "trial_active" || user?.subscription_status === "trial";
+  const trialEndLabel = user?.trial_end_date ? new Date(user.trial_end_date).toLocaleDateString("en-IN") : "";
+  const subscriptionEndDate = user?.subscription_end_date ? new Date(user.subscription_end_date) : null;
+  const expiresSoon = Boolean(
+    user?.subscription_status === "active" &&
+      subscriptionEndDate &&
+      subscriptionEndDate.getTime() - Date.now() <= 7 * 24 * 60 * 60 * 1000 &&
+      subscriptionEndDate.getTime() >= Date.now()
+  );
 
   function handleSignOut() {
     logout();
@@ -58,7 +67,7 @@ export default function Layout() {
     return (
       <div key={item.href} className={showSection ? "pt-3" : undefined}>
         {showSection ? (
-          <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+          <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-[#4B5563]">
             {item.section}
           </p>
         ) : null}
@@ -70,8 +79,8 @@ export default function Layout() {
             [
               "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
               isActive
-                ? "bg-brand-50 text-brand-700"
-                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950"
+                ? "bg-[#F3E8FF] text-[#4C1D95]"
+                : "text-[#4B5563] hover:bg-[#FFF7ED] hover:text-[#111827]"
             ].join(" ")
           }
         >
@@ -83,15 +92,15 @@ export default function Layout() {
   });
 
   return (
-    <div className="min-h-screen bg-zinc-100 text-zinc-950">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden h-screen w-64 flex-col border-r border-zinc-200 bg-white lg:flex">
-        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-zinc-200 px-5">
-          <div className="grid h-9 w-9 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
-            AI
+    <div className="min-h-screen bg-[#FFF7ED] text-[#111827]">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden h-screen w-64 flex-col border-r border-[#E5E7EB] bg-white lg:flex">
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-[#E5E7EB] px-5">
+          <div className="grid h-9 w-9 place-items-center rounded-md bg-[#F3E8FF] text-sm font-bold text-[#6D28D9]">
+            M
           </div>
           <div>
-            <p className="text-sm font-semibold leading-5">AI ERP</p>
-            <p className="text-xs text-zinc-500">Factory Operations</p>
+            <p className="text-sm font-semibold leading-5">Munshi AI</p>
+            <p className="text-xs text-[#4B5563]">Factory Operations</p>
           </div>
         </div>
 
@@ -103,24 +112,24 @@ export default function Layout() {
       {isMobileNavOpen ? (
         <div className="fixed inset-0 z-30 lg:hidden">
           <button
-            className="absolute inset-0 bg-zinc-950/30"
+            className="absolute inset-0 bg-[#111827]/30"
             type="button"
             aria-label="Close navigation"
             onClick={() => setIsMobileNavOpen(false)}
           />
-          <aside className="relative flex h-full max-h-screen w-72 flex-col border-r border-zinc-200 bg-white shadow-xl">
-            <div className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-200 px-5">
+          <aside className="relative flex h-full max-h-screen w-72 flex-col border-r border-[#E5E7EB] bg-white shadow-xl">
+            <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#E5E7EB] px-5">
               <div className="flex items-center gap-3">
-                <div className="grid h-9 w-9 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
-                  AI
+                <div className="grid h-9 w-9 place-items-center rounded-md bg-[#F3E8FF] text-sm font-bold text-[#6D28D9]">
+                  M
                 </div>
                 <div>
-                  <p className="text-sm font-semibold leading-5">AI ERP</p>
-                  <p className="text-xs text-zinc-500">Factory Operations</p>
+                  <p className="text-sm font-semibold leading-5">Munshi AI</p>
+                  <p className="text-xs text-[#4B5563]">Factory Operations</p>
                 </div>
               </div>
               <button
-                className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600"
+                className="grid h-9 w-9 place-items-center rounded-md border border-[#E5E7EB] text-[#4B5563]"
                 type="button"
                 aria-label="Close navigation"
                 title="Close navigation"
@@ -135,10 +144,10 @@ export default function Layout() {
       ) : null}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between lg:px-8">
+        <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-[#E5E7EB] bg-white/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between lg:px-8">
           <div className="flex w-full items-center gap-3 md:min-w-0 md:flex-1">
             <button
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-zinc-200 text-zinc-600 lg:hidden"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-[#E5E7EB] text-[#4B5563] lg:hidden"
               type="button"
               aria-label="Open navigation"
               title="Open navigation"
@@ -148,9 +157,9 @@ export default function Layout() {
             </button>
 
             <div className="relative min-w-0 flex-1 md:max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4B5563]" />
               <input
-                className="h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 pl-9 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
+                className="h-10 w-full rounded-md border border-[#E5E7EB] bg-[#FFF7ED] pl-9 pr-3 text-sm text-[#111827] outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:bg-white focus:ring-2 focus:ring-[#F3E8FF]"
                 placeholder="Search materials, orders, suppliers"
                 type="search"
               />
@@ -158,9 +167,9 @@ export default function Layout() {
           </div>
 
           <div className="z-20 flex w-full items-center justify-between gap-3 md:w-auto md:shrink-0 md:justify-end">
-            {user?.subscription_status === "trial" ? (
+            {isTrialActive ? (
               <button
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-900 shadow-sm transition hover:border-amber-300 hover:bg-amber-100"
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 text-sm font-semibold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/20"
                 type="button"
                 onClick={() => navigate("/billing")}
               >
@@ -170,27 +179,27 @@ export default function Layout() {
 
             <div className="relative">
               <button
-                className="flex h-10 items-center gap-2 rounded-full border border-zinc-200 bg-white pl-1.5 pr-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+                className="flex h-10 items-center gap-2 rounded-full border border-[#E5E7EB] bg-white pl-1.5 pr-3 text-sm font-medium text-[#4B5563] shadow-sm transition hover:border-[#6D28D9]/30 hover:bg-[#FFF7ED]"
                 type="button"
                 aria-expanded={isProfileMenuOpen}
                 aria-haspopup="menu"
                 onClick={() => setIsProfileMenuOpen((current) => !current)}
               >
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-brand-600 text-xs font-bold text-white">
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-[#6D28D9] text-xs font-bold text-white">
                   {initials}
                 </span>
                 <span className="hidden max-w-32 truncate sm:inline">{displayName}</span>
-                <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden="true" />
+                <ChevronDown className="h-4 w-4 text-[#4B5563]" aria-hidden="true" />
               </button>
 
               {isProfileMenuOpen ? (
-                <div className="absolute right-0 mt-2 w-56 overflow-hidden rounded-lg border border-zinc-200 bg-white py-2 shadow-lg" role="menu">
-                  <div className="border-b border-zinc-100 px-4 pb-2">
-                    <p className="truncate text-sm font-semibold text-zinc-950">{displayName}</p>
-                    <p className="text-xs text-zinc-500">{user?.role}</p>
+                <div className="absolute right-0 mt-2 w-56 overflow-hidden rounded-lg border border-[#E5E7EB] bg-white py-2 shadow-lg" role="menu">
+                  <div className="border-b border-[#E5E7EB] px-4 pb-2">
+                    <p className="truncate text-sm font-semibold text-[#111827]">{displayName}</p>
+                    <p className="text-xs text-[#4B5563]">{user?.role}</p>
                   </div>
                   <button
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-[#4B5563] hover:bg-[#FFF7ED]"
                     type="button"
                     role="menuitem"
                     onClick={() => {
@@ -198,11 +207,11 @@ export default function Layout() {
                       navigate("/profile");
                     }}
                   >
-                    <UserRound className="h-4 w-4 text-zinc-500" />
+                    <UserRound className="h-4 w-4 text-[#6D28D9]" />
                     My Profile
                   </button>
                   <button
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50"
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-[#DC2626] hover:bg-[#DC2626]/10"
                     type="button"
                     role="menuitem"
                     onClick={handleSignOut}
@@ -217,9 +226,29 @@ export default function Layout() {
         </header>
 
         <main className="px-4 py-6 lg:px-8">
+          {isTrialActive ? (
+            <BillingBanner tone="trial" message={`Free trial active. Trial ends on ${trialEndLabel || "your trial end date"}.`} />
+          ) : null}
+          {expiresSoon ? (
+            <BillingBanner tone="warning" message="Your plan expires soon. Renew to avoid interruption." />
+          ) : null}
           <Outlet />
         </main>
       </div>
+    </div>
+  );
+}
+
+function BillingBanner({ message, tone }: { message: string; tone: "trial" | "warning" }) {
+  return (
+    <div
+      className={`mb-5 rounded-xl border px-4 py-3 text-sm font-semibold ${
+        tone === "trial"
+          ? "border-[#6D28D9]/25 bg-[#F3E8FF] text-[#4C1D95]"
+          : "border-[#F59E0B]/30 bg-[#F59E0B]/10 text-[#111827]"
+      }`}
+    >
+      {message}
     </div>
   );
 }

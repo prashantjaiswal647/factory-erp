@@ -35,7 +35,6 @@ public_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def is_trial_bypass_enabled() -> bool:
-    return True
     return (
         os.getenv("ENV", "").strip().lower() == "development"
         or os.getenv("APP_ENV", "").strip().lower() == "development"
@@ -168,16 +167,29 @@ def ensure_factory_trial(factory: Optional[Factory]) -> None:
     if factory.trial_start_date is None:
         factory.trial_start_date = now
     if factory.trial_end_date is None:
-        factory.trial_end_date = now + timedelta(days=3)
+        factory.trial_end_date = now + timedelta(days=7)
     if not factory.subscription_status:
-        factory.subscription_status = "trial"
+        factory.subscription_status = "trial_active"
+    if factory.subscription_status in {"trial", "trial_active"} and not getattr(factory, "active_plan", None):
+        factory.active_plan = "basic"
+    if factory.payment_status is None:
+        factory.payment_status = "payment_pending"
     if is_trial_bypass_enabled():
         return
     trial_end = factory.trial_end_date
     if trial_end is not None and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
-    if factory.subscription_status == "trial" and trial_end is not None and trial_end < now:
+    subscription_end = getattr(factory, "subscription_end_date", None)
+    if subscription_end is not None and subscription_end.tzinfo is None:
+        subscription_end = subscription_end.replace(tzinfo=timezone.utc)
+    if factory.subscription_status == "trial":
+        factory.subscription_status = "trial_active"
+    if factory.subscription_status == "trial_active" and trial_end is not None and trial_end < now:
+        factory.subscription_status = "trial_expired"
+        factory.payment_status = "payment_pending"
+    if factory.subscription_status == "active" and subscription_end is not None and subscription_end < now:
         factory.subscription_status = "expired"
+        factory.payment_status = "payment_pending"
 
 
 def trial_days_remaining(factory: Optional[Factory]) -> int:
@@ -252,7 +264,10 @@ def get_current_user(
     if user.factory is not None:
         db.commit()
         db.refresh(user)
-        if user.factory.subscription_status == "expired" and not is_subscription_bypass_path(request.url.path):
+        has_subscription_access = user.factory.subscription_status == "active" or (
+            user.factory.subscription_status == "trial_active" and user.factory.active_plan == "basic"
+        )
+        if not has_subscription_access and not is_subscription_bypass_path(request.url.path):
             if not is_trial_bypass_enabled():
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -493,8 +508,10 @@ def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
             name=unique_factory_name,
             factory_name=factory_name,
             trial_start_date=now,
-            trial_end_date=now + timedelta(days=3),
-            subscription_status="trial",
+            trial_end_date=now + timedelta(days=7),
+            subscription_status="trial_active",
+            active_plan="basic",
+            payment_status="payment_pending",
         )
         db.add(factory)
         db.flush()
@@ -609,8 +626,10 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = D
         name=factory_name,
         factory_name=factory_name,
         trial_start_date=now,
-        trial_end_date=now + timedelta(days=3),
-        subscription_status="trial",
+        trial_end_date=now + timedelta(days=7),
+        subscription_status="trial_active",
+        active_plan="basic",
+        payment_status="payment_pending",
     )
     db.add(factory)
     db.flush()

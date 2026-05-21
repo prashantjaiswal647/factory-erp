@@ -3,12 +3,14 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from auth import check_permissions, get_current_active_user, is_trial_bypass_enabled
+from auth import JWT_ALGORITHM, check_permissions, get_current_active_user, get_jwt_secret_key, get_user_by_subject, is_trial_bypass_enabled
 from db import get_db
-from models import Factory, User
+from models import CustomPlanEnquiry, DemoBookingRequest, Factory, SubscriptionPayment, User
 
 try:
     import razorpay
@@ -17,18 +19,53 @@ except ImportError:  # pragma: no cover - optional SaaS dependency
 
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
+optional_bearer = HTTPBearer(auto_error=False)
 
 
-SUBSCRIPTION_AMOUNT_PAISE = int(os.getenv("RAZORPAY_PLAN_AMOUNT_PAISE") or "99900")
 SUBSCRIPTION_CURRENCY = "INR"
+TRIAL_DAYS = 7
+EXPIRED_STATUSES = {"trial_expired", "expired", "cancelled", "payment_pending"}
+
+
+class PlanPrice(BaseModel):
+    monthly: int
+    yearly_original: Optional[int] = None
+    yearly_discounted: Optional[int] = None
+    starts_from: Optional[int] = None
+
+
+class PricingPlan(BaseModel):
+    code: str
+    name: str
+    machine_limit_label: str
+    monthly_label: str
+    yearly_label: Optional[str] = None
+    features: list[str]
+    price: PlanPrice
+    is_custom: bool = False
 
 
 class BillingStatusResponse(BaseModel):
     subscription_status: str
+    trial_start_date: Optional[datetime] = None
     trial_end_date: Optional[datetime] = None
     trial_days_remaining: int
     is_access_allowed: bool
     is_owner: bool
+    active_plan: Optional[str] = None
+    billing_cycle: Optional[str] = None
+    subscription_start_date: Optional[datetime] = None
+    subscription_end_date: Optional[datetime] = None
+    payment_status: Optional[str] = None
+
+
+class CreateOrderRequest(BaseModel):
+    plan_code: str = "basic"
+    billing_cycle: str = "monthly"
+
+
+class StartTrialRequest(BaseModel):
+    plan_code: str = "basic"
 
 
 class CreateOrderResponse(BaseModel):
@@ -36,19 +73,142 @@ class CreateOrderResponse(BaseModel):
     order_id: str
     amount: int
     currency: str
+    plan_code: str
+    billing_cycle: str
 
 
 class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+    plan_code: str = "basic"
+    billing_cycle: str = "monthly"
+
+
+class ActivateSubscriptionRequest(BaseModel):
+    plan_code: str
+    billing_cycle: str
+    provider_payment_id: Optional[str] = None
+    payment_status: str = "paid"
 
 
 class VerifyPaymentResponse(BillingStatusResponse):
     razorpay_payment_id: str
 
 
-def _remaining_days(factory: Factory) -> int:
+class CustomPlanEnquiryRequest(BaseModel):
+    owner_name: str = Field(min_length=2)
+    factory_name: str = Field(min_length=2)
+    phone: str = Field(min_length=6)
+    email: str = Field(min_length=5)
+    number_of_machines: int = Field(ge=51)
+    requirement_details: str = Field(min_length=10)
+
+
+class DemoBookingRequestPayload(BaseModel):
+    owner_name: str = Field(min_length=2)
+    factory_name: Optional[str] = None
+    phone: str = Field(min_length=6)
+    email: str = Field(min_length=5)
+    preferred_plan: Optional[str] = None
+    message: Optional[str] = None
+
+
+class SubmissionResponse(BaseModel):
+    id: int
+    message: str
+
+
+PLANS: list[PricingPlan] = [
+    PricingPlan(
+        code="basic",
+        name="Basic",
+        machine_limit_label="Up to 7 Machines",
+        monthly_label="₹999 + GST / month",
+        yearly_label="₹9,999 + GST / year",
+        features=["Up to 7 Machines", "Production, inventory, finance", "E-invoicing", "AI reports"],
+        price=PlanPrice(monthly=99900, yearly_original=1198800, yearly_discounted=999900),
+    ),
+    PricingPlan(
+        code="growth",
+        name="Growth",
+        machine_limit_label="Up to 20 Machines",
+        monthly_label="₹1,999 + GST / month",
+        yearly_label="₹19,999 + GST / year",
+        features=["Up to 20 Machines", "Advanced dashboards", "Payment reminders", "n8n automation"],
+        price=PlanPrice(monthly=199900, yearly_original=2398800, yearly_discounted=1999900),
+    ),
+    PricingPlan(
+        code="premium",
+        name="Premium",
+        machine_limit_label="20 to 50 Machines",
+        monthly_label="₹4,999 + GST / month",
+        yearly_label="₹49,999 + GST / year",
+        features=["20 to 50 Machines", "Priority AI workflows", "Advanced analytics", "Priority support"],
+        price=PlanPrice(monthly=499900, yearly_original=5998800, yearly_discounted=4999900),
+    ),
+    PricingPlan(
+        code="custom",
+        name="Custom",
+        machine_limit_label="50+ machines / special requirements",
+        monthly_label="Starts from ₹1,00,000 + GST",
+        features=["50+ machines", "Custom workflows", "Implementation support", "Dedicated success planning"],
+        price=PlanPrice(monthly=0, starts_from=10000000),
+        is_custom=True,
+    ),
+]
+
+
+def plan_by_code(plan_code: str) -> PricingPlan:
+    for plan in PLANS:
+        if plan.code == plan_code:
+            return plan
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown billing plan")
+
+
+def amount_for(plan_code: str, billing_cycle: str) -> int:
+    plan = plan_by_code(plan_code)
+    if plan.is_custom:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Custom plan requires sales enquiry")
+    if billing_cycle == "monthly":
+        return plan.price.monthly
+    if billing_cycle == "yearly" and plan.price.yearly_discounted is not None:
+        return plan.price.yearly_discounted
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid billing cycle")
+
+
+def has_active_access(factory: Factory) -> bool:
+    if factory.subscription_status == "active":
+        return True
+    return factory.subscription_status == "trial_active" and factory.active_plan == "basic"
+
+
+def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    if credentials is None:
+        return None
+    try:
+        payload = jwt.decode(credentials.credentials, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+        subject = payload.get("sub")
+        if not isinstance(subject, str):
+            return None
+    except JWTError:
+        return None
+    return get_user_by_subject(db, subject)
+
+
+def normalize_status(factory: Factory) -> None:
+    if factory.subscription_status == "trial":
+        factory.subscription_status = "trial_active"
+    if factory.subscription_status == "trial_active" and not factory.active_plan:
+        factory.active_plan = "basic"
+    if factory.payment_status is None:
+        factory.payment_status = "payment_pending"
+
+
+def remaining_trial_days(factory: Factory) -> int:
     if factory.trial_end_date is None:
         return 0
     trial_end = factory.trial_end_date
@@ -60,56 +220,164 @@ def _remaining_days(factory: Factory) -> int:
     return max(1, int((seconds + 86399) // 86400))
 
 
-def _sync_subscription(factory: Factory) -> None:
+def sync_subscription(factory: Factory) -> None:
     now = datetime.now(timezone.utc)
+    normalize_status(factory)
     if factory.trial_start_date is None:
         factory.trial_start_date = now
     if factory.trial_end_date is None:
-        factory.trial_end_date = now + timedelta(days=3)
+        factory.trial_end_date = now + timedelta(days=TRIAL_DAYS)
     if is_trial_bypass_enabled():
         return
     trial_end = factory.trial_end_date
-    if trial_end.tzinfo is None:
+    if trial_end is not None and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
-    if factory.subscription_status == "trial" and trial_end < now:
+    subscription_end = factory.subscription_end_date
+    if subscription_end is not None and subscription_end.tzinfo is None:
+        subscription_end = subscription_end.replace(tzinfo=timezone.utc)
+    if factory.subscription_status == "trial_active" and trial_end is not None and trial_end < now:
+        factory.subscription_status = "trial_expired"
+        factory.payment_status = "payment_pending"
+    if factory.subscription_status == "active" and subscription_end is not None and subscription_end < now:
         factory.subscription_status = "expired"
+        factory.payment_status = "payment_pending"
 
 
-def _factory_for_user(db: Session, current_user: User) -> Factory:
+def factory_for_user(db: Session, current_user: User) -> Factory:
     factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
-    _sync_subscription(factory)
+    sync_subscription(factory)
     db.commit()
     db.refresh(factory)
     return factory
 
 
-def _razorpay_client():
+def razorpay_client():
     if razorpay is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Razorpay SDK is not installed",
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Razorpay SDK is not installed")
     key_id = os.getenv("RAZORPAY_KEY_ID")
     key_secret = os.getenv("RAZORPAY_KEY_SECRET")
     if not key_id or not key_secret:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Razorpay credentials are not configured",
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Razorpay credentials are not configured")
     return key_id, razorpay.Client(auth=(key_id, key_secret))
 
 
-def _status_payload(factory: Factory, current_user: User) -> BillingStatusResponse:
+def status_payload(factory: Factory, current_user: User) -> BillingStatusResponse:
     bypass_enabled = is_trial_bypass_enabled()
+    status_value = "trial_active" if bypass_enabled else factory.subscription_status or "trial_active"
     return BillingStatusResponse(
-        subscription_status="trial" if bypass_enabled else factory.subscription_status or "trial",
+        subscription_status=status_value,
+        trial_start_date=factory.trial_start_date,
         trial_end_date=factory.trial_end_date,
-        trial_days_remaining=_remaining_days(factory),
-        is_access_allowed=bypass_enabled or (factory.subscription_status in {"trial", "active"}),
+        trial_days_remaining=remaining_trial_days(factory),
+        is_access_allowed=bypass_enabled or has_active_access(factory),
         is_owner=(current_user.role == "Owner"),
+        active_plan=factory.active_plan,
+        billing_cycle=factory.billing_cycle,
+        subscription_start_date=factory.subscription_start_date,
+        subscription_end_date=factory.subscription_end_date,
+        payment_status=factory.payment_status,
     )
+
+
+def activate_factory_subscription(db: Session, factory: Factory, plan_code: str, billing_cycle: str, provider_payment_id: Optional[str]) -> None:
+    now = datetime.now(timezone.utc)
+    duration = timedelta(days=365 if billing_cycle == "yearly" else 30)
+    amount = amount_for(plan_code, billing_cycle)
+    factory.subscription_status = "active"
+    factory.active_plan = plan_code
+    factory.billing_cycle = billing_cycle
+    factory.subscription_start_date = now
+    factory.subscription_end_date = now + duration
+    factory.payment_status = "paid"
+    if provider_payment_id:
+        factory.razorpay_subscription_id = provider_payment_id
+    db.add(
+        SubscriptionPayment(
+            factory_id=factory.id,
+            plan_code=plan_code,
+            billing_cycle=billing_cycle,
+            amount_paise=amount,
+            currency=SUBSCRIPTION_CURRENCY,
+            payment_status="paid",
+            provider="razorpay" if provider_payment_id else "manual",
+            provider_payment_id=provider_payment_id,
+            subscription_start_date=factory.subscription_start_date,
+            subscription_end_date=factory.subscription_end_date,
+        )
+    )
+
+
+@router.get("/plans", response_model=list[PricingPlan])
+def pricing_plans():
+    return PLANS
+
+
+@router.post("/custom-enquiry", response_model=SubmissionResponse, status_code=status.HTTP_201_CREATED)
+def custom_plan_enquiry(
+    payload: CustomPlanEnquiryRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    enquiry = CustomPlanEnquiry(
+        factory_id=current_user.factory_id if current_user and current_user.factory_id > 0 else None,
+        owner_name=payload.owner_name,
+        factory_name=payload.factory_name,
+        phone=payload.phone,
+        email=str(payload.email),
+        number_of_machines=payload.number_of_machines,
+        requirement_details=payload.requirement_details,
+    )
+    db.add(enquiry)
+    db.commit()
+    db.refresh(enquiry)
+    return SubmissionResponse(id=enquiry.id, message="Custom plan enquiry submitted")
+
+
+@router.post("/demo-booking", response_model=SubmissionResponse, status_code=status.HTTP_201_CREATED)
+def demo_booking_request(
+    payload: DemoBookingRequestPayload,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    booking = DemoBookingRequest(
+        factory_id=current_user.factory_id if current_user and current_user.factory_id > 0 else None,
+        owner_name=payload.owner_name,
+        factory_name=payload.factory_name,
+        phone=payload.phone,
+        email=str(payload.email),
+        preferred_plan=payload.preferred_plan,
+        message=payload.message,
+    )
+    db.add(booking)
+    db.commit()
+    db.refresh(booking)
+    return SubmissionResponse(id=booking.id, message="Demo booking request submitted")
+
+
+@router.post("/start-free-trial", response_model=BillingStatusResponse)
+def start_free_trial(
+    payload: StartTrialRequest = StartTrialRequest(),
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    if payload.plan_code != "basic":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Free trial is available only on the Basic plan",
+        )
+    factory = factory_for_user(db, current_user)
+    now = datetime.now(timezone.utc)
+    factory.trial_start_date = factory.trial_start_date or now
+    factory.trial_end_date = now + timedelta(days=TRIAL_DAYS)
+    factory.subscription_status = "trial_active"
+    factory.active_plan = "basic"
+    factory.billing_cycle = None
+    factory.payment_status = "payment_pending"
+    db.commit()
+    db.refresh(factory)
+    return status_payload(factory, current_user)
 
 
 @router.get("/status", response_model=BillingStatusResponse)
@@ -117,23 +385,25 @@ def billing_status(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    factory = _factory_for_user(db, current_user)
-    return _status_payload(factory, current_user)
+    factory = factory_for_user(db, current_user)
+    return status_payload(factory, current_user)
 
 
 @router.post("/create-order", response_model=CreateOrderResponse)
 def create_order(
+    payload: CreateOrderRequest,
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
-    factory = _factory_for_user(db, current_user)
-    key_id, client = _razorpay_client()
+    factory = factory_for_user(db, current_user)
+    amount = amount_for(payload.plan_code, payload.billing_cycle)
+    key_id, client = razorpay_client()
     order = client.order.create(
         {
-            "amount": SUBSCRIPTION_AMOUNT_PAISE,
+            "amount": amount,
             "currency": SUBSCRIPTION_CURRENCY,
-            "receipt": f"factory_{factory.id}_{int(datetime.now(timezone.utc).timestamp())}",
-            "notes": {"factory_id": str(factory.id), "plan": "munshi-ai-monthly"},
+            "receipt": f"factory_{factory.id}_{payload.plan_code}_{int(datetime.now(timezone.utc).timestamp())}",
+            "notes": {"factory_id": str(factory.id), "plan": payload.plan_code, "billing_cycle": payload.billing_cycle},
         }
     )
     return CreateOrderResponse(
@@ -141,6 +411,8 @@ def create_order(
         order_id=order["id"],
         amount=int(order["amount"]),
         currency=order["currency"],
+        plan_code=payload.plan_code,
+        billing_cycle=payload.billing_cycle,
     )
 
 
@@ -150,8 +422,8 @@ def verify_payment(
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
-    factory = _factory_for_user(db, current_user)
-    _, client = _razorpay_client()
+    factory = factory_for_user(db, current_user)
+    _, client = razorpay_client()
     try:
         client.utility.verify_payment_signature(
             {
@@ -161,18 +433,46 @@ def verify_payment(
             }
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Razorpay payment verification failed",
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Razorpay payment verification failed") from exc
 
-    factory.subscription_status = "active"
-    factory.trial_end_date = datetime.now(timezone.utc) + timedelta(days=30)
-    factory.razorpay_subscription_id = payload.razorpay_payment_id
+    activate_factory_subscription(db, factory, payload.plan_code, payload.billing_cycle, payload.razorpay_payment_id)
     db.commit()
     db.refresh(factory)
-    status_payload = _status_payload(factory, current_user)
-    return VerifyPaymentResponse(
-        **status_payload.model_dump(),
-        razorpay_payment_id=payload.razorpay_payment_id,
+    status_response = status_payload(factory, current_user)
+    return VerifyPaymentResponse(**status_response.model_dump(), razorpay_payment_id=payload.razorpay_payment_id)
+
+
+@router.post("/activate", response_model=BillingStatusResponse)
+def activate_subscription(
+    payload: ActivateSubscriptionRequest,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    factory = factory_for_user(db, current_user)
+    if payload.payment_status != "paid":
+        factory.payment_status = "payment_pending"
+        factory.subscription_status = "payment_pending"
+    else:
+        activate_factory_subscription(db, factory, payload.plan_code, payload.billing_cycle, payload.provider_payment_id)
+    db.commit()
+    db.refresh(factory)
+    return status_payload(factory, current_user)
+
+
+@router.get("/expiring-soon", response_model=list[BillingStatusResponse])
+def subscriptions_expiring_soon(
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    now = datetime.now(timezone.utc)
+    soon = now + timedelta(days=7)
+    factories = (
+        db.query(Factory)
+        .filter(Factory.subscription_status == "active")
+        .filter(Factory.subscription_end_date.isnot(None))
+        .filter(Factory.subscription_end_date >= now)
+        .filter(Factory.subscription_end_date <= soon)
+        .order_by(Factory.subscription_end_date.asc())
+        .all()
     )
+    return [status_payload(factory, current_user) for factory in factories]
