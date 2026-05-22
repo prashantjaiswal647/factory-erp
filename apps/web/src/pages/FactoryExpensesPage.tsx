@@ -1,4 +1,5 @@
 import { Check, ReceiptText } from "lucide-react";
+import axios from "axios";
 import { useEffect, useState } from "react";
 
 import { createFactoryExpense, getFactoryExpenses } from "../lib/api";
@@ -47,6 +48,9 @@ export default function FactoryExpensesPage() {
       setToast("Expense added");
       setForm(initialForm);
       await loadExpenses();
+    } catch (caught) {
+      const detail = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : null;
+      setError(typeof detail === "string" ? detail : "Expense save failed. Please try again.");
     } finally {
       setIsSaving(false);
     }

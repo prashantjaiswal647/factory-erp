@@ -8,6 +8,7 @@ type DiagnosticEntry = {
 
 export type Diagnostics = {
   entries: DiagnosticEntry[];
+  clear: () => void;
   expectClean: () => void;
 };
 
@@ -24,6 +25,9 @@ export const test = base.extend<{ diagnostics: Diagnostics }>({
 
       await use({
         entries,
+        clear: () => {
+          entries.splice(0, entries.length);
+        },
         expectClean: () => {
           expect(entries, formatDiagnostics(entries)).toEqual([]);
         },
