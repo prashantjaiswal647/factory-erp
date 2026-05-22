@@ -1006,6 +1006,9 @@ export type UserSubscriptionResponse = {
   days_left: number;
   last_login: string | null;
   server_time: string;
+  subscription_status?: string | null;
+  billing_cycle?: string | null;
+  payment_status?: string | null;
 };
 
 export async function getUserSubscription() {
