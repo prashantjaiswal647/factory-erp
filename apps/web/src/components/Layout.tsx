@@ -71,14 +71,18 @@ export default function Layout() {
   }, [refreshVersion, user]);
 
   // Load requested variables
-  const planName = subData?.plan_name;
-  const planExpiresAt = subData?.plan_expires_at;
+  const planName = subData?.effective_plan || subData?.plan_name;
+  const planExpiresAt = subData?.effective_expires_at || subData?.plan_expires_at;
   const daysLeft = subData?.days_left;
   const lastLogin = subData?.last_login;
   const subscriptionStatus = subData?.subscription_status;
 
   async function handleRefresh() {
     setSubData(null);
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("dismiss_banner");
+    }
+    setIsBannerDismissed(false);
     triggerDataRefresh();
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("munshi:refresh-data"));
@@ -99,11 +103,11 @@ export default function Layout() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "U";
-  const isTrialActive = user?.subscription_status === "trial_active" || user?.subscription_status === "trial";
-  const trialEndLabel = user?.trial_end_date ? new Date(user.trial_end_date).toLocaleDateString("en-IN") : "";
-  const subscriptionEndDate = user?.subscription_end_date ? new Date(user.subscription_end_date) : null;
+  const isTrialActive = subscriptionStatus === "trial_active" || subscriptionStatus === "trial";
+  const trialEndLabel = subData?.raw_trial_end_date ? new Date(subData.raw_trial_end_date).toLocaleDateString("en-IN") : "";
+  const subscriptionEndDate = planExpiresAt ? new Date(planExpiresAt) : null;
   const expiresSoon = Boolean(
-    user?.subscription_status === "active" &&
+    subscriptionStatus === "active" &&
       subscriptionEndDate &&
       subscriptionEndDate.getTime() - Date.now() <= 7 * 24 * 60 * 60 * 1000 &&
       subscriptionEndDate.getTime() >= Date.now()

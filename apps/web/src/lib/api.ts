@@ -1010,6 +1010,12 @@ export type UserSubscriptionResponse = {
   billing_cycle?: string | null;
   payment_status?: string | null;
   is_manual_override?: boolean;
+  raw_active_plan?: string | null;
+  raw_plan_name?: string | null;
+  raw_subscription_end_date?: string | null;
+  raw_trial_end_date?: string | null;
+  effective_plan?: string | null;
+  effective_expires_at?: string | null;
 };
 
 export async function getUserSubscription(t?: number) {
