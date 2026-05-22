@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
+import PhoneNumberInput from "./PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import {
@@ -15,6 +16,7 @@ import {
   verifyBillingPayment
 } from "../lib/api";
 import type { PricingPlan } from "../lib/api";
+import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
 declare global {
   interface Window {
@@ -133,6 +135,8 @@ export default function PricingPlansSection({ className = "", source = "billing"
 
   const paidPlans = useMemo(() => plans.filter((plan) => !plan.is_custom), [plans]);
   const customPlan = plans.find((plan) => plan.is_custom) || fallbackPlans[3];
+  const customPhone = splitE164Phone(customForm.phone);
+  const demoPhone = splitE164Phone(demoForm.phone);
 
   async function refreshBillingStatus() {
     const response = await getBillingStatus();
@@ -234,8 +238,16 @@ export default function PricingPlansSection({ className = "", source = "billing"
     event.preventDefault();
     setError(null);
     setMessage(null);
+    if (!validateLocalPhone(customPhone.country.dialCode, customPhone.localNumber)) {
+      setError("Please enter a valid phone number for the selected country.");
+      return;
+    }
     try {
-      const response = await submitCustomPlanEnquiry(customForm);
+      const response = await submitCustomPlanEnquiry({
+        ...customForm,
+        country_code: customPhone.country.dialCode,
+        phone: customPhone.localNumber
+      });
       setMessage(response.data.message);
       setIsCustomOpen(false);
     } catch (caught) {
@@ -247,8 +259,16 @@ export default function PricingPlansSection({ className = "", source = "billing"
     event.preventDefault();
     setError(null);
     setMessage(null);
+    if (!validateLocalPhone(demoPhone.country.dialCode, demoPhone.localNumber)) {
+      setError("Please enter a valid phone number for the selected country.");
+      return;
+    }
     try {
-      const response = await submitDemoBooking(demoForm);
+      const response = await submitDemoBooking({
+        ...demoForm,
+        country_code: demoPhone.country.dialCode,
+        phone: demoPhone.localNumber
+      });
       setMessage(response.data.message);
       setIsDemoOpen(false);
     } catch (caught) {
@@ -349,7 +369,12 @@ export default function PricingPlansSection({ className = "", source = "billing"
             <div className="grid gap-3 sm:grid-cols-2">
               <FormInput label="Owner Name" value={customForm.owner_name} onChange={(owner_name) => setCustomForm({ ...customForm, owner_name })} />
               <FormInput label="Factory Name" value={customForm.factory_name} onChange={(factory_name) => setCustomForm({ ...customForm, factory_name })} />
-              <FormInput label="Phone Number" value={customForm.phone} onChange={(phone) => setCustomForm({ ...customForm, phone })} />
+              <PhoneNumberInput
+                countryCode={customPhone.country.dialCode}
+                localNumber={customPhone.localNumber}
+                onCountryCodeChange={(country_code) => setCustomForm({ ...customForm, phone: `${country_code}${customPhone.localNumber}` })}
+                onLocalNumberChange={(phone) => setCustomForm({ ...customForm, phone: `${customPhone.country.dialCode}${phone}` })}
+              />
               <FormInput label="Email" type="email" value={customForm.email} onChange={(email) => setCustomForm({ ...customForm, email })} />
               <FormInput
                 label="Number of Machines"
@@ -372,7 +397,12 @@ export default function PricingPlansSection({ className = "", source = "billing"
             <div className="grid gap-3 sm:grid-cols-2">
               <FormInput label="Owner Name" value={demoForm.owner_name} onChange={(owner_name) => setDemoForm({ ...demoForm, owner_name })} />
               <FormInput label="Factory Name" value={demoForm.factory_name} onChange={(factory_name) => setDemoForm({ ...demoForm, factory_name })} />
-              <FormInput label="Phone Number" value={demoForm.phone} onChange={(phone) => setDemoForm({ ...demoForm, phone })} />
+              <PhoneNumberInput
+                countryCode={demoPhone.country.dialCode}
+                localNumber={demoPhone.localNumber}
+                onCountryCodeChange={(country_code) => setDemoForm({ ...demoForm, phone: `${country_code}${demoPhone.localNumber}` })}
+                onLocalNumberChange={(phone) => setDemoForm({ ...demoForm, phone: `${demoPhone.country.dialCode}${phone}` })}
+              />
               <FormInput label="Email" type="email" value={demoForm.email} onChange={(email) => setDemoForm({ ...demoForm, email })} />
               <label className="block text-sm sm:col-span-2">
                 <span className="font-semibold text-[#111827]">Preferred Plan</span>

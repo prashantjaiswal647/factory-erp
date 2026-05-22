@@ -2,11 +2,14 @@ import { Check, Search, ShieldCheck, Trash2, UserCog } from "lucide-react";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
+import PhoneNumberInput from "../components/PhoneNumberInput";
 import { createStaffMember, deleteStaffMember, getStaffMembers } from "../lib/api";
 import type { StaffCreate, StaffMember, StaffRoleCreate } from "../lib/api";
+import { validateLocalPhone } from "../lib/phoneCountries";
 
 const initialForm: StaffCreate = {
   full_name: "",
+  country_code: "+91",
   phone_number: "",
   password: "",
   role: "supervisor"
@@ -51,6 +54,10 @@ export default function StaffManagement() {
       setError("Name, phone number, and password are required.");
       return;
     }
+    if (!validateLocalPhone(form.country_code || "+91", form.phone_number)) {
+      setError("Please enter a valid mobile number for the selected country.");
+      return;
+    }
     if (form.password.length < 6) {
       setError("Password must be at least 6 characters.");
       return;
@@ -61,6 +68,7 @@ export default function StaffManagement() {
       await createStaffMember({
         ...form,
         full_name: form.full_name.trim(),
+        country_code: form.country_code,
         phone_number: form.phone_number.trim()
       });
       setToast("Staff account created");
@@ -99,7 +107,12 @@ export default function StaffManagement() {
 
           <div className="grid gap-4">
             <TextField label="Name" value={form.full_name} onChange={(full_name) => setForm({ ...form, full_name })} />
-            <TextField label="Phone Number" value={form.phone_number} inputMode="tel" onChange={(phone_number) => setForm({ ...form, phone_number })} />
+            <PhoneNumberInput
+              countryCode={form.country_code || "+91"}
+              localNumber={form.phone_number}
+              onCountryCodeChange={(country_code) => setForm({ ...form, country_code })}
+              onLocalNumberChange={(phone_number) => setForm({ ...form, phone_number })}
+            />
             <TextField label="Password" value={form.password} type="password" onChange={(password) => setForm({ ...form, password })} />
             <label className="block text-sm">
               <span className="font-medium text-zinc-700">Role</span>

@@ -2,9 +2,11 @@ import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletC
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
-import { getBillingHistory, getBillingStatus } from "../lib/api";
+import { getBillingHistory, getBillingStatus, updateUserProfile } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
+import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
 export default function ProfilePage() {
   const { user, updateUser } = useAuth();
@@ -17,7 +19,8 @@ export default function ProfilePage() {
   const [form, setForm] = useState({
     full_name: user?.full_name || user?.username || "",
     email: user?.user_id || "",
-    phone_number: user?.phone_number || ""
+    phone_country_code: splitE164Phone(user?.phone_number).country.dialCode,
+    phone_number: splitE164Phone(user?.phone_number).localNumber
   });
 
   const displayName = form.full_name || user?.username || "User";
@@ -60,15 +63,24 @@ export default function ProfilePage() {
     }
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    updateUser({
+    if (!validateLocalPhone(form.phone_country_code, form.phone_number)) {
+      setToast("Please enter a valid mobile number for the selected country.");
+      return;
+    }
+    const response = await updateUserProfile({
       full_name: form.full_name,
-      phone_number: form.phone_number,
-      user_id: form.email
+      country_code: form.phone_country_code,
+      phone_number: form.phone_number
+    });
+    updateUser({
+      full_name: response.data.full_name,
+      phone_number: response.data.phone_number,
+      user_id: response.data.user_id
     });
     setIsEditing(false);
-    setToast("Profile saved locally. API connection can be added when the backend endpoint is ready.");
+    setToast("Profile saved.");
   }
 
   return (
@@ -127,14 +139,20 @@ export default function ProfilePage() {
               disabled={!isEditing}
               onChange={(value) => setForm((current) => ({ ...current, email: value }))}
             />
-            <ProfileField
-              icon={Phone}
-              label="Phone Number"
-              value={form.phone_number}
-              placeholder="Enter phone number"
-              disabled={!isEditing}
-              onChange={(value) => setForm((current) => ({ ...current, phone_number: value }))}
-            />
+            <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-zinc-500">
+                <Phone className="h-4 w-4 text-brand-700" />
+                Phone Number
+              </div>
+              <PhoneNumberInput
+                countryCode={form.phone_country_code}
+                disabled={!isEditing}
+                label=""
+                localNumber={form.phone_number}
+                onCountryCodeChange={(phone_country_code) => setForm((current) => ({ ...current, phone_country_code }))}
+                onLocalNumberChange={(phone_number) => setForm((current) => ({ ...current, phone_number }))}
+              />
+            </div>
             <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase text-zinc-500">
                 <Building2 className="h-4 w-4 text-brand-700" />

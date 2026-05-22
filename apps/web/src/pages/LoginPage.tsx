@@ -3,9 +3,11 @@ import axios from "axios";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import PhoneNumberInput from "../components/PhoneNumberInput";
 import { roleHomePath } from "../components/PrivateRoute";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
+import { validateLocalPhone } from "../lib/phoneCountries";
 
 declare global {
   interface Window {
@@ -23,7 +25,7 @@ declare global {
 type AuthTab = "login" | "signup";
 
 export default function LoginPage() {
-  const { user, login, loginWithGoogle, completeGoogleSignup: completeGoogleSignupAuth } = useAuth();
+  const { user, login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -91,13 +93,18 @@ export default function LoginPage() {
       setError("Email address required hai.");
       return;
     }
+    if (!validateLocalPhone(signupCountryCode, signupForm.phone_number)) {
+      setError("Please enter a valid mobile number for the selected country.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       await api.post("/api/auth/signup", {
         full_name: signupForm.full_name.trim(),
         email: signupForm.email.trim(),
-        phone_number: `${signupCountryCode}${signupForm.phone_number.trim()}`,
+        country_code: signupCountryCode,
+        phone_number: signupForm.phone_number.trim(),
         factory_name: signupForm.factory_name.trim(),
         password: signupForm.password
       });
@@ -214,7 +221,7 @@ export default function LoginPage() {
           {activeTab === "login" ? (
             <form onSubmit={submitLogin}>
               <div className="space-y-4">
-                <Field label="Email or Phone Number" value={identifier} onChange={setIdentifier} autoComplete="username" />
+                <Field label="Email or Mobile Number" placeholder="someone@gmail.com or 9876543210" value={identifier} onChange={setIdentifier} autoComplete="username" />
                 <Field label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" type="password" />
               </div>
               <Messages error={error} notice={notice} />
@@ -233,11 +240,11 @@ export default function LoginPage() {
               <div className="space-y-4">
                 <Field label="Full Name" value={signupForm.full_name} onChange={(full_name) => setSignupForm({ ...signupForm, full_name })} autoComplete="name" />
                 <Field label="Email" value={signupForm.email} onChange={(email) => setSignupForm({ ...signupForm, email })} autoComplete="email" type="email" />
-                <PhoneField
+                <PhoneNumberInput
                   countryCode={signupCountryCode}
-                  phoneNumber={signupForm.phone_number}
+                  localNumber={signupForm.phone_number}
                   onCountryCodeChange={setSignupCountryCode}
-                  onPhoneNumberChange={(phone_number) => setSignupForm({ ...signupForm, phone_number })}
+                  onLocalNumberChange={(phone_number) => setSignupForm({ ...signupForm, phone_number })}
                 />
                 <Field label="Factory Name" value={signupForm.factory_name} onChange={(factory_name) => setSignupForm({ ...signupForm, factory_name })} />
                 <Field label="Password" value={signupForm.password} onChange={(password) => setSignupForm({ ...signupForm, password })} autoComplete="new-password" type="password" />
@@ -266,11 +273,11 @@ export default function LoginPage() {
                 Munshi AI uses phone numbers as the global owner identity. Add your phone number to finish Google sign up for {googleCompletion.email}.
               </p>
             </div>
-            <PhoneField
+            <PhoneNumberInput
               countryCode={googleCompletion.countryCode}
-              phoneNumber={googleCompletion.phoneNumber}
+              localNumber={googleCompletion.phoneNumber}
               onCountryCodeChange={(countryCode) => setGoogleCompletion({ ...googleCompletion, countryCode })}
-              onPhoneNumberChange={(phoneNumber) => setGoogleCompletion({ ...googleCompletion, phoneNumber })}
+              onLocalNumberChange={(phoneNumber) => setGoogleCompletion({ ...googleCompletion, phoneNumber })}
             />
             <Messages error={error} notice={notice} />
             <div className="mt-6 flex gap-3">
@@ -299,11 +306,18 @@ export default function LoginPage() {
     setIsSubmitting(true);
     setError(null);
     setNotice(null);
+    if (!validateLocalPhone(googleCompletion.countryCode, googleCompletion.phoneNumber)) {
+      setError("Please enter a valid mobile number for the selected country.");
+      setIsSubmitting(false);
+      return;
+    }
     try {
-      await completeGoogleSignupAuth(
-        googleCompletion.credential,
-        `${googleCompletion.countryCode}${googleCompletion.phoneNumber.trim()}`
-      );
+      await api.post("/api/auth/google/complete", {
+        credential: googleCompletion.credential,
+        country_code: googleCompletion.countryCode,
+        phone_number: googleCompletion.phoneNumber.trim()
+      });
+      await loginWithGoogle(googleCompletion.credential);
       navigate("/dashboard", { replace: true });
     } catch (caught) {
       setError(getErrorMessage(caught, "Google sign up failed."));
@@ -347,7 +361,7 @@ function getErrorMessage(caught: unknown, fallback: string) {
   return caught.message || fallback;
 }
 
-function Field({ label, value, onChange, type = "text", autoComplete, required = true }: { label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string; required?: boolean }) {
+function Field({ label, value, onChange, type = "text", autoComplete, placeholder, required = true }: { label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string; placeholder?: string; required?: boolean }) {
   return (
     <label className="block text-sm">
       <span className="font-semibold text-[#111827]">{label}</span>
@@ -355,49 +369,11 @@ function Field({ label, value, onChange, type = "text", autoComplete, required =
         autoComplete={autoComplete}
         className="mt-1 h-11 w-full rounded-lg border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827] outline-none transition placeholder:text-[#9CA3AF] focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
         onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
         required={required}
         type={type}
         value={value}
       />
-    </label>
-  );
-}
-
-function PhoneField({
-  countryCode,
-  onCountryCodeChange,
-  onPhoneNumberChange,
-  phoneNumber
-}: {
-  countryCode: string;
-  onCountryCodeChange: (value: string) => void;
-  onPhoneNumberChange: (value: string) => void;
-  phoneNumber: string;
-}) {
-  return (
-    <label className="block text-sm">
-      <span className="font-semibold text-[#111827]">Phone Number</span>
-      <div className="mt-1 flex h-11 overflow-hidden rounded-lg border border-[#E5E7EB] bg-white focus-within:border-[#6D28D9] focus-within:ring-2 focus-within:ring-[#F3E8FF]">
-        <select
-          className="w-24 border-r border-[#E5E7EB] bg-[#FFF7ED] px-3 text-sm font-semibold text-[#111827] outline-none"
-          value={countryCode}
-          onChange={(event) => onCountryCodeChange(event.target.value)}
-        >
-          <option value="+91">+91</option>
-          <option value="+1">+1</option>
-          <option value="+44">+44</option>
-          <option value="+971">+971</option>
-        </select>
-        <input
-          autoComplete="tel-national"
-          className="min-w-0 flex-1 bg-transparent px-3 text-sm text-[#111827] outline-none placeholder:text-[#9CA3AF]"
-          inputMode="tel"
-          required
-          type="tel"
-          value={phoneNumber}
-          onChange={(event) => onPhoneNumberChange(event.target.value)}
-        />
-      </div>
     </label>
   );
 }

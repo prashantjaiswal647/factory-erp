@@ -33,7 +33,7 @@ type AuthContextValue = {
   isLoading: boolean;
   login: (identifier: string, password: string) => Promise<AuthUser>;
   loginWithGoogle: (credential: string) => Promise<AuthUser>;
-  completeGoogleSignup: (credential: string, phoneNumber: string) => Promise<AuthUser>;
+  completeGoogleSignup: (credential: string, phoneNumber: string, countryCode?: string) => Promise<AuthUser>;
   updateUser: (patch: Partial<AuthUser>) => void;
   logout: () => void;
 };
@@ -98,9 +98,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return persistAuth(response.data);
   }
 
-  async function completeGoogleSignup(credential: string, phoneNumber: string) {
+  async function completeGoogleSignup(credential: string, phoneNumber: string, countryCode = "+91") {
     const response = await api.post<TokenResponse>("/api/auth/google/complete", {
       credential,
+      country_code: countryCode,
       phone_number: phoneNumber
     });
     return persistAuth(response.data);

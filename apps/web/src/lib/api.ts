@@ -1,12 +1,19 @@
 import axios from "axios";
 
-// Runtime logic: Browser detect karega ki server ka IP kya hai
+const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+
 const getBaseURL = () => {
-  // Production server ka IP check
-  if (typeof window !== 'undefined' && window.location.hostname === '187.127.165.219') {
-    return 'http://187.127.165.219:8000';
+  const configuredUrl = import.meta.env.VITE_API_URL;
+  if (configuredUrl) return trimTrailingSlash(configuredUrl);
+
+  if (typeof window === "undefined") return "";
+
+  const { hostname, origin, protocol } = window.location;
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}//${hostname}:8000`;
   }
-  return import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+  return origin;
 };
 
 export const api = axios.create({
@@ -44,6 +51,8 @@ api.interceptors.response.use(
 
 export type WorkerCreate = {
   name: string;
+  country_code?: string;
+  phone?: string;
   daily_wages: number;
   duty_hours: number;
 };
@@ -250,6 +259,7 @@ export type StaffRoleCreate = "sub_owner" | "supervisor" | "worker";
 
 export type StaffCreate = {
   full_name: string;
+  country_code?: string;
   phone_number: string;
   password: string;
   role: StaffRoleCreate;
@@ -1020,6 +1030,7 @@ export function getExpiringSoonSubscriptions() {
 export function submitCustomPlanEnquiry(payload: {
   owner_name: string;
   factory_name: string;
+  country_code?: string;
   phone: string;
   email: string;
   number_of_machines: number;
@@ -1031,6 +1042,7 @@ export function submitCustomPlanEnquiry(payload: {
 export function submitDemoBooking(payload: {
   owner_name: string;
   factory_name?: string;
+  country_code?: string;
   phone: string;
   email: string;
   preferred_plan?: string;
@@ -1045,6 +1057,23 @@ export function getTelegramIntegration() {
 
 export function saveTelegramIntegration(payload: { telegram_bot_token: string }) {
   return api.post<TelegramIntegration>("/api/integrations/telegram", payload);
+}
+
+export function updateUserProfile(payload: {
+  full_name: string;
+  country_code: string;
+  phone_number: string;
+}) {
+  return api.put<{
+    id: number;
+    user_id?: string | null;
+    username: string;
+    phone_number?: string | null;
+    full_name?: string | null;
+    role: string;
+    factory_id: number;
+    factory_name?: string | null;
+  }>("/api/v1/users/me/profile", payload);
 }
 
 export type UserSubscriptionResponse = {

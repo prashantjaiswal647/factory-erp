@@ -5,10 +5,11 @@ import { useNavigate } from "react-router-dom";
 import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock } from "../lib/api";
 import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate } from "../lib/api";
 import ConfigurationOverview from "../components/ConfigurationOverview";
+import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
 import { useUpgrade } from "../context/UpgradeContext";
 
-const todayWorker: WorkerCreate = { name: "", daily_wages: 0, duty_hours: 8 };
+const todayWorker: WorkerCreate = { name: "", country_code: "+91", phone: "", daily_wages: 0, duty_hours: 8 };
 const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20, total_sacks: 0 };
 const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
 const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", quantity: 0, price_per_box: 0 };
@@ -231,6 +232,12 @@ export default function OnboardingPage() {
         <Panel icon={UserRound} title="Worker">
           <div className="grid gap-3 md:grid-cols-3">
             <TextInput label="Name" value={worker.name} onChange={(name) => setWorker({ ...worker, name })} />
+            <PhoneNumberInput
+              countryCode={worker.country_code || "+91"}
+              localNumber={worker.phone || ""}
+              onCountryCodeChange={(country_code) => setWorker({ ...worker, country_code })}
+              onLocalNumberChange={(phone) => setWorker({ ...worker, phone })}
+            />
             <NumberInput label="Daily wages" value={worker.daily_wages} onChange={(daily_wages) => setWorker({ ...worker, daily_wages })} />
             <NumberInput label="Duty hours" value={worker.duty_hours} onChange={(duty_hours) => setWorker({ ...worker, duty_hours })} />
           </div>
