@@ -201,6 +201,35 @@ export type BillingStatus = {
   effective_expires_at?: string | null;
 };
 
+export type DashboardSubscriptionStatus = {
+  access_allowed: boolean;
+  alert_state: "none" | "warning" | "critical" | "expired";
+  should_warn: boolean;
+  is_expired: boolean;
+  days_left: number;
+  plan_name: string;
+  subscription_status?: string | null;
+  payment_status?: string | null;
+  subscription_start?: string | null;
+  subscription_end?: string | null;
+  server_time: string;
+  role: string;
+};
+
+export type BillingHistoryItem = {
+  id: number;
+  plan_code: string;
+  billing_cycle: string;
+  amount_paise: number;
+  currency: string;
+  payment_status: string;
+  provider?: string | null;
+  provider_payment_id?: string | null;
+  subscription_start_date: string;
+  subscription_end_date: string;
+  created_at: string;
+};
+
 export type PricingPlan = {
   code: string;
   name: string;
@@ -920,8 +949,17 @@ export function compareIdealWithActual(payload: { ideal_calculation_results: Ide
   return api.post<AiCompareResponse>("/api/calculator/ai-compare", payload);
 }
 
-export function getBillingStatus() {
-  return api.get<BillingStatus>("/api/billing/status");
+export function getBillingStatus(t?: number) {
+  const url = t ? `/api/billing/status?t=${t}` : "/api/billing/status";
+  return api.get<BillingStatus>(url);
+}
+
+export function getDashboardSubscriptionStatus() {
+  return api.get<DashboardSubscriptionStatus>("/api/v1/dashboard/subscription-status");
+}
+
+export function getBillingHistory() {
+  return api.get<BillingHistoryItem[]>("/api/billing/history");
 }
 
 export function getPricingPlans() {
@@ -933,7 +971,7 @@ export function getStaffMembers() {
 }
 
 export function createStaffMember(payload: StaffCreate) {
-  return api.post<StaffMember>("/api/staff/create", payload);
+  return api.post<StaffMember>("/api/v1/users/create-staff", payload);
 }
 
 export function deleteStaffMember(id: number) {
@@ -1010,6 +1048,7 @@ export function saveTelegramIntegration(payload: { telegram_bot_token: string })
 }
 
 export type UserSubscriptionResponse = {
+  active_plan?: string | null;
   plan_name: string;
   plan_expires_at: string | null;
   trial_end_date?: string | null;
@@ -1021,6 +1060,7 @@ export type UserSubscriptionResponse = {
   billing_cycle?: string | null;
   payment_status?: string | null;
   is_manual_override?: boolean;
+  is_trial?: boolean;
   access_allowed?: boolean;
   raw_active_plan?: string | null;
   raw_plan_name?: string | null;

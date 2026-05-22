@@ -1,12 +1,12 @@
-import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
 import { useState, useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { getUserSubscription } from "../lib/api";
-import type { UserSubscriptionResponse } from "../lib/api";
+import { getDashboardSubscriptionStatus, getUserSubscription } from "../lib/api";
+import type { DashboardSubscriptionStatus, UserSubscriptionResponse } from "../lib/api";
 
 type NavigationItem = {
   label: string;
@@ -39,9 +39,11 @@ export default function Layout() {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { logout, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Dynamic subscription tracking
   const [subData, setSubData] = useState<UserSubscriptionResponse | null>(null);
+  const [layoutStatus, setLayoutStatus] = useState<DashboardSubscriptionStatus | null>(null);
   const [isBannerDismissed, setIsBannerDismissed] = useState(() => {
     if (typeof window !== "undefined") {
       return sessionStorage.getItem("dismiss_banner") === "true";
@@ -51,14 +53,27 @@ export default function Layout() {
 
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
 
+  async function refreshSubscriptionState() {
+    const [data, statusResponse] = await Promise.all([
+      getUserSubscription(Date.now()),
+      getDashboardSubscriptionStatus()
+    ]);
+    setSubData(data);
+    setLayoutStatus(statusResponse.data);
+  }
+
   useEffect(() => {
     let active = true;
     if (!user) return;
     async function fetchSub() {
       try {
-        const data = await getUserSubscription(Date.now());
+        const [data, statusResponse] = await Promise.all([
+          getUserSubscription(Date.now()),
+          getDashboardSubscriptionStatus()
+        ]);
         if (active) {
           setSubData(data);
+          setLayoutStatus(statusResponse.data);
         }
       } catch (err) {
         console.error("Error fetching subscription:", err);
@@ -70,6 +85,21 @@ export default function Layout() {
     };
   }, [refreshVersion, user]);
 
+  useEffect(() => {
+    if (!user) return;
+    function refreshOnReturn() {
+      if (document.visibilityState === "visible") {
+        refreshSubscriptionState().catch((err) => console.error("Error refreshing subscription on tab return:", err));
+      }
+    }
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    window.addEventListener("focus", refreshOnReturn);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+      window.removeEventListener("focus", refreshOnReturn);
+    };
+  }, [user]);
+
   // Load requested variables
   const planName = subData?.effective_plan || subData?.plan_name;
   const planExpiresAt = subData?.effective_expires_at || subData?.plan_expires_at;
@@ -77,6 +107,7 @@ export default function Layout() {
   const lastLogin = subData?.last_login;
   const subscriptionStatus = subData?.effective_status || subData?.subscription_status;
   const accessAllowed = subData?.access_allowed === true;
+  const isTrial = subData?.is_trial === true;
 
   async function handleRefresh() {
     setSubData(null);
@@ -89,8 +120,7 @@ export default function Layout() {
       window.dispatchEvent(new CustomEvent("munshi:refresh-data"));
     }
     try {
-      const data = await getUserSubscription(Date.now());
-      setSubData(data);
+      await refreshSubscriptionState();
     } catch (err) {
       console.error("Error refreshing subscription:", err);
     }
@@ -104,9 +134,10 @@ export default function Layout() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "U";
-  const isTrialActive = accessAllowed && (subscriptionStatus === "trial_active" || subscriptionStatus === "trial");
+  const isTrialActive = accessAllowed && isTrial;
   const trialEndLabel = subData?.raw_trial_end_date ? new Date(subData.raw_trial_end_date).toLocaleDateString("en-IN") : "";
   const subscriptionEndDate = planExpiresAt ? new Date(planExpiresAt) : null;
+  const layoutSubscriptionEndDate = layoutStatus?.subscription_end ? new Date(layoutStatus.subscription_end) : subscriptionEndDate;
   const expiresSoon = Boolean(
     subscriptionStatus === "active" &&
       subscriptionEndDate &&
@@ -119,6 +150,16 @@ export default function Layout() {
     logout();
     setIsProfileMenuOpen(false);
     navigate("/login", { replace: true });
+  }
+
+  const isBillingRoute = location.pathname === "/billing" || location.pathname === "/plans";
+  const isExpiredLock = layoutStatus?.is_expired === true || layoutStatus?.access_allowed === false;
+  if (isExpiredLock && user?.role !== "Owner") {
+    return <StaffSubscriptionLock onSignOut={handleSignOut} />;
+  }
+
+  if (isExpiredLock && user?.role === "Owner" && !isBillingRoute) {
+    return <OwnerSubscriptionLock onRenew={() => navigate("/billing")} onSignOut={handleSignOut} />;
   }
 
   const navItems = visibleNavigation.map((item, index) => {
@@ -237,21 +278,21 @@ export default function Layout() {
               <RotateCw className="h-4 w-4 transition-transform duration-500 group-hover:rotate-180" />
             </button>
 
-            {subData?.is_manual_override ? (
-              <span
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#6D28D9]/30 bg-[#F3E8FF] px-4 text-sm font-bold text-[#6D28D9] shadow-sm animate-pulse"
-                title="Manual Premium Access Active (Owner Approved)"
-              >
-                Owner Approved Access
-              </span>
-            ) : isTrialActive ? (
+            {isTrialActive ? (
               <button
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 text-sm font-semibold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/20"
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/40 bg-[#F59E0B]/15 px-4 text-sm font-bold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/25"
                 type="button"
-                onClick={() => navigate("/billing")}
+                onClick={() => navigate("/plans")}
               >
-                Free Trial
+                Free Trial Active
               </button>
+            ) : accessAllowed && planName ? (
+              <span
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-indigo-300/40 bg-gradient-to-r from-slate-900 to-indigo-950 px-4 text-sm font-bold text-white shadow-sm"
+                title={`Current subscription plan: ${planName}`}
+              >
+                Plan: {formatPlanName(planName)}
+              </span>
             ) : null}
 
             <div className="relative">
@@ -303,18 +344,18 @@ export default function Layout() {
         </header>
 
         <main className="px-4 py-6 lg:px-8">
-          {accessAllowed && daysLeft !== undefined && daysLeft <= 10 && !isBannerDismissed ? (
+          {user?.role === "Owner" && layoutStatus?.should_warn && accessAllowed && daysLeft !== undefined && daysLeft <= 10 && !isBannerDismissed ? (
             <div
               className={`relative mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-semibold shadow-md transition-all duration-300 ${
                 daysLeft <= 3
-                  ? "border-red-700 bg-red-600 text-white"
+                  ? "animate-pulse border-red-700 bg-red-600 text-white"
                   : "border-yellow-600 bg-yellow-500 text-black"
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 shrink-0 rounded-full bg-current animate-ping" />
+                <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>
-                  Your {planName || "plan"} plan expires in {daysLeft} day(s). Renew now to avoid interruption.
+                  Your {planName || "plan"} plan expires on {formatDate(layoutSubscriptionEndDate)}. Renew now to avoid interruption.
                 </span>
               </div>
               <div className="flex items-center gap-3 self-end sm:self-auto">
@@ -350,6 +391,78 @@ export default function Layout() {
           ) : null}
           <Outlet />
         </main>
+      </div>
+    </div>
+  );
+}
+
+function formatDate(value?: Date | null) {
+  if (!value) return "the current expiry date";
+  return value.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function formatPlanName(value: string) {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function OwnerSubscriptionLock({ onRenew, onSignOut }: { onRenew: () => void; onSignOut: () => void }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-[#111827] px-4 py-8 text-white">
+      <div className="w-full max-w-2xl rounded-lg border border-white/10 bg-white p-8 text-[#111827] shadow-2xl">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-md bg-red-600 text-white">
+          <LockKeyhole className="h-7 w-7" />
+        </div>
+        <div className="mt-5 text-center">
+          <p className="text-sm font-bold uppercase tracking-wide text-red-600">Billing Required</p>
+          <h1 className="mt-2 text-2xl font-black">Subscription expired</h1>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-[#4B5563]">
+            Your subscription has expired. Please select a plan and complete payment to restore access to your manufacturing metrics dashboard.
+          </p>
+        </div>
+        <div className="mt-7 grid gap-3 sm:grid-cols-2">
+          <button
+            className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[#6D28D9] px-4 text-sm font-bold text-white hover:bg-[#4C1D95]"
+            type="button"
+            onClick={onRenew}
+          >
+            <CreditCard className="h-4 w-4" />
+            Upgrade/Renew Plan
+          </button>
+          <button
+            className="inline-flex h-12 items-center justify-center rounded-md border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED]"
+            type="button"
+            onClick={onSignOut}
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StaffSubscriptionLock({ onSignOut }: { onSignOut: () => void }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-[#FFF7ED] px-4 py-8">
+      <div className="w-full max-w-2xl rounded-lg border border-[#E5E7EB] bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-md bg-[#FEE2E2] text-red-700">
+          <ShieldAlert className="h-7 w-7" />
+        </div>
+        <h1 className="mt-5 text-2xl font-black text-[#111827]">System Access Suspended</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-[#4B5563]">
+          Your factory's subscription has expired. Please contact the Factory Owner to renew the Munshi AI application plan.
+        </p>
+        <button
+          className="mt-7 inline-flex h-11 items-center justify-center rounded-md border border-[#E5E7EB] bg-white px-5 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED]"
+          type="button"
+          onClick={onSignOut}
+        >
+          Sign Out
+        </button>
       </div>
     </div>
   );

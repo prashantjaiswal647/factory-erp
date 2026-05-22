@@ -17,7 +17,7 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
     let isMounted = true;
     async function loadStatus() {
       try {
-        const response = await getBillingStatus();
+        const response = await getBillingStatus(Date.now());
         if (!isMounted) return;
         setStatus(response.data);
         updateUser({

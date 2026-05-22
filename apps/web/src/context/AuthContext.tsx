@@ -107,6 +107,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function persistAuth(data: TokenResponse) {
+    localStorage.removeItem("subscription");
+    sessionStorage.removeItem("subscription");
     const role = normalizeRole(data.user.role);
     const nextUser: AuthUser = {
       id: data.user.id,
@@ -116,10 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       full_name: data.user.full_name,
       role,
       factory_id: data.user.factory_id,
-      factory_name: data.user.factory_name,
-      subscription_status: data.user.subscription_status,
-      trial_end_date: data.user.trial_end_date,
-      trial_days_remaining: data.user.trial_days_remaining
+      factory_name: data.user.factory_name
     };
 
     localStorage.setItem(tokenKey, data.access_token);
@@ -140,6 +139,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function logout() {
+    localStorage.removeItem("subscription");
+    sessionStorage.removeItem("subscription");
     localStorage.removeItem("token");
     localStorage.removeItem("factory_id");
     localStorage.removeItem(tokenKey);

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { useDataRefresh } from "../context/DataRefreshContext";
 import {
   createBillingOrder,
   getBillingStatus,
@@ -99,6 +100,7 @@ type Props = {
 export default function PricingPlansSection({ className = "", source = "billing" }: Props) {
   const navigate = useNavigate();
   const { updateUser, user } = useAuth();
+  const { triggerDataRefresh } = useDataRefresh();
   const [plans, setPlans] = useState<PricingPlan[]>(fallbackPlans);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   const [message, setMessage] = useState<string | null>(null);
@@ -173,6 +175,7 @@ export default function PricingPlansSection({ className = "", source = "billing"
     try {
       const response = await startFreeTrial({ plan_code: "basic" });
       updateUser(response.data);
+      triggerDataRefresh();
       setMessage("Basic plan 7-day free trial started.");
     } catch (caught) {
       setError(getErrorMessage(caught, "Free trial start failed."));
@@ -215,6 +218,7 @@ export default function PricingPlansSection({ className = "", source = "billing"
             billing_cycle: billingCycle
           });
           await refreshBillingStatus();
+          triggerDataRefresh();
           setMessage(`${plan.name} plan activated successfully.`);
         },
         theme: { color: "#6D28D9" }

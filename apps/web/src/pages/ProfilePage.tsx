@@ -1,12 +1,19 @@
-import { Building2, Mail, Phone, Save, UserRound } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletCards } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { getBillingHistory, getBillingStatus } from "../lib/api";
+import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 
 export default function ProfilePage() {
   const { user, updateUser } = useAuth();
+  const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
   const [toast, setToast] = useState("");
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
+  const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
+  const [isBillingLoading, setIsBillingLoading] = useState(false);
   const [form, setForm] = useState({
     full_name: user?.full_name || user?.username || "",
     email: user?.user_id || "",
@@ -24,6 +31,34 @@ export default function ProfilePage() {
         .join("") || "U"
     );
   }, [displayName]);
+
+  useEffect(() => {
+    void loadBillingPanel();
+  }, []);
+
+  async function loadBillingPanel() {
+    setIsBillingLoading(true);
+    try {
+      const [statusResponse, historyResponse] = await Promise.all([
+        getBillingStatus(),
+        user?.role === "Owner" ? getBillingHistory() : Promise.resolve({ data: [] as BillingHistoryItem[] })
+      ]);
+      setBillingStatus(statusResponse.data);
+      setBillingHistory(historyResponse.data);
+      updateUser({
+        subscription_status: statusResponse.data.subscription_status,
+        active_plan: statusResponse.data.active_plan,
+        billing_cycle: statusResponse.data.billing_cycle,
+        subscription_start_date: statusResponse.data.subscription_start_date,
+        subscription_end_date: statusResponse.data.effective_expires_at || statusResponse.data.plan_expires_at || statusResponse.data.subscription_end_date,
+        payment_status: statusResponse.data.payment_status
+      });
+    } catch {
+      setToast("Billing details could not be loaded.");
+    } finally {
+      setIsBillingLoading(false);
+    }
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -119,8 +154,101 @@ export default function ProfilePage() {
           ) : null}
         </form>
       </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 border-b border-zinc-200 p-5 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <WalletCards className="h-5 w-5 text-brand-700" />
+              <h2 className="text-lg font-semibold text-zinc-950">Billing History</h2>
+            </div>
+            <p className="mt-1 text-sm text-zinc-500">Subscription cycles are stacked consecutively when renewed before expiry.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+              type="button"
+              onClick={loadBillingPanel}
+              disabled={isBillingLoading}
+            >
+              <RefreshCw className={`h-4 w-4 ${isBillingLoading ? "animate-spin" : ""}`} />
+              Check Payment
+            </button>
+            {user?.role === "Owner" ? (
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700"
+                type="button"
+                onClick={() => navigate("/billing")}
+              >
+                <CreditCard className="h-4 w-4" />
+                Renew Plan
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="grid gap-4 border-b border-zinc-200 p-5 md:grid-cols-4">
+          <BillingMetric label="Plan Tier" value={billingStatus?.effective_plan || billingStatus?.active_plan || "Free Trial"} />
+          <BillingMetric label="Status" value={billingStatus?.effective_status || billingStatus?.subscription_status || "Unknown"} />
+          <BillingMetric label="Days Left" value={String(billingStatus?.days_left ?? "-")} />
+          <BillingMetric label="Expires" value={formatDate(billingStatus?.effective_expires_at || billingStatus?.plan_expires_at || billingStatus?.subscription_end_date)} />
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-zinc-200 text-sm">
+            <thead className="bg-zinc-50 text-left text-xs font-bold uppercase text-zinc-500">
+              <tr>
+                <th className="px-5 py-3">Plan Tier</th>
+                <th className="px-5 py-3">Cycle</th>
+                <th className="px-5 py-3">Activation Start</th>
+                <th className="px-5 py-3">Expiry Benchmark</th>
+                <th className="px-5 py-3">Status</th>
+                <th className="px-5 py-3 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 bg-white">
+              {billingHistory.length === 0 ? (
+                <tr>
+                  <td className="px-5 py-5 text-zinc-500" colSpan={6}>
+                    No paid subscription cycles found.
+                  </td>
+                </tr>
+              ) : (
+                billingHistory.map((item) => (
+                  <tr key={item.id}>
+                    <td className="px-5 py-4 font-semibold text-zinc-950">{item.plan_code}</td>
+                    <td className="px-5 py-4 text-zinc-600">{item.billing_cycle}</td>
+                    <td className="px-5 py-4 text-zinc-600">{formatDate(item.subscription_start_date)}</td>
+                    <td className="px-5 py-4 text-zinc-600">{formatDate(item.subscription_end_date)}</td>
+                    <td className="px-5 py-4">
+                      <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{item.payment_status}</span>
+                    </td>
+                    <td className="px-5 py-4 text-right font-semibold text-zinc-950">
+                      {item.currency} {(item.amount_paise / 100).toLocaleString("en-IN")}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
+}
+
+function BillingMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
+      <p className="text-xs font-bold uppercase text-zinc-500">{label}</p>
+      <p className="mt-2 truncate text-sm font-semibold text-zinc-950">{value}</p>
+    </div>
+  );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
 function ProfileField({
