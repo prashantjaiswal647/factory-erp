@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 import os
 import random
+import re
 from typing import Callable, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -62,6 +63,76 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     return pwd_context.verify(plain_password, password_hash)
 
 
+SUPPORTED_PHONE_COUNTRIES = {
+    "+91": {"name": "India", "min": 10, "max": 10},
+    "+1": {"name": "United States", "min": 10, "max": 10},
+    "+44": {"name": "United Kingdom", "min": 10, "max": 10},
+    "+971": {"name": "UAE", "min": 9, "max": 9},
+}
+
+
+def phone_digits(value: str | None) -> str:
+    return re.sub(r"\D", "", value or "")
+
+
+def normalize_country_code(country_code: str | None) -> str:
+    code = (country_code or "").strip()
+    if code and not code.startswith("+"):
+        code = f"+{code}"
+    if code not in SUPPORTED_PHONE_COUNTRIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported country code",
+        )
+    return code
+
+
+def normalize_phone_number(phone_number: str, country_code: str | None = None) -> tuple[str, str]:
+    raw = (phone_number or "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Phone number is required",
+        )
+    if raw.startswith("+"):
+        compact = raw.replace(" ", "")
+        code = next(
+            (item for item in sorted(SUPPORTED_PHONE_COUNTRIES, key=len, reverse=True) if compact.startswith(item)),
+            "",
+        )
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Unsupported country code",
+            )
+        local_digits = phone_digits(compact[len(code):])
+    elif country_code:
+        code = normalize_country_code(country_code)
+        local_digits = phone_digits(raw)
+    else:
+        code = "+91"
+        local_digits = phone_digits(raw)
+
+    rule = SUPPORTED_PHONE_COUNTRIES[code]
+    if len(local_digits) < rule["min"] or len(local_digits) > rule["max"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {rule['name']} mobile number",
+        )
+    return f"{code}{local_digits}", local_digits
+
+
+def normalized_phone_digits_for_lookup(phone_number: str | None) -> str | None:
+    if not phone_number:
+        return None
+    try:
+        _, local_digits = normalize_phone_number(phone_number)
+        return local_digits
+    except HTTPException:
+        digits = phone_digits(phone_number)
+        return digits or None
+
+
 def create_access_token(subject: str, role: str, factory_id: Optional[int], user_id: Optional[str] = None) -> str:
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
@@ -83,9 +154,19 @@ def get_user_by_username(db: Session, username: str) -> Optional[User]:
 
 
 def get_user_by_phone(db: Session, phone_number: str) -> Optional[User]:
+    raw = (phone_number or "").strip()
+    normalized_digits = phone_digits(raw)
+    if normalized_digits:
+        user = (
+            db.query(User)
+            .filter(User.phone_number_normalized == normalized_digits)
+            .first()
+        )
+        if user is not None:
+            return user
     return (
         db.query(User)
-        .filter(sql_func.lower(User.phone_number) == phone_number.lower())
+        .filter(sql_func.lower(User.phone_number) == raw.lower())
         .first()
     )
 
@@ -103,9 +184,10 @@ def get_user_by_subject(db: Session, subject: str) -> Optional[User]:
 
 
 def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = get_user_by_username(db, username)
-    if user is None:
-        user = get_user_by_phone(db, username)
+    identifier = username.strip()
+    user = get_user_by_username(db, identifier) if "@" in identifier else get_user_by_phone(db, identifier)
+    if user is None and "@" not in identifier:
+        user = get_user_by_username(db, identifier)
     if user is None or not verify_password(password, user.password_hash):
         return None
     return user
@@ -119,6 +201,7 @@ class LoginRequest(BaseModel):
 class SignupRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
     email: str = Field(..., min_length=3, max_length=255)
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=1, max_length=50)
     factory_name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=6, max_length=255)
@@ -130,6 +213,13 @@ class GoogleLoginRequest(BaseModel):
 
 class GoogleSignupCompleteRequest(BaseModel):
     credential: str = Field(..., min_length=1)
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
+    phone_number: str = Field(..., min_length=5, max_length=50)
+
+
+class UserProfileUpdateRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=5, max_length=50)
 
 
@@ -165,6 +255,22 @@ def ensure_factory_trial(factory: Optional[Factory]) -> None:
     if factory is None:
         return
     now = datetime.now(timezone.utc)
+    
+    # If manual override is active, do not run standard trial expiration check
+    if getattr(factory, "subscription_override", False) is True:
+        # Auto-restore override status if override expires in the future
+        override_expires_at = getattr(factory, "override_expires_at", None)
+        if override_expires_at is not None and override_expires_at.tzinfo is None:
+            override_expires_at = override_expires_at.replace(tzinfo=timezone.utc)
+        if override_expires_at is None or override_expires_at >= now:
+            factory.subscription_status = "active"
+            if factory.payment_status not in {"manual_override", "paid"}:
+                factory.payment_status = "manual_override"
+        else:
+            factory.subscription_status = "expired"
+            factory.payment_status = "payment_pending"
+        return
+
     if factory.trial_start_date is None:
         factory.trial_start_date = now
     if factory.trial_end_date is None:
@@ -175,22 +281,259 @@ def ensure_factory_trial(factory: Optional[Factory]) -> None:
         factory.active_plan = "basic"
     if factory.payment_status is None:
         factory.payment_status = "payment_pending"
-    if is_trial_bypass_enabled():
-        return
+        
     trial_end = factory.trial_end_date
     if trial_end is not None and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
-    subscription_end = getattr(factory, "subscription_end_date", None)
+    subscription_end = getattr(factory, "subscription_end_date", None) or getattr(factory, "subscription_end", None)
     if subscription_end is not None and subscription_end.tzinfo is None:
         subscription_end = subscription_end.replace(tzinfo=timezone.utc)
+    plan_expires_at = getattr(factory, "plan_expires_at", None)
+    if plan_expires_at is not None and plan_expires_at.tzinfo is None:
+        plan_expires_at = plan_expires_at.replace(tzinfo=timezone.utc)
+    paid_future_expiry = next(
+        (expiry for expiry in (subscription_end, plan_expires_at) if expiry is not None and expiry >= now),
+        None,
+    )
+
+    # AUTO-RESTORE logic:
+    # If DB contains a future expiry date but status is expired/trial_expired, auto-restore them!
+    if factory.subscription_status in {"expired", "trial_expired", "cancelled", "payment_pending"}:
+        if paid_future_expiry is not None:
+            factory.subscription_status = "active"
+            factory.payment_status = "paid"
+        elif trial_end is not None and trial_end >= now:
+            factory.subscription_status = "trial_active"
+            factory.payment_status = "payment_pending"
+
+    if is_trial_bypass_enabled():
+        return
+
     if factory.subscription_status == "trial":
         factory.subscription_status = "trial_active"
     if factory.subscription_status == "trial_active" and trial_end is not None and trial_end < now:
         factory.subscription_status = "trial_expired"
         factory.payment_status = "payment_pending"
-    if factory.subscription_status == "active" and subscription_end is not None and subscription_end < now:
+    if factory.subscription_status == "active" and paid_future_expiry is None and (subscription_end is not None or plan_expires_at is not None):
         factory.subscription_status = "expired"
         factory.payment_status = "payment_pending"
+
+
+def resolve_factory_subscription(factory: Optional[Factory]) -> dict:
+    now = datetime.now(timezone.utc)
+
+    def as_utc(value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    def days_until(value: Optional[datetime]) -> int:
+        if value is None or value < now:
+            return 0
+        total_seconds = int((value - now).total_seconds())
+        return (total_seconds + 86399) // 86400
+
+    def base_response(
+        *,
+        plan_name: str,
+        plan_expires_at: Optional[datetime],
+        subscription_status: Optional[str],
+        payment_status: Optional[str],
+        billing_cycle: Optional[str],
+        is_manual_override: bool,
+        raw_active_plan: Optional[str],
+        raw_plan_name: Optional[str],
+        raw_subscription_end_date: Optional[datetime],
+        raw_plan_expires_at: Optional[datetime],
+        raw_trial_end_date: Optional[datetime],
+        access_allowed: bool,
+        effective_plan: str,
+        effective_status: Optional[str],
+        effective_expires_at: Optional[datetime],
+    ) -> dict:
+        return {
+            "plan_name": plan_name,
+            "active_plan": raw_active_plan,
+            "plan_expires_at": plan_expires_at,
+            "subscription_status": subscription_status,
+            "payment_status": payment_status,
+            "billing_cycle": billing_cycle,
+            "days_left": days_until(effective_expires_at),
+            "server_time": now,
+            "trial_end_date": raw_trial_end_date,
+            "subscription_end_date": raw_subscription_end_date,
+            "is_manual_override": is_manual_override,
+            "access_allowed": access_allowed,
+            "raw_active_plan": raw_active_plan,
+            "raw_plan_name": raw_plan_name,
+            "raw_subscription_end_date": raw_subscription_end_date,
+            "raw_plan_expires_at": raw_plan_expires_at,
+            "raw_trial_end_date": raw_trial_end_date,
+            "effective_plan": effective_plan,
+            "effective_status": effective_status,
+            "effective_expires_at": effective_expires_at,
+        }
+
+    if factory is None:
+        return base_response(
+            plan_name="Free/Trial",
+            plan_expires_at=None,
+            subscription_status=None,
+            payment_status=None,
+            billing_cycle=None,
+            is_manual_override=False,
+            raw_active_plan=None,
+            raw_plan_name=None,
+            raw_subscription_end_date=None,
+            raw_plan_expires_at=None,
+            raw_trial_end_date=None,
+            access_allowed=False,
+            effective_plan="Free/Trial",
+            effective_status=None,
+            effective_expires_at=None,
+        )
+
+    # Extract raw fields
+    raw_active_plan = getattr(factory, "active_plan", None)
+    raw_plan_name = getattr(factory, "plan_name", None)
+    raw_subscription_end_date = as_utc(getattr(factory, "subscription_end_date", None) or getattr(factory, "subscription_end", None))
+    raw_plan_expires_at = as_utc(getattr(factory, "plan_expires_at", None))
+    raw_trial_end_date = as_utc(getattr(factory, "trial_end_date", None))
+        
+    subscription_status = getattr(factory, "subscription_status", None)
+    payment_status = getattr(factory, "payment_status", None)
+    payment_status_key = payment_status.strip().lower() if isinstance(payment_status, str) else payment_status
+    billing_cycle = getattr(factory, "billing_cycle", None)
+    override_expires_at = as_utc(getattr(factory, "override_expires_at", None))
+    paid_expires_at = next(
+        (expiry for expiry in (raw_subscription_end_date, raw_plan_expires_at) if expiry is not None and expiry >= now),
+        raw_subscription_end_date or raw_plan_expires_at,
+    )
+
+    if getattr(factory, "subscription_override", False) is True and override_expires_at is not None and override_expires_at >= now:
+        plan_name = getattr(factory, "override_plan", None) or raw_active_plan or raw_plan_name or "premium"
+        return base_response(
+            plan_name=plan_name,
+            plan_expires_at=override_expires_at,
+            subscription_status="active",
+            payment_status="manual_override",
+            billing_cycle=billing_cycle,
+            is_manual_override=True,
+            raw_active_plan=raw_active_plan,
+            raw_plan_name=raw_plan_name,
+            raw_subscription_end_date=raw_subscription_end_date,
+            raw_plan_expires_at=raw_plan_expires_at,
+            raw_trial_end_date=raw_trial_end_date,
+            access_allowed=True,
+            effective_plan=plan_name,
+            effective_status="active",
+            effective_expires_at=override_expires_at,
+        )
+
+    if subscription_status == "active" and paid_expires_at is not None and paid_expires_at >= now:
+        plan_name = raw_active_plan or raw_plan_name or "premium"
+        return base_response(
+            plan_name=plan_name,
+            plan_expires_at=paid_expires_at,
+            subscription_status="active",
+            payment_status=payment_status,
+            billing_cycle=billing_cycle,
+            is_manual_override=False,
+            raw_active_plan=raw_active_plan,
+            raw_plan_name=raw_plan_name,
+            raw_subscription_end_date=raw_subscription_end_date,
+            raw_plan_expires_at=raw_plan_expires_at,
+            raw_trial_end_date=raw_trial_end_date,
+            access_allowed=True,
+            effective_plan=plan_name,
+            effective_status="active",
+            effective_expires_at=paid_expires_at,
+        )
+
+    if subscription_status in {"trial", "trial_active"} and raw_trial_end_date is not None and raw_trial_end_date >= now:
+        plan_name = raw_active_plan or raw_plan_name or "basic"
+        return base_response(
+            plan_name=plan_name,
+            plan_expires_at=raw_trial_end_date,
+            subscription_status="trial_active",
+            payment_status=payment_status or "payment_pending",
+            billing_cycle=billing_cycle,
+            is_manual_override=False,
+            raw_active_plan=raw_active_plan,
+            raw_plan_name=raw_plan_name,
+            raw_subscription_end_date=raw_subscription_end_date,
+            raw_plan_expires_at=raw_plan_expires_at,
+            raw_trial_end_date=raw_trial_end_date,
+            access_allowed=True,
+            effective_plan=plan_name,
+            effective_status="trial_active",
+            effective_expires_at=raw_trial_end_date,
+        )
+
+    expired_status = subscription_status or "expired"
+    if payment_status_key == "payment_pending":
+        expired_status = "payment_pending"
+    elif expired_status in {"trial", "trial_active"}:
+        expired_status = "trial_expired"
+    elif expired_status == "active":
+        expired_status = "expired"
+    plan_name = raw_active_plan or raw_plan_name or "Free/Trial"
+    expires_at = paid_expires_at or raw_trial_end_date
+    return base_response(
+        plan_name=plan_name,
+        plan_expires_at=expires_at,
+        subscription_status=expired_status,
+        payment_status=payment_status or "payment_pending",
+        billing_cycle=billing_cycle,
+        is_manual_override=False,
+        raw_active_plan=raw_active_plan,
+        raw_plan_name=raw_plan_name,
+        raw_subscription_end_date=raw_subscription_end_date,
+        raw_plan_expires_at=raw_plan_expires_at,
+        raw_trial_end_date=raw_trial_end_date,
+        access_allowed=False,
+        effective_plan=plan_name,
+        effective_status=expired_status,
+        effective_expires_at=expires_at,
+    )
+
+
+def log_subscription_resolution(factory_id: Optional[int], res: dict) -> None:
+    print(
+        "[SUBSCRIPTION_RESOLVER] "
+        f"factory_id={factory_id} "
+        f"active_plan={res.get('active_plan')} "
+        f"plan_name={res.get('plan_name')} "
+        f"subscription_status={res.get('subscription_status')} "
+        f"payment_status={res.get('payment_status')} "
+        f"subscription_end_date={res.get('subscription_end_date')} "
+        f"plan_expires_at={res.get('plan_expires_at')} "
+        f"days_left={res.get('days_left')} "
+        f"access_allowed={res.get('access_allowed')}"
+    )
+
+
+def get_effective_subscription(db: Session, factory_id: Optional[int]) -> dict:
+    if factory_id is None or factory_id <= 0:
+        res = resolve_factory_subscription(None)
+        log_subscription_resolution(factory_id, res)
+        return res
+    db.expire_all()
+    factory = (
+        db.query(Factory)
+        .filter(Factory.id == factory_id)
+        .populate_existing()
+        .first()
+    )
+    res = resolve_factory_subscription(factory)
+    log_subscription_resolution(factory_id, res)
+    return res
+
+
+def set_no_store_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
 
 
 def trial_days_remaining(factory: Optional[Factory]) -> int:
@@ -207,6 +550,8 @@ def trial_days_remaining(factory: Optional[Factory]) -> int:
 
 def build_login_response(user: User, db: Session) -> LoginResponse:
     user.last_login_at = datetime.now(timezone.utc)
+    if user.phone_number and not user.phone_number_normalized:
+        user.phone_number_normalized = normalized_phone_digits_for_lookup(user.phone_number)
     user_uuid = ensure_user_uuid(user, db)
     ensure_factory_trial(user.factory)
     db.commit()
@@ -238,7 +583,12 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
 
 
 def is_subscription_bypass_path(path: str) -> bool:
-    return path.startswith("/api/auth") or path.startswith("/api/billing") or path.startswith("/api/v1/users/me/subscription")
+    return (
+        path.startswith("/api/auth")
+        or path.startswith("/api/billing")
+        or path.startswith("/api/v1/users/me/subscription")
+        or path.startswith("/api/v1/dashboard/subscription-status")
+    )
 
 
 def get_current_user(
@@ -262,15 +612,9 @@ def get_current_user(
     user = get_user_by_subject(db, subject)
     if user is None:
         raise credentials_error
-    ensure_factory_trial(user.factory)
-    if user.factory is not None:
-        db.commit()
-        db.refresh(user)
-        has_subscription_access = (
-            user.factory.subscription_status == "active"
-            or (user.factory.subscription_status == "trial_active" and user.factory.active_plan == "basic")
-            or getattr(user.factory, "subscription_override", False) is True
-        )
+    if user.factory_id is not None and user.factory_id > 0:
+        res = get_effective_subscription(db, user.factory_id)
+        has_subscription_access = res["access_allowed"]
         if not has_subscription_access and not is_subscription_bypass_path(request.url.path):
             if not is_trial_bypass_enabled():
                 raise HTTPException(
@@ -320,6 +664,7 @@ def generate_otp() -> str:
 
 
 def store_otp(db: Session, phone_number: str, otp_code: str) -> OTPStore:
+    phone_number, _ = normalize_phone_number(phone_number)
     # Invalidate previous OTPs for this phone
     db.query(OTPStore).filter(
         sql_func.lower(OTPStore.phone_number) == phone_number.lower()
@@ -337,6 +682,7 @@ def store_otp(db: Session, phone_number: str, otp_code: str) -> OTPStore:
 
 
 def verify_stored_otp(db: Session, phone_number: str, otp_code: str) -> bool:
+    phone_number, _ = normalize_phone_number(phone_number)
     record = (
         db.query(OTPStore)
         .filter(sql_func.lower(OTPStore.phone_number) == phone_number.lower())
@@ -365,11 +711,12 @@ def request_otp(
     payload: OTPRequest,
     db: Session = Depends(get_db),
 ):
+    full_phone_number, _ = normalize_phone_number(payload.phone_number, payload.country_code)
     otp = generate_otp()
-    store_otp(db, payload.phone_number, otp)
+    store_otp(db, full_phone_number, otp)
     # MOCK: In production, integrate Twilio / AWS SNS / MSG91 here.
-    print(f"[MOCK OTP] Phone: {payload.phone_number} | OTP: {otp}")
-    return {"message": "OTP sent successfully (mock)", "phone_number": payload.phone_number}
+    print(f"[MOCK OTP] Phone: {full_phone_number} | OTP: {otp}")
+    return {"message": "OTP sent successfully (mock)", "phone_number": full_phone_number}
 
 
 @router.post("/verify-otp", response_model=TokenResponse)
@@ -377,18 +724,20 @@ def verify_otp(
     payload: OTPVerifyRequest,
     db: Session = Depends(get_db),
 ):
-    if not verify_stored_otp(db, payload.phone_number, payload.otp):
+    full_phone_number, normalized_phone = normalize_phone_number(payload.phone_number, payload.country_code)
+    if not verify_stored_otp(db, full_phone_number, payload.otp):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired OTP",
         )
 
-    user = get_user_by_phone(db, payload.phone_number)
+    user = get_user_by_phone(db, full_phone_number)
     if user is None:
         # Auto-register user as Owner on first verified OTP
         user = User(
-            username=payload.phone_number,
-            phone_number=payload.phone_number,
+            username=full_phone_number,
+            phone_number=full_phone_number,
+            phone_number_normalized=normalized_phone,
             password_hash=hash_password(payload.password),
             role="Owner",
             is_verified=True,
@@ -477,7 +826,7 @@ def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
 @public_router.post("/signup", status_code=status.HTTP_201_CREATED)
 def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
     email = payload.email.strip().lower() if payload.email else None
-    phone_number = payload.phone_number.strip()
+    phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
     full_name = payload.full_name.strip()
     factory_name = payload.factory_name.strip()
 
@@ -525,6 +874,7 @@ def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
             factory_id=factory.id,
             username=email or phone_number,
             phone_number=phone_number,
+            phone_number_normalized=phone_number_normalized,
             full_name=full_name,
             password_hash=hash_password(payload.password),
             role="Owner",
@@ -607,11 +957,9 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
 def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = Depends(get_db)):
     claims = verify_google_credential(payload.credential)
     email = str(claims.get("email") or "").strip().lower()
-    phone_number = payload.phone_number.strip()
+    phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
     if not email:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Google account email is required")
-    if not phone_number:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Phone number is required")
     if get_user_by_username(db, email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
     if get_user_by_phone(db, phone_number) is not None:
@@ -643,6 +991,7 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = D
         factory_id=factory.id,
         username=email,
         phone_number=phone_number,
+        phone_number_normalized=phone_number_normalized,
         full_name=display_name,
         password_hash=hash_password(uuid4().hex),
         role="Owner",
@@ -657,43 +1006,88 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = D
     return build_login_response(user, db)
 
 
+@v1_router.put("/users/me/profile", response_model=AuthUserProfile)
+def update_user_profile(
+    payload: UserProfileUpdateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    full_phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
+    existing_phone = get_user_by_phone(db, full_phone_number)
+    if existing_phone is not None and existing_phone.id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already exists")
+
+    current_user.phone_number = full_phone_number
+    current_user.phone_number_normalized = phone_number_normalized
+    if payload.full_name is not None:
+        current_user.full_name = payload.full_name.strip() or current_user.full_name
+    db.commit()
+    db.refresh(current_user)
+    return AuthUserProfile(
+        id=current_user.id,
+        user_id=current_user.user_id,
+        factory_id=current_user.factory_id,
+        username=current_user.username,
+        phone_number=current_user.phone_number,
+        full_name=current_user.full_name,
+        role=current_user.role,
+        factory_name=current_user.factory.factory_name or current_user.factory.name if current_user.factory else None,
+        subscription_status=current_user.factory.subscription_status if current_user.factory else None,
+        trial_end_date=current_user.factory.trial_end_date if current_user.factory else None,
+        trial_days_remaining=trial_days_remaining(current_user.factory),
+    )
+
+
 from schemas import UserSubscriptionResponse
 
 @v1_router.get("/users/me/subscription", response_model=UserSubscriptionResponse)
 def get_user_subscription(
+    response: Response,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    factory = current_user.factory
+    set_no_store_headers(response)
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
+    res = get_effective_subscription(db, current_user.factory_id)
     
-    # plan_name falls back to active_plan or "Free/Trial"
-    plan_name = getattr(factory, "plan_name", None) or getattr(factory, "active_plan", None) or "Free/Trial"
-    
-    # plan_expires_at falls back to subscription_end_date or trial_end_date or None
-    plan_expires_at = getattr(factory, "plan_expires_at", None) or getattr(factory, "subscription_end_date", None) or getattr(factory, "trial_end_date", None)
-    
-    now = datetime.now(timezone.utc)
-    
-    # Calculate ceiling-rounded days remaining
-    days_left = 0
-    if plan_expires_at:
-        # ensure timezone aware
-        if plan_expires_at.tzinfo is None:
-            plan_expires_at = plan_expires_at.replace(tzinfo=timezone.utc)
-        
-        if plan_expires_at > now:
-            delta = plan_expires_at - now
-            total_seconds = int(delta.total_seconds())
-            days_left = (total_seconds + 86399) // 86400
-            
-    # last_login retrieves last_login_at timestamp
-    last_login = getattr(current_user, "last_login_at", None)
+    # Query fresh user data to get accurate last_login_at
+    fresh_user = db.query(User).filter(User.id == current_user.id).first()
+    last_login = getattr(fresh_user, "last_login_at", None)
+    now = res["server_time"]
+    trial_start = getattr(factory, "trial_start_date", None)
+    trial_end = res["trial_end_date"]
+    if trial_start is not None and trial_start.tzinfo is None:
+        trial_start = trial_start.replace(tzinfo=timezone.utc)
+    is_within_trial_bracket = bool(
+        trial_end is not None
+        and trial_end >= now
+        and (trial_start is None or trial_start <= now)
+        and res["effective_status"] == "trial_active"
+    )
+    is_trial = res["plan_name"] == "Free Trial" or is_within_trial_bracket
     
     return UserSubscriptionResponse(
-        plan_name=plan_name,
-        plan_expires_at=plan_expires_at,
-        days_left=days_left,
+        active_plan=res["active_plan"],
+        plan_name=res["plan_name"],
+        plan_expires_at=res["plan_expires_at"],
+        trial_end_date=res["trial_end_date"],
+        subscription_end_date=res["subscription_end_date"],
+        days_left=res["days_left"],
         last_login=last_login,
-        server_time=now
+        server_time=res["server_time"],
+        subscription_status=res["subscription_status"],
+        billing_cycle=res["billing_cycle"],
+        payment_status=res["payment_status"],
+        is_manual_override=res["is_manual_override"],
+        is_trial=is_trial,
+        access_allowed=res["access_allowed"],
+        raw_active_plan=res["raw_active_plan"],
+        raw_plan_name=res["raw_plan_name"],
+        raw_subscription_end_date=res["raw_subscription_end_date"],
+        raw_plan_expires_at=res["raw_plan_expires_at"],
+        raw_trial_end_date=res["raw_trial_end_date"],
+        effective_plan=res["effective_plan"],
+        effective_status=res["effective_status"],
+        effective_expires_at=res["effective_expires_at"]
     )
 

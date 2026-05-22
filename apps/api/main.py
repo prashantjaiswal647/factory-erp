@@ -127,9 +127,11 @@ app.include_router(auth_router)
 app.include_router(public_auth_router)
 app.include_router(v1_router)
 app.include_router(dashboard.router)
+app.include_router(dashboard.v1_router)
 app.include_router(attendance.router)
 app.include_router(billing.router)
 app.include_router(staff.router)
+app.include_router(staff.v1_router)
 app.include_router(expenses.router)
 app.include_router(integrations.router)
 app.include_router(machine_onboarding.router)
@@ -986,10 +988,14 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS trial_end_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '7 days')",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial_active'",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS active_plan VARCHAR(50)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS plan_name VARCHAR(50) NOT NULL DEFAULT 'Free Trial'",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(20)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_start_date TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_end_date TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) NOT NULL DEFAULT 'payment_pending'",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE factories DROP CONSTRAINT IF EXISTS ck_factories_subscription_status",
         (
             "ALTER TABLE factories ADD CONSTRAINT ck_factories_subscription_status "
@@ -1007,8 +1013,14 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_username VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_override BOOLEAN NOT NULL DEFAULT FALSE",
-        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS plan_name VARCHAR(50)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_plan VARCHAR",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_expires_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_reason TEXT",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_updated_at TIMESTAMP WITH TIME ZONE",
+        "UPDATE factories SET plan_name = COALESCE(active_plan, 'Free Trial') WHERE plan_name IS NULL",
+        "UPDATE factories SET subscription_start = subscription_start_date WHERE subscription_start IS NULL AND subscription_start_date IS NOT NULL",
+        "UPDATE factories SET subscription_end = subscription_end_date WHERE subscription_end IS NULL AND subscription_end_date IS NOT NULL",
         (
             "CREATE TABLE IF NOT EXISTS custom_plan_enquiries ("
             "id SERIAL PRIMARY KEY, "
@@ -1055,6 +1067,8 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS ix_demo_booking_requests_factory_id ON demo_booking_requests (factory_id)",
         "CREATE INDEX IF NOT EXISTS ix_subscription_payments_factory_id ON subscription_payments (factory_id)",
         "CREATE INDEX IF NOT EXISTS ix_factories_subscription_end_date ON factories (subscription_end_date)",
+        "CREATE INDEX IF NOT EXISTS ix_factories_subscription_end ON factories (subscription_end)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
         "UPDATE factories SET factory_name = name WHERE factory_name IS NULL",
         (
             "CREATE TABLE IF NOT EXISTS machines ("
@@ -1142,12 +1156,23 @@ def ensure_runtime_schema():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number_normalized VARCHAR(50)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE",
         "UPDATE users SET email = username WHERE email IS NULL AND username LIKE '%@%'",
+        (
+            "UPDATE users SET phone_number_normalized = CASE "
+            "WHEN phone_number LIKE '+971%' THEN regexp_replace(substr(phone_number, 5), '\\D', '', 'g') "
+            "WHEN phone_number LIKE '+91%' THEN regexp_replace(substr(phone_number, 4), '\\D', '', 'g') "
+            "WHEN phone_number LIKE '+44%' THEN regexp_replace(substr(phone_number, 4), '\\D', '', 'g') "
+            "WHEN phone_number LIKE '+1%' THEN regexp_replace(substr(phone_number, 3), '\\D', '', 'g') "
+            "ELSE regexp_replace(phone_number, '\\D', '', 'g') END "
+            "WHERE phone_number IS NOT NULL AND (phone_number_normalized IS NULL OR phone_number_normalized = regexp_replace(phone_number, '\\D', '', 'g'))"
+        ),
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email) WHERE email IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_user_id ON users (user_id) WHERE user_id IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS ix_users_phone_number_normalized ON users (phone_number_normalized) WHERE phone_number_normalized IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_id ON users (telegram_id) WHERE telegram_id IS NOT NULL",
         "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role",
         "UPDATE users SET role = 'Operator' WHERE role = 'Worker'",
@@ -2603,6 +2628,14 @@ def update_integration_settings(
     ensure_external_id_available(db, current_user.id, "telegram_id", telegram_id)
 
     current_user.phone_number = phone_number
+    normalized_phone = None
+    if phone_number:
+        normalized_phone = re.sub(r"\D", "", phone_number)
+        for dial_code in ("+971", "+91", "+44", "+1"):
+            if phone_number.startswith(dial_code):
+                normalized_phone = re.sub(r"\D", "", phone_number[len(dial_code):])
+                break
+    current_user.phone_number_normalized = normalized_phone
     current_user.telegram_id = telegram_id
     db.commit()
     db.refresh(current_user)

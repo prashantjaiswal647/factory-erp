@@ -1,21 +1,23 @@
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from ai_agent import initialize_groq_llm
+from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Payment, User
+from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, Payment, User
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+v1_router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 MONEY_QUANT = Decimal("0.01")
 
 
@@ -35,6 +37,21 @@ class AiInsightsResponse(BaseModel):
     stats: AiDashboardStats
     insights: str
     source: str
+
+
+class DashboardSubscriptionStatus(BaseModel):
+    access_allowed: bool
+    alert_state: str
+    should_warn: bool
+    is_expired: bool
+    days_left: int
+    plan_name: str
+    subscription_status: str | None = None
+    payment_status: str | None = None
+    subscription_start: datetime | None = None
+    subscription_end: datetime | None = None
+    server_time: datetime
+    role: str
 
 
 def fallback_insights(stats: dict) -> str:
@@ -82,6 +99,44 @@ def generate_llm_insights(stats: dict) -> tuple[str, str]:
             print(f"DASHBOARD OPENAI ERROR: {exc}")
 
     return fallback_insights(stats), "fallback"
+
+
+@v1_router.get("/subscription-status", response_model=DashboardSubscriptionStatus)
+def dashboard_subscription_status(
+    response: Response,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    set_no_store_headers(response)
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
+    res = get_effective_subscription(db, current_user.factory_id)
+    server_time = res["server_time"] or datetime.now(timezone.utc)
+    subscription_end = res["effective_expires_at"]
+    is_expired = subscription_end is not None and server_time > subscription_end
+    days_left = res["days_left"]
+    should_warn = bool(res["access_allowed"] and 0 < days_left <= 10)
+    alert_state = "none"
+    if is_expired or not res["access_allowed"]:
+        alert_state = "expired"
+    elif days_left <= 3 and days_left > 0:
+        alert_state = "critical"
+    elif should_warn:
+        alert_state = "warning"
+
+    return DashboardSubscriptionStatus(
+        access_allowed=res["access_allowed"],
+        alert_state=alert_state,
+        should_warn=should_warn,
+        is_expired=is_expired or not res["access_allowed"],
+        days_left=days_left,
+        plan_name=res["effective_plan"] or res["plan_name"],
+        subscription_status=res["effective_status"],
+        payment_status=res["payment_status"],
+        subscription_start=(getattr(factory, "subscription_start", None) or getattr(factory, "subscription_start_date", None)) if factory else None,
+        subscription_end=subscription_end,
+        server_time=server_time,
+        role=current_user.role,
+    )
 
 
 @router.get("/ai-insights", response_model=AiInsightsResponse)

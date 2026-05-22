@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import require_owner
+from auth import normalize_phone_number, require_owner
 from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
 from models import (
@@ -654,6 +654,8 @@ def onboarding_step1_create_worker(
         worker = Worker(factory_id=current_user.factory_id, name=payload.name.strip())
         db.add(worker)
 
+    if payload.phone:
+        worker.phone, _ = normalize_phone_number(payload.phone, payload.country_code)
     worker.daily_wages = payload.daily_wages
     worker.duty_hours = payload.duty_hours
     worker.daily_salary = payload.daily_wages

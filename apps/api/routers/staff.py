@@ -7,16 +7,18 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auth import hash_password, require_owner
+from auth import get_user_by_phone, hash_password, normalize_phone_number, require_owner
 from db import get_db
 from models import User
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
+v1_router = APIRouter(prefix="/api/v1/users", tags=["staff"])
 
 
 class StaffCreateRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=1, max_length=50)
     password: str = Field(..., min_length=6, max_length=255)
     role: Literal["sub_owner", "supervisor", "worker"]
@@ -64,6 +66,7 @@ def list_staff(
 
 
 @router.post("/create", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
+@v1_router.post("/create-staff", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
 def create_staff(
     payload: StaffCreateRequest,
     current_user: User = Depends(require_owner),
@@ -72,7 +75,7 @@ def create_staff(
     if payload.role == "sub_owner":
         ensure_primary_owner(current_user)
 
-    phone_number = payload.phone_number.strip()
+    phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
     full_name = payload.full_name.strip()
 
     if not phone_number:
@@ -86,11 +89,7 @@ def create_staff(
             detail="full_name cannot be blank",
         )
 
-    existing_user = (
-        db.query(User)
-        .filter(sql_func.lower(User.phone_number) == phone_number.lower())
-        .first()
-    )
+    existing_user = get_user_by_phone(db, phone_number)
     if existing_user is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -102,6 +101,7 @@ def create_staff(
         factory_id=current_user.factory_id,
         username=phone_number,
         phone_number=phone_number,
+        phone_number_normalized=phone_number_normalized,
         full_name=full_name,
         password_hash=hash_password(payload.password),
         role=normalize_staff_role(payload.role),

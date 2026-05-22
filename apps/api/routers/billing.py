@@ -2,13 +2,13 @@ from datetime import datetime, timedelta, timezone
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session, object_session
 
-from auth import JWT_ALGORITHM, check_permissions, get_current_active_user, get_jwt_secret_key, get_user_by_subject, is_trial_bypass_enabled
+from auth import JWT_ALGORITHM, check_permissions, get_current_active_user, get_effective_subscription, get_jwt_secret_key, get_user_by_subject, is_trial_bypass_enabled, normalize_phone_number, set_no_store_headers
 from db import get_db
 from models import CustomPlanEnquiry, DemoBookingRequest, Factory, SubscriptionPayment, User
 
@@ -51,12 +51,37 @@ class BillingStatusResponse(BaseModel):
     trial_end_date: Optional[datetime] = None
     trial_days_remaining: int
     is_access_allowed: bool
+    access_allowed: bool
     is_owner: bool
     active_plan: Optional[str] = None
+    plan_name: Optional[str] = None
+    plan_expires_at: Optional[datetime] = None
     billing_cycle: Optional[str] = None
     subscription_start_date: Optional[datetime] = None
     subscription_end_date: Optional[datetime] = None
     payment_status: Optional[str] = None
+    days_left: int = 0
+    server_time: datetime
+    is_manual_override: bool = False
+    effective_plan: Optional[str] = None
+    effective_status: Optional[str] = None
+    effective_expires_at: Optional[datetime] = None
+
+
+class SubscriptionPaymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    plan_code: str
+    billing_cycle: str
+    amount_paise: int
+    currency: str
+    payment_status: str
+    provider: Optional[str] = None
+    provider_payment_id: Optional[str] = None
+    subscription_start_date: datetime
+    subscription_end_date: datetime
+    created_at: datetime
 
 
 class CreateOrderRequest(BaseModel):
@@ -99,6 +124,7 @@ class VerifyPaymentResponse(BillingStatusResponse):
 class CustomPlanEnquiryRequest(BaseModel):
     owner_name: str = Field(min_length=2)
     factory_name: str = Field(min_length=2)
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone: str = Field(min_length=6)
     email: str = Field(min_length=5)
     number_of_machines: int = Field(ge=51)
@@ -108,6 +134,7 @@ class CustomPlanEnquiryRequest(BaseModel):
 class DemoBookingRequestPayload(BaseModel):
     owner_name: str = Field(min_length=2)
     factory_name: Optional[str] = None
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone: str = Field(min_length=6)
     email: str = Field(min_length=5)
     preferred_plan: Optional[str] = None
@@ -222,29 +249,65 @@ def remaining_trial_days(factory: Factory) -> int:
 
 def sync_subscription(factory: Factory) -> None:
     now = datetime.now(timezone.utc)
+    
+    # If manual override is active, bypass standard expiration check
+    if getattr(factory, "subscription_override", False) is True:
+        # Auto-restore override status if override expires in the future
+        override_expires_at = getattr(factory, "override_expires_at", None)
+        if override_expires_at is not None and override_expires_at.tzinfo is None:
+            override_expires_at = override_expires_at.replace(tzinfo=timezone.utc)
+        if override_expires_at is None or override_expires_at >= now:
+            factory.subscription_status = "active"
+            if factory.payment_status not in {"manual_override", "paid"}:
+                factory.payment_status = "manual_override"
+        else:
+            factory.subscription_status = "expired"
+            factory.payment_status = "payment_pending"
+        return
+
     normalize_status(factory)
     if factory.trial_start_date is None:
         factory.trial_start_date = now
     if factory.trial_end_date is None:
         factory.trial_end_date = now + timedelta(days=TRIAL_DAYS)
-    if is_trial_bypass_enabled():
-        return
+        
     trial_end = factory.trial_end_date
     if trial_end is not None and trial_end.tzinfo is None:
         trial_end = trial_end.replace(tzinfo=timezone.utc)
-    subscription_end = factory.subscription_end_date
+    subscription_end = factory.subscription_end_date or getattr(factory, "subscription_end", None)
     if subscription_end is not None and subscription_end.tzinfo is None:
         subscription_end = subscription_end.replace(tzinfo=timezone.utc)
+    plan_expires_at = getattr(factory, "plan_expires_at", None)
+    if plan_expires_at is not None and plan_expires_at.tzinfo is None:
+        plan_expires_at = plan_expires_at.replace(tzinfo=timezone.utc)
+    paid_future_expiry = next(
+        (expiry for expiry in (subscription_end, plan_expires_at) if expiry is not None and expiry >= now),
+        None,
+    )
+
+    # AUTO-RESTORE logic:
+    # If DB contains a future expiry date but status is expired/trial_expired, auto-restore them!
+    if factory.subscription_status in {"expired", "trial_expired", "cancelled", "payment_pending"}:
+        if paid_future_expiry is not None:
+            factory.subscription_status = "active"
+            factory.payment_status = "paid"
+        elif trial_end is not None and trial_end >= now:
+            factory.subscription_status = "trial_active"
+            factory.payment_status = "payment_pending"
+
+    if is_trial_bypass_enabled():
+        return
+
     if factory.subscription_status == "trial_active" and trial_end is not None and trial_end < now:
         factory.subscription_status = "trial_expired"
         factory.payment_status = "payment_pending"
-    if factory.subscription_status == "active" and subscription_end is not None and subscription_end < now:
+    if factory.subscription_status == "active" and paid_future_expiry is None and (subscription_end is not None or plan_expires_at is not None):
         factory.subscription_status = "expired"
         factory.payment_status = "payment_pending"
 
 
 def factory_for_user(db: Session, current_user: User) -> Factory:
-    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
     sync_subscription(factory)
@@ -263,21 +326,37 @@ def razorpay_client():
     return key_id, razorpay.Client(auth=(key_id, key_secret))
 
 
-def status_payload(factory: Factory, current_user: User) -> BillingStatusResponse:
+def status_payload(factory: Factory, current_user: User, res: Optional[dict] = None) -> BillingStatusResponse:
+    if res is None:
+        res = get_effective_subscription(object_session(factory), factory.id) if object_session(factory) else None
+    if res is None:
+        from auth import resolve_factory_subscription
+        res = resolve_factory_subscription(factory)
     bypass_enabled = is_trial_bypass_enabled()
-    status_value = "trial_active" if bypass_enabled else factory.subscription_status or "trial_active"
+    
+    is_access_allowed = bypass_enabled or res["access_allowed"]
+    
     return BillingStatusResponse(
-        subscription_status=status_value,
+        subscription_status=res["subscription_status"] or "trial_active",
         trial_start_date=factory.trial_start_date,
-        trial_end_date=factory.trial_end_date,
-        trial_days_remaining=remaining_trial_days(factory),
-        is_access_allowed=bypass_enabled or has_active_access(factory),
+        trial_end_date=res["trial_end_date"],
+        trial_days_remaining=res["days_left"] if res["effective_status"] == "trial_active" else remaining_trial_days(factory),
+        is_access_allowed=is_access_allowed,
+        access_allowed=is_access_allowed,
         is_owner=(current_user.role == "Owner"),
-        active_plan=factory.active_plan,
-        billing_cycle=factory.billing_cycle,
+        active_plan=res["active_plan"] or res["plan_name"],
+        plan_name=res["plan_name"],
+        plan_expires_at=res["plan_expires_at"],
+        billing_cycle=res["billing_cycle"],
         subscription_start_date=factory.subscription_start_date,
-        subscription_end_date=factory.subscription_end_date,
-        payment_status=factory.payment_status,
+        subscription_end_date=res["subscription_end_date"],
+        payment_status=res["payment_status"],
+        days_left=res["days_left"],
+        server_time=res["server_time"],
+        is_manual_override=res["is_manual_override"],
+        effective_plan=res["effective_plan"],
+        effective_status=res["effective_status"],
+        effective_expires_at=res["effective_expires_at"],
     )
 
 
@@ -285,12 +364,23 @@ def activate_factory_subscription(db: Session, factory: Factory, plan_code: str,
     now = datetime.now(timezone.utc)
     duration = timedelta(days=365 if billing_cycle == "yearly" else 30)
     amount = amount_for(plan_code, billing_cycle)
+    existing_end = factory.subscription_end_date or getattr(factory, "subscription_end", None) or factory.plan_expires_at
+    if existing_end is not None and existing_end.tzinfo is None:
+        existing_end = existing_end.replace(tzinfo=timezone.utc)
+    cycle_start = existing_end if existing_end is not None and existing_end > now else now
+    cycle_end = cycle_start + duration
+
     factory.subscription_status = "active"
     factory.active_plan = plan_code
+    factory.plan_name = plan_code
     factory.billing_cycle = billing_cycle
-    factory.subscription_start_date = now
-    factory.subscription_end_date = now + duration
+    factory.subscription_start_date = factory.subscription_start_date or cycle_start
+    factory.subscription_end_date = cycle_end
+    factory.subscription_start = cycle_start
+    factory.subscription_end = cycle_end
+    factory.plan_expires_at = cycle_end
     factory.payment_status = "paid"
+    factory.is_active = True
     if provider_payment_id:
         factory.razorpay_subscription_id = provider_payment_id
     db.add(
@@ -303,8 +393,8 @@ def activate_factory_subscription(db: Session, factory: Factory, plan_code: str,
             payment_status="paid",
             provider="razorpay" if provider_payment_id else "manual",
             provider_payment_id=provider_payment_id,
-            subscription_start_date=factory.subscription_start_date,
-            subscription_end_date=factory.subscription_end_date,
+            subscription_start_date=cycle_start,
+            subscription_end_date=cycle_end,
         )
     )
 
@@ -320,11 +410,12 @@ def custom_plan_enquiry(
     current_user: Optional[User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    full_phone_number, _ = normalize_phone_number(payload.phone, payload.country_code)
     enquiry = CustomPlanEnquiry(
         factory_id=current_user.factory_id if current_user and current_user.factory_id > 0 else None,
         owner_name=payload.owner_name,
         factory_name=payload.factory_name,
-        phone=payload.phone,
+        phone=full_phone_number,
         email=str(payload.email),
         number_of_machines=payload.number_of_machines,
         requirement_details=payload.requirement_details,
@@ -341,11 +432,12 @@ def demo_booking_request(
     current_user: Optional[User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    full_phone_number, _ = normalize_phone_number(payload.phone, payload.country_code)
     booking = DemoBookingRequest(
         factory_id=current_user.factory_id if current_user and current_user.factory_id > 0 else None,
         owner_name=payload.owner_name,
         factory_name=payload.factory_name,
-        phone=payload.phone,
+        phone=full_phone_number,
         email=str(payload.email),
         preferred_plan=payload.preferred_plan,
         message=payload.message,
@@ -382,11 +474,31 @@ def start_free_trial(
 
 @router.get("/status", response_model=BillingStatusResponse)
 def billing_status(
+    response: Response,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    factory = factory_for_user(db, current_user)
-    return status_payload(factory, current_user)
+    set_no_store_headers(response)
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
+    if factory is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
+    res = get_effective_subscription(db, current_user.factory_id)
+    return status_payload(factory, current_user, res)
+
+
+@router.get("/history", response_model=list[SubscriptionPaymentResponse])
+def billing_history(
+    response: Response,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    set_no_store_headers(response)
+    return (
+        db.query(SubscriptionPayment)
+        .filter(SubscriptionPayment.factory_id == current_user.factory_id)
+        .order_by(SubscriptionPayment.subscription_start_date.desc(), SubscriptionPayment.id.desc())
+        .all()
+    )
 
 
 @router.post("/create-order", response_model=CreateOrderResponse)

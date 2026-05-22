@@ -10,10 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # ---------------------------------------------------------------------------
 
 class OTPRequest(BaseModel):
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=5, max_length=50)
 
 
 class OTPVerifyRequest(BaseModel):
+    country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=5, max_length=50)
     otp: str = Field(..., min_length=4, max_length=10)
     password: str = Field(..., min_length=4, max_length=255)
@@ -343,6 +345,8 @@ class PolybagStockResponse(BaseModel):
 
 class WorkerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    country_code: Optional[str] = Field(default=None, max_length=8)
+    phone: Optional[str] = Field(default=None, max_length=50)
     daily_wages: Decimal = Field(..., ge=0)
     duty_hours: float = Field(..., gt=0)
 
@@ -477,8 +481,27 @@ class DailySaleResponse(BaseModel):
 
 
 class UserSubscriptionResponse(BaseModel):
+    active_plan: Optional[str] = None
     plan_name: str
     plan_expires_at: Optional[datetime] = None
+    trial_end_date: Optional[datetime] = None
+    subscription_end_date: Optional[datetime] = None
     days_left: int
     last_login: Optional[datetime] = None
     server_time: datetime
+    subscription_status: Optional[str] = None
+    billing_cycle: Optional[str] = None
+    payment_status: Optional[str] = None
+    is_manual_override: bool = False
+    is_trial: bool = False
+    access_allowed: bool = False
+    
+    # Temporary debug fields
+    raw_active_plan: Optional[str] = None
+    raw_plan_name: Optional[str] = None
+    raw_subscription_end_date: Optional[datetime] = None
+    raw_plan_expires_at: Optional[datetime] = None
+    raw_trial_end_date: Optional[datetime] = None
+    effective_plan: Optional[str] = None
+    effective_status: Optional[str] = None
+    effective_expires_at: Optional[datetime] = None
