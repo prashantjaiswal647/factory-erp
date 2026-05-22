@@ -1,10 +1,34 @@
 import { Headphones, LockKeyhole, WalletCards } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { getUserSubscription } from "../lib/api";
 
 export default function SubscriptionExpiredPage() {
   const { user } = useAuth();
+  const [accessAllowed, setAccessAllowed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function verifyAccess() {
+      try {
+        const data = await getUserSubscription(Date.now());
+        if (active) setAccessAllowed(data.access_allowed === true);
+      } catch {
+        if (active) setAccessAllowed(false);
+      }
+    }
+    void verifyAccess();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (accessAllowed) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <div className="mx-auto max-w-3xl rounded-2xl border border-[#E5E7EB] bg-white p-8 shadow-sm">

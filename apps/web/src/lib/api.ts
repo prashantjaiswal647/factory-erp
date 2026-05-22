@@ -184,12 +184,21 @@ export type BillingStatus = {
   trial_end_date?: string | null;
   trial_days_remaining: number;
   is_access_allowed: boolean;
+  access_allowed?: boolean;
   is_owner: boolean;
   active_plan?: string | null;
+  plan_name?: string | null;
+  plan_expires_at?: string | null;
   billing_cycle?: "monthly" | "yearly" | null;
   subscription_start_date?: string | null;
   subscription_end_date?: string | null;
   payment_status?: string | null;
+  days_left?: number;
+  server_time?: string;
+  is_manual_override?: boolean;
+  effective_plan?: string | null;
+  effective_status?: string | null;
+  effective_expires_at?: string | null;
 };
 
 export type PricingPlan = {
@@ -1003,6 +1012,8 @@ export function saveTelegramIntegration(payload: { telegram_bot_token: string })
 export type UserSubscriptionResponse = {
   plan_name: string;
   plan_expires_at: string | null;
+  trial_end_date?: string | null;
+  subscription_end_date?: string | null;
   days_left: number;
   last_login: string | null;
   server_time: string;
@@ -1010,11 +1021,14 @@ export type UserSubscriptionResponse = {
   billing_cycle?: string | null;
   payment_status?: string | null;
   is_manual_override?: boolean;
+  access_allowed?: boolean;
   raw_active_plan?: string | null;
   raw_plan_name?: string | null;
   raw_subscription_end_date?: string | null;
+  raw_plan_expires_at?: string | null;
   raw_trial_end_date?: string | null;
   effective_plan?: string | null;
+  effective_status?: string | null;
   effective_expires_at?: string | null;
 };
 

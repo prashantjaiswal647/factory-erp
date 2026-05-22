@@ -75,7 +75,8 @@ export default function Layout() {
   const planExpiresAt = subData?.effective_expires_at || subData?.plan_expires_at;
   const daysLeft = subData?.days_left;
   const lastLogin = subData?.last_login;
-  const subscriptionStatus = subData?.subscription_status;
+  const subscriptionStatus = subData?.effective_status || subData?.subscription_status;
+  const accessAllowed = subData?.access_allowed === true;
 
   async function handleRefresh() {
     setSubData(null);
@@ -103,7 +104,7 @@ export default function Layout() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "U";
-  const isTrialActive = subscriptionStatus === "trial_active" || subscriptionStatus === "trial";
+  const isTrialActive = accessAllowed && (subscriptionStatus === "trial_active" || subscriptionStatus === "trial");
   const trialEndLabel = subData?.raw_trial_end_date ? new Date(subData.raw_trial_end_date).toLocaleDateString("en-IN") : "";
   const subscriptionEndDate = planExpiresAt ? new Date(planExpiresAt) : null;
   const expiresSoon = Boolean(
@@ -302,7 +303,7 @@ export default function Layout() {
         </header>
 
         <main className="px-4 py-6 lg:px-8">
-          {daysLeft !== undefined && daysLeft <= 10 && (subscriptionStatus === "active" || subscriptionStatus === "trial_active" || subscriptionStatus === "trial") && !isBannerDismissed ? (
+          {accessAllowed && daysLeft !== undefined && daysLeft <= 10 && !isBannerDismissed ? (
             <div
               className={`relative mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-semibold shadow-md transition-all duration-300 ${
                 daysLeft <= 3

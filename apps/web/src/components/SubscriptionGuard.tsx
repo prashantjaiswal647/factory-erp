@@ -44,9 +44,9 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
     return <LoadingState label="Checking subscription..." />;
   }
 
-  const hasAllowedStatus = status?.subscription_status === "active" || (status?.subscription_status === "trial_active" && status?.active_plan === "basic");
+  const accessAllowed = status?.access_allowed ?? status?.is_access_allowed;
 
-  if (!status || (status.is_access_allowed && hasAllowedStatus)) {
+  if (!status || accessAllowed === true) {
     return <>{children}</>;
   }
 
