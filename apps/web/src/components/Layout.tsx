@@ -56,7 +56,7 @@ export default function Layout() {
     if (!user) return;
     async function fetchSub() {
       try {
-        const data = await getUserSubscription();
+        const data = await getUserSubscription(Date.now());
         if (active) {
           setSubData(data);
         }
@@ -77,10 +77,17 @@ export default function Layout() {
   const lastLogin = subData?.last_login;
   const subscriptionStatus = subData?.subscription_status;
 
-  function handleRefresh() {
+  async function handleRefresh() {
+    setSubData(null);
     triggerDataRefresh();
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("munshi:refresh-data"));
+    }
+    try {
+      const data = await getUserSubscription(Date.now());
+      setSubData(data);
+    } catch (err) {
+      console.error("Error refreshing subscription:", err);
     }
   }
 
@@ -225,7 +232,14 @@ export default function Layout() {
               <RotateCw className="h-4 w-4 transition-transform duration-500 group-hover:rotate-180" />
             </button>
 
-            {isTrialActive ? (
+            {subData?.is_manual_override ? (
+              <span
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#6D28D9]/30 bg-[#F3E8FF] px-4 text-sm font-bold text-[#6D28D9] shadow-sm animate-pulse"
+                title="Manual Premium Access Active (Owner Approved)"
+              >
+                Owner Approved Access
+              </span>
+            ) : isTrialActive ? (
               <button
                 className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 text-sm font-semibold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/20"
                 type="button"

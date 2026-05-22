@@ -1009,9 +1009,11 @@ export type UserSubscriptionResponse = {
   subscription_status?: string | null;
   billing_cycle?: string | null;
   payment_status?: string | null;
+  is_manual_override?: boolean;
 };
 
-export async function getUserSubscription() {
-  const response = await api.get<UserSubscriptionResponse>("/api/v1/users/me/subscription");
+export async function getUserSubscription(t?: number) {
+  const url = t ? `/api/v1/users/me/subscription?t=${t}` : "/api/v1/users/me/subscription";
+  const response = await api.get<UserSubscriptionResponse>(url);
   return response.data;
 }
