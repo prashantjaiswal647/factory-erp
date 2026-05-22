@@ -1,9 +1,12 @@
-import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, PlugZap, ReceiptText, Search, Settings2, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
-import { useState } from "react";
+import { Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, Gauge, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
+import { useState, useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
+import { useDataRefresh } from "../context/DataRefreshContext";
+import { getUserSubscription } from "../lib/api";
+import type { UserSubscriptionResponse } from "../lib/api";
 
 type NavigationItem = {
   label: string;
@@ -37,6 +40,36 @@ export default function Layout() {
   const { logout, user } = useAuth();
   const navigate = useNavigate();
 
+  // Dynamic subscription tracking
+  const [subData, setSubData] = useState<UserSubscriptionResponse | null>(null);
+  const [isBannerDismissed, setIsBannerDismissed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("dismiss_banner") === "true";
+    }
+    return false;
+  });
+
+  const { refreshVersion, triggerDataRefresh } = useDataRefresh();
+
+  useEffect(() => {
+    let active = true;
+    if (!user) return;
+    async function fetchSub() {
+      try {
+        const data = await getUserSubscription();
+        if (active) {
+          setSubData(data);
+        }
+      } catch (err) {
+        console.error("Error fetching subscription:", err);
+      }
+    }
+    fetchSub();
+    return () => {
+      active = false;
+    };
+  }, [refreshVersion, user]);
+
   const visibleNavigation = navigation.filter((item) => user && item.roles.includes(user.role));
   const displayName = user?.full_name || user?.username || "User";
   const initials = displayName
@@ -56,6 +89,7 @@ export default function Layout() {
   );
 
   function handleSignOut() {
+    sessionStorage.removeItem("dismiss_banner");
     logout();
     setIsProfileMenuOpen(false);
     navigate("/login", { replace: true });
@@ -167,6 +201,16 @@ export default function Layout() {
           </div>
 
           <div className="z-20 flex w-full items-center justify-between gap-3 md:w-auto md:shrink-0 md:justify-end">
+            <button
+              onClick={triggerDataRefresh}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#E5E7EB] bg-white text-[#4B5563] shadow-sm transition-all duration-300 hover:border-[#6D28D9]/30 hover:bg-[#FFF7ED] hover:text-[#6D28D9] active:scale-95 focus:outline-none focus:ring-2 focus:ring-[#F3E8FF] group"
+              type="button"
+              title="Refresh Data"
+              aria-label="Refresh Data"
+            >
+              <RotateCw className="h-4 w-4 transition-transform duration-500 group-hover:rotate-180" />
+            </button>
+
             {isTrialActive ? (
               <button
                 className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 text-sm font-semibold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/20"
@@ -226,29 +270,64 @@ export default function Layout() {
         </header>
 
         <main className="px-4 py-6 lg:px-8">
-          {isTrialActive ? (
-            <BillingBanner tone="trial" message={`Free trial active. Trial ends on ${trialEndLabel || "your trial end date"}.`} />
-          ) : null}
-          {expiresSoon ? (
-            <BillingBanner tone="warning" message="Your plan expires soon. Renew to avoid interruption." />
+          {subData && subData.days_left <= 10 && !isBannerDismissed ? (
+            <div
+              className={`relative mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-semibold shadow-md transition-all duration-300 ${
+                subData.days_left <= 3
+                  ? "border-red-700 bg-red-600 text-white"
+                  : "border-yellow-600 bg-yellow-500 text-black"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 shrink-0 rounded-full bg-current animate-ping" />
+                <span>
+                  {subData.days_left <= 3
+                    ? `Urgent: Your ${subData.plan_name || "plan"} ends in ${subData.days_left} ${subData.days_left === 1 ? 'day' : 'days'} (on ${
+                        subData.plan_expires_at
+                          ? new Date(subData.plan_expires_at).toLocaleDateString("en-IN")
+                          : "expiry date"
+                      }). Upgrade now to avoid interruption!`
+                    : `Warning: Your ${subData.plan_name || "plan"} expires in ${subData.days_left} days (on ${
+                        subData.plan_expires_at
+                          ? new Date(subData.plan_expires_at).toLocaleDateString("en-IN")
+                          : "expiry date"
+                      }). Renew soon to keep your dashboard active.`}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 self-end sm:self-auto">
+                <button
+                  onClick={() => navigate("/billing")}
+                  className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-300 shadow-sm hover:scale-105 active:scale-95 ${
+                    subData.days_left <= 3
+                      ? "bg-white text-red-700 hover:bg-red-50 focus:ring-white"
+                      : "bg-black text-yellow-500 hover:bg-neutral-900 focus:ring-black"
+                  }`}
+                  type="button"
+                >
+                  Upgrade Plan
+                </button>
+                <button
+                  onClick={() => {
+                    sessionStorage.setItem("dismiss_banner", "true");
+                    setIsBannerDismissed(true);
+                  }}
+                  className={`grid h-8 w-8 place-items-center rounded-full transition-colors ${
+                    subData.days_left <= 3
+                      ? "hover:bg-red-700/50 text-white/80 hover:text-white"
+                      : "hover:bg-yellow-600/50 text-black/80 hover:text-black"
+                  }`}
+                  type="button"
+                  aria-label="Dismiss banner"
+                  title="Dismiss banner"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
           ) : null}
           <Outlet />
         </main>
       </div>
-    </div>
-  );
-}
-
-function BillingBanner({ message, tone }: { message: string; tone: "trial" | "warning" }) {
-  return (
-    <div
-      className={`mb-5 rounded-xl border px-4 py-3 text-sm font-semibold ${
-        tone === "trial"
-          ? "border-[#6D28D9]/25 bg-[#F3E8FF] text-[#4C1D95]"
-          : "border-[#F59E0B]/30 bg-[#F59E0B]/10 text-[#111827]"
-      }`}
-    >
-      {message}
     </div>
   );
 }

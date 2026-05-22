@@ -474,3 +474,11 @@ class DailySaleResponse(BaseModel):
     bill_total: Decimal
     amount_paid: Decimal
     customer_total_due: Decimal
+
+
+class UserSubscriptionResponse(BaseModel):
+    plan_name: str
+    plan_expires_at: Optional[datetime] = None
+    days_left: int
+    last_login: Optional[datetime] = None
+    server_time: datetime

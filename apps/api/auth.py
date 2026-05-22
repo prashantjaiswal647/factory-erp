@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - optional SaaS dependency
 
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "480")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "43200") # 30 days
 OTP_EXPIRE_MINUTES = int(os.getenv("OTP_EXPIRE_MINUTES") or "10")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -32,6 +32,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 public_router = APIRouter(prefix="/auth", tags=["auth"])
+v1_router = APIRouter(prefix="/api/v1", tags=["v1"])
 
 
 def is_trial_bypass_enabled() -> bool:
@@ -205,6 +206,7 @@ def trial_days_remaining(factory: Optional[Factory]) -> int:
 
 
 def build_login_response(user: User, db: Session) -> LoginResponse:
+    user.last_login_at = datetime.now(timezone.utc)
     user_uuid = ensure_user_uuid(user, db)
     ensure_factory_trial(user.factory)
     db.commit()
@@ -236,7 +238,7 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
 
 
 def is_subscription_bypass_path(path: str) -> bool:
-    return path.startswith("/api/auth") or path.startswith("/api/billing")
+    return path.startswith("/api/auth") or path.startswith("/api/billing") or path.startswith("/api/v1/users/me/subscription")
 
 
 def get_current_user(
@@ -264,8 +266,10 @@ def get_current_user(
     if user.factory is not None:
         db.commit()
         db.refresh(user)
-        has_subscription_access = user.factory.subscription_status == "active" or (
-            user.factory.subscription_status == "trial_active" and user.factory.active_plan == "basic"
+        has_subscription_access = (
+            user.factory.subscription_status == "active"
+            or (user.factory.subscription_status == "trial_active" and user.factory.active_plan == "basic")
+            or getattr(user.factory, "subscription_override", False) is True
         )
         if not has_subscription_access and not is_subscription_bypass_path(request.url.path):
             if not is_trial_bypass_enabled():
@@ -651,3 +655,45 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = D
     db.commit()
     db.refresh(user)
     return build_login_response(user, db)
+
+
+from schemas import UserSubscriptionResponse
+
+@v1_router.get("/users/me/subscription", response_model=UserSubscriptionResponse)
+def get_user_subscription(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    factory = current_user.factory
+    
+    # plan_name falls back to active_plan or "Free/Trial"
+    plan_name = getattr(factory, "plan_name", None) or getattr(factory, "active_plan", None) or "Free/Trial"
+    
+    # plan_expires_at falls back to subscription_end_date or trial_end_date or None
+    plan_expires_at = getattr(factory, "plan_expires_at", None) or getattr(factory, "subscription_end_date", None) or getattr(factory, "trial_end_date", None)
+    
+    now = datetime.now(timezone.utc)
+    
+    # Calculate ceiling-rounded days remaining
+    days_left = 0
+    if plan_expires_at:
+        # ensure timezone aware
+        if plan_expires_at.tzinfo is None:
+            plan_expires_at = plan_expires_at.replace(tzinfo=timezone.utc)
+        
+        if plan_expires_at > now:
+            delta = plan_expires_at - now
+            total_seconds = int(delta.total_seconds())
+            days_left = (total_seconds + 86399) // 86400
+            
+    # last_login retrieves last_login_at timestamp
+    last_login = getattr(current_user, "last_login_at", None)
+    
+    return UserSubscriptionResponse(
+        plan_name=plan_name,
+        plan_expires_at=plan_expires_at,
+        days_left=days_left,
+        last_login=last_login,
+        server_time=now
+    )
+

@@ -60,6 +60,9 @@ class Factory(Base):
     telegram_token = Column(String(500), nullable=True)
     telegram_chat_id = Column(String(255), nullable=True)
     telegram_bot_username = Column(String(255), nullable=True)
+    subscription_override = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    plan_name = Column(String(50), nullable=True)
+    plan_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
@@ -128,6 +131,7 @@ class User(Base):
     role = Column(String(50), nullable=False, default="Operator", server_default="Operator", index=True)
     is_verified = Column(Boolean, nullable=False, default=False, server_default="false")
     telegram_id = Column(String(100), nullable=True, unique=True, index=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     factory = relationship("Factory", back_populates="users", foreign_keys=[factory_id])
     owned_factory = relationship("Factory", back_populates="owner", foreign_keys="Factory.owner_phone_number")

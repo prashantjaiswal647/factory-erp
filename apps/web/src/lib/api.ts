@@ -999,3 +999,16 @@ export function getTelegramIntegration() {
 export function saveTelegramIntegration(payload: { telegram_bot_token: string }) {
   return api.post<TelegramIntegration>("/api/integrations/telegram", payload);
 }
+
+export type UserSubscriptionResponse = {
+  plan_name: string;
+  plan_expires_at: string | null;
+  days_left: number;
+  last_login: string | null;
+  server_time: string;
+};
+
+export async function getUserSubscription() {
+  const response = await api.get<UserSubscriptionResponse>("/api/v1/users/me/subscription");
+  return response.data;
+}

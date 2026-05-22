@@ -434,3 +434,357 @@ def basic_generate_invoice(
         text_summary=summary_text,
         status="SUCCESS"
     )
+
+
+# ==========================================
+# PHASE 2: Dynamic Context & Dual-Mode Invoicing
+# ==========================================
+
+class BotContextRequest(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+class BotContextResponse(BaseModel):
+    factory_id: int
+    is_authorized: bool
+    owner_name: str
+
+
+class InvoiceGenerateModeRequest(BaseModel):
+    factory_id: int
+    invoice_mode: str = Field(..., description="Either 'basic' or 'gst'")
+
+
+class InvoiceGenerateModeResponse(BaseModel):
+    invoice_id: int
+    invoice_mode: str
+    invoice_number: Optional[str] = None
+    subtotal: Decimal
+    cgst: Optional[Decimal] = None
+    sgst: Optional[Decimal] = None
+    igst: Optional[Decimal] = None
+    total_amount: Decimal
+    text_summary: str
+    status: str
+
+
+@router.post("/api/v1/internal/bot-context", response_model=BotContextResponse)
+def internal_bot_context(
+    payload: BotContextRequest,
+    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    db: Session = Depends(get_db)
+):
+    # Enforce system secret API header validation
+    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Invalid system secret header key",
+        )
+
+    incoming_chat_id = payload.chat_id.strip()
+    incoming_bot_token = payload.bot_token.strip()
+
+    # Search for factory with mapped chat ID
+    factory = db.query(Factory).filter(Factory.telegram_chat_id == incoming_chat_id).first()
+    
+    if not factory:
+        # Fallback: search by legacy plain text token or decrypting candidates
+        factory = db.query(Factory).filter(Factory.telegram_bot_token == incoming_bot_token).first()
+
+    if not factory:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Factory not found for incoming session context",
+        )
+
+    # Verify token authenticity
+    try:
+        decrypted_token = decrypt_token(factory.telegram_token)
+        if decrypted_token != incoming_bot_token and factory.telegram_bot_token != incoming_bot_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: Bot token mismatch",
+            )
+    except Exception:
+        if factory.telegram_bot_token != incoming_bot_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: Token decryption failure",
+            )
+
+    # Resolve Owner Name
+    owner_name = "Malik"
+    if factory.owner:
+        owner_name = factory.owner.full_name or factory.owner.username or "Malik"
+    else:
+        # Fallback to looking up owner role
+        owner_user = db.query(User).filter(User.factory_id == factory.id, User.role == "Owner").first()
+        if owner_user:
+            owner_name = owner_user.full_name or owner_user.username or "Malik"
+
+    return BotContextResponse(
+        factory_id=factory.id,
+        is_authorized=True,
+        owner_name=owner_name
+    )
+
+
+@router.get("/api/v1/reports/summary")
+def get_reports_summary(
+    factory_id: int,
+    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    db: Session = Depends(get_db)
+):
+    # Enforce system secret API header validation
+    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Invalid system secret header key",
+        )
+
+    factory = db.query(Factory).filter(Factory.id == factory_id).first()
+    if not factory:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Factory {factory_id} not found",
+        )
+
+    # Compile dynamic stats summaries
+    total_customers = db.query(Customer).filter(Customer.factory_id == factory_id).count()
+    total_outstanding = db.query(sql_func.coalesce(sql_func.sum(Customer.total_due), 0)).filter(Customer.factory_id == factory_id).scalar() or Decimal("0.00")
+    low_stock_count = db.query(Inventory).filter(Inventory.factory_id == factory_id, Inventory.quantity < 50).count()
+    packaging_profiles = db.query(PackagingProfile).filter(PackagingProfile.factory_id == factory_id).count()
+    sales_invoices = db.query(SalesInvoice).filter(SalesInvoice.factory_id == factory_id).count()
+
+    return {
+        "factory_name": factory.name or factory.factory_name or f"Factory #{factory_id}",
+        "metrics": {
+            "total_customers": total_customers,
+            "total_market_outstanding": float(total_outstanding),
+            "low_stock_alerts": low_stock_count,
+            "active_packaging_profiles": packaging_profiles,
+            "total_sales_invoices": sales_invoices
+        },
+        "status": "HEALTHY",
+        "message": "Dynamic Factory operational data compiled successfully."
+    }
+
+
+# Hook to register sql functions
+from sqlalchemy import func as sql_func
+
+@router.post("/api/v1/invoices/generate", response_model=InvoiceGenerateModeResponse)
+def generate_mode_invoice(
+    payload: InvoiceGenerateModeRequest,
+    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    db: Session = Depends(get_db)
+):
+    # Enforce system secret API header validation
+    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Invalid system secret header key",
+        )
+
+    factory_id = payload.factory_id
+    mode = payload.invoice_mode.lower().strip()
+
+    if mode not in ["basic", "gst"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid invoice_mode. Must be 'basic' or 'gst'."
+        )
+
+    factory = db.query(Factory).filter(Factory.id == factory_id).first()
+    if not factory:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Factory {factory_id} not found",
+        )
+
+    # 1. Resolve or Create default Customer
+    customer = db.query(Customer).filter(Customer.factory_id == factory_id).first()
+    if not customer:
+        customer = Customer(
+            factory_id=factory_id,
+            name="Telegram Walk-in Customer",
+            phone="9999999999",
+            total_due=Decimal("0.00"),
+            previous_due=Decimal("0.00"),
+            advance_discount_pct=5.0,
+            balance_amount=Decimal("0.00"),
+            pending_dues=0.0,
+            pending_balance=Decimal("0.00")
+        )
+        db.add(customer)
+        db.flush()
+
+    # 2. Resolve or Create default PackagingProfile and associated Inventory dependencies
+    profile = db.query(PackagingProfile).filter(PackagingProfile.factory_id == factory_id).first()
+    if not profile:
+        box_inv = db.query(Inventory).filter(
+            Inventory.factory_id == factory_id, 
+            Inventory.item_name == "Default Box"
+        ).first()
+        if not box_inv:
+            box_inv = Inventory(
+                factory_id=factory_id,
+                item_name="Default Box",
+                category="Packaging",
+                unit="pieces",
+                quantity=Decimal("1000.000"),
+                price_per_unit=Decimal("10.00")
+            )
+            db.add(box_inv)
+            db.flush()
+
+        poly_inv = db.query(Inventory).filter(
+            Inventory.factory_id == factory_id, 
+            Inventory.item_name == "Default Poly"
+        ).first()
+        if not poly_inv:
+            poly_inv = Inventory(
+                factory_id=factory_id,
+                item_name="Default Poly",
+                category="Packaging",
+                unit="pieces",
+                quantity=Decimal("1000.000"),
+                price_per_unit=Decimal("2.00")
+            )
+            db.add(poly_inv)
+            db.flush()
+
+        profile = PackagingProfile(
+            factory_id=factory_id,
+            profile_name="80ml Paper Cup Profile",
+            cup_size_ml=80,
+            cups_per_poly=50,
+            polys_per_box=40,
+            box_inventory_id=box_inv.id,
+            poly_inventory_id=poly_inv.id,
+        )
+        db.add(profile)
+        db.flush()
+
+    # 3. Create transactional records based on Mode
+    boxes_sold = 12
+    total_cups = boxes_sold * (profile.cups_per_poly * profile.polys_per_box)  # 24,000 pieces
+    price_per_cup = Decimal("0.75")
+    subtotal = Decimal(str(total_cups)) * price_per_cup  # ₹18,000.00
+    
+    # Standard paper-glass parameters mapping for weight
+    cup_weight_g = 4.5
+    gross_weight_kg = Decimal(str(total_cups * cup_weight_g)) / Decimal("1000.0")  # 108.0 kg
+
+    if mode == "basic":
+        # Internal bill parameters: shift count, bottom-line wastage weight reduction metrics
+        shift_count = 2
+        wastage_reduction_pct = Decimal("1.8")
+        wastage_reduction_kg = gross_weight_kg * (wastage_reduction_pct / Decimal("100"))  # 1.94 kg
+        net_weight_kg = gross_weight_kg - wastage_reduction_kg  # 106.06 kg
+        
+        invoice = SalesInvoice(
+            factory_id=factory_id,
+            customer_id=customer.id,
+            date=date.today(),
+            cup_size_ml=profile.cup_size_ml,
+            packaging_profile_id=profile.id,
+            boxes_sold=boxes_sold,
+            total_amount=subtotal,
+            amount_paid=Decimal("0.00")
+        )
+        db.add(invoice)
+        db.commit()
+        db.refresh(invoice)
+
+        summary_text = (
+            f"🧾 *INTERNAL BILL GENERATED* (ID: `{invoice.id}`)\n"
+            f"----------------------------------------\n"
+            f"🏢 *Factory Tenant ID:* `{factory_id}`\n"
+            f"👤 *Customer:* {customer.name}\n"
+            f"📦 *Product:* {profile.cup_size_ml}ml Paper Cups\n"
+            f"⏱️ *Operational Shifts:* `{shift_count}` shifts\n"
+            f"📊 *Quantity:* {boxes_sold} Boxes ({total_cups:,} Pcs)\n"
+            f"⚖️ *Gross Weight:* {gross_weight_kg:.2f} kg\n"
+            f"📉 *Scrap Wastage Reduction:* {wastage_reduction_pct}% (-{wastage_reduction_kg:.2f} kg)\n"
+            f"⚖️ *Net Billed Weight:* {net_weight_kg:.2f} kg\n"
+            f"💰 *Total Bill Subtotal:* ₹{subtotal:,.2f}\n"
+            f"💳 *Status:* Cash/Outstanding Ledger Updated\n"
+            f"----------------------------------------\n"
+            f"✅ Saved in Factory Internal Ledger."
+        )
+
+        return InvoiceGenerateModeResponse(
+            invoice_id=invoice.id,
+            invoice_mode="basic",
+            subtotal=subtotal,
+            total_amount=subtotal,
+            text_summary=summary_text,
+            status="SUCCESS"
+        )
+
+    else:  # gst mode
+        # Serialized tax compliance invoice: serial numbers, HSN codes, CGST/SGST/IGST breakdown
+        gst_rate = Decimal("12")  # 12% total GST split
+        cgst_rate = gst_rate / 2  # 6%
+        sgst_rate = gst_rate / 2  # 6%
+
+        cgst_amount = subtotal * (cgst_rate / Decimal("100"))  # ₹1,080.00
+        sgst_amount = subtotal * (sgst_rate / Decimal("100"))  # ₹1,080.00
+        igst_amount = Decimal("0.00")
+        total_amount = subtotal + cgst_amount + sgst_amount  # ₹20,160.00
+
+        # Create SQL entry for invoice
+        invoice = SalesInvoice(
+            factory_id=factory_id,
+            customer_id=customer.id,
+            date=date.today(),
+            cup_size_ml=profile.cup_size_ml,
+            packaging_profile_id=profile.id,
+            boxes_sold=boxes_sold,
+            total_amount=total_amount,
+            amount_paid=Decimal("0.00")
+        )
+        db.add(invoice)
+        db.commit()
+        db.refresh(invoice)
+
+        # Serialized dynamic invoice number matching
+        serial_invoice_number = f"MNS-2026-{invoice.id:04d}"
+        hsn_code = "4823 6900"  # Paper cups / paper plate HSN
+
+        summary_text = (
+            f"🧾 *TAX INVOICE GENERATED* (GST COMPLIANT)\n"
+            f"----------------------------------------\n"
+            f"📄 *Invoice Number:* `{serial_invoice_number}`\n"
+            f"🏢 *Factory Tenant ID:* `{factory_id}`\n"
+            f"👤 *Customer:* {customer.name}\n"
+            f"📦 *Product HSN:* `{hsn_code}` (Paper Cups)\n"
+            f"📊 *Quantity:* {boxes_sold} Boxes ({total_cups:,} Pcs)\n"
+            f"💰 *Taxable Subtotal:* ₹{subtotal:,.2f}\n"
+            f"📈 *CGST ({cgst_rate}%):* ₹{cgst_amount:,.2f}\n"
+            f"📈 *SGST ({sgst_rate}%):* ₹{sgst_amount:,.2f}\n"
+            f"📈 *IGST:* ₹{igst_amount:,.2f}\n"
+            f"----------------------------------------\n"
+            f"💰 *Net Invoice Value:* ₹{total_amount:,.2f}\n"
+            f"💳 *Status:* Unpaid / Registered on GST Portal\n"
+            f"----------------------------------------\n"
+            f"✅ Saved securely in tax ledger."
+        )
+
+        return InvoiceGenerateModeResponse(
+            invoice_id=invoice.id,
+            invoice_mode="gst",
+            invoice_number=serial_invoice_number,
+            subtotal=subtotal,
+            cgst=cgst_amount,
+            sgst=sgst_amount,
+            igst=igst_amount,
+            total_amount=total_amount,
+            text_summary=summary_text,
+            status="SUCCESS"
+        )

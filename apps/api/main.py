@@ -30,6 +30,7 @@ from auth import (
     public_router as public_auth_router,
     require_owner,
     router as auth_router,
+    v1_router,
 )
 from db import Base, engine, get_db
 from models import (
@@ -124,6 +125,7 @@ app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"]
 app.include_router(payments.router)
 app.include_router(auth_router)
 app.include_router(public_auth_router)
+app.include_router(v1_router)
 app.include_router(dashboard.router)
 app.include_router(attendance.router)
 app.include_router(billing.router)
@@ -1004,6 +1006,9 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_token VARCHAR(500)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS telegram_bot_username VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_override BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS plan_name VARCHAR(50)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE",
         (
             "CREATE TABLE IF NOT EXISTS custom_plan_enquiries ("
             "id SERIAL PRIMARY KEY, "
@@ -1138,6 +1143,7 @@ def ensure_runtime_schema():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(50)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE",
         "UPDATE users SET email = username WHERE email IS NULL AND username LIKE '%@%'",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email) WHERE email IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_user_id ON users (user_id) WHERE user_id IS NOT NULL",

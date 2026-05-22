@@ -21,6 +21,7 @@ from models import (
     User,
     Worker,
     Payment,
+    MaterialYield,
 )
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
@@ -172,6 +173,39 @@ def create_daily_production(
                 )
             bottom_weight_per_roll = to_qty(Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag))
         bottom_used_kg = to_qty(Decimal(bottom_used_rolls) * bottom_weight_per_roll)
+
+        # Calculate total pieces produced for BOM fallback
+        total_pieces = Decimal(payload.total_boxes_made * payload.packets_per_box_limit + payload.loose_packets_made) * Decimal(payload.pieces_per_packet)
+
+        # 1. Blank Stock BOM Fallback
+        if blank_used_kg <= 0 and total_pieces > 0:
+            blank_yield = (
+                db.query(MaterialYield)
+                .filter(MaterialYield.factory_id == factory_id)
+                .filter(MaterialYield.material_type == "Blank")
+                .filter(MaterialYield.size_ml == product_size_ml)
+                .first()
+            )
+            if blank_yield and blank_yield.pieces_per_kg > 0:
+                blank_used_kg = to_qty(total_pieces / Decimal(blank_yield.pieces_per_kg))
+                if blank_stock.weight_per_bora_kg and blank_stock.weight_per_bora_kg > 0:
+                    blank_used_bori = to_qty(blank_used_kg / Decimal(blank_stock.weight_per_bora_kg))
+
+        # 2. Bottom Stock BOM Fallback
+        if bottom_used_kg <= 0 and total_pieces > 0:
+            bottom_yield = (
+                db.query(MaterialYield)
+                .filter(MaterialYield.factory_id == factory_id)
+                .filter(MaterialYield.material_type == "Bottom")
+                .filter(MaterialYield.size_ml == product_size_ml)
+                .first()
+            )
+            if bottom_yield and bottom_yield.pieces_per_kg > 0:
+                bottom_used_kg = to_qty(total_pieces / Decimal(bottom_yield.pieces_per_kg))
+                if bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
+                    bottom_weight_per_roll = Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag)
+                    if bottom_weight_per_roll > 0:
+                        bottom_used_rolls = int(bottom_used_kg / bottom_weight_per_roll)
 
         blank_after = to_qty(blank_stock.total_qty_kg) - blank_used_kg
         bottom_after = to_qty(bottom_stock.total_qty_kg) - bottom_used_kg

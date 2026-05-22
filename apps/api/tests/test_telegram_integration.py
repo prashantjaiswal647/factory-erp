@@ -9,7 +9,11 @@ from sqlalchemy.pool import StaticPool
 from db import Base
 from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice
 from telegram_crypto import encrypt_token, decrypt_token
-from routers.integrations import internal_bot_lookup, basic_generate_invoice, BotLookupRequest, InvoiceGenerateRequest
+from routers.integrations import (
+    internal_bot_lookup, basic_generate_invoice, BotLookupRequest, InvoiceGenerateRequest,
+    internal_bot_context, get_reports_summary, generate_mode_invoice,
+    BotContextRequest, InvoiceGenerateModeRequest
+)
 
 # In-memory SQLite DB for testing
 engine = create_engine(
@@ -147,4 +151,67 @@ def test_invoice_generation_creates_records_and_outputs_clean_markdown():
     assert invoice is not None
     assert invoice.total_amount == Decimal("15000.00")
     assert invoice.boxes_sold == 10
+    db.close()
+
+
+def test_bot_context_verification_returns_authorized_data():
+    db = TestingSessionLocal()
+    payload = BotContextRequest(
+        bot_token="mock-telegram-token-12345",
+        chat_id="987654321"
+    )
+    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    res = internal_bot_context(payload=payload, x_n8n_api_key=api_key, db=db)
+    
+    assert res.factory_id == 1
+    assert res.is_authorized is True
+    assert res.owner_name == "owner"
+    db.close()
+
+
+def test_reports_summary_calculates_correct_metrics():
+    db = TestingSessionLocal()
+    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    res = get_reports_summary(factory_id=1, x_n8n_api_key=api_key, db=db)
+    
+    assert res["status"] == "HEALTHY"
+    assert res["factory_name"] == "Test Telegram Factory"
+    assert "metrics" in res
+    assert res["metrics"]["total_sales_invoices"] == 0
+    db.close()
+
+
+def test_invoice_generation_basic_mode_calculates_wastage():
+    db = TestingSessionLocal()
+    payload = InvoiceGenerateModeRequest(factory_id=1, invoice_mode="basic")
+    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    res = generate_mode_invoice(payload=payload, x_n8n_api_key=api_key, db=db)
+    
+    assert res.status == "SUCCESS"
+    assert res.invoice_mode == "basic"
+    assert res.total_amount == Decimal("18000.00")
+    assert "INTERNAL BILL GENERATED" in res.text_summary
+    assert "*Operational Shifts:* `2` shifts" in res.text_summary
+    assert "*Scrap Wastage Reduction:* 1.8% (-1.94 kg)" in res.text_summary
+    assert "*Net Billed Weight:* 106.06 kg" in res.text_summary
+    db.close()
+
+
+def test_invoice_generation_gst_mode_calculates_taxes():
+    db = TestingSessionLocal()
+    payload = InvoiceGenerateModeRequest(factory_id=1, invoice_mode="gst")
+    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
+    res = generate_mode_invoice(payload=payload, x_n8n_api_key=api_key, db=db)
+    
+    assert res.status == "SUCCESS"
+    assert res.invoice_mode == "gst"
+    assert res.invoice_number == "MNS-2026-0001"
+    assert res.subtotal == Decimal("18000.00")
+    assert res.cgst == Decimal("1080.00")
+    assert res.sgst == Decimal("1080.00")
+    assert res.igst == Decimal("0.00")
+    assert res.total_amount == Decimal("20160.00")
+    assert "TAX INVOICE GENERATED" in res.text_summary
+    assert "*Product HSN:* `4823 6900` (Paper Cups)" in res.text_summary
+    assert "*CGST (6%):* ₹1,080.00" in res.text_summary
     db.close()
