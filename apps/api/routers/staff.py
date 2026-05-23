@@ -22,7 +22,7 @@ from auth import (
     verify_password,
 )
 from db import get_db
-from models import User, SuperAdminAuditLog
+from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog
 
 # Existing router prefixes
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -222,6 +222,20 @@ def delete_staff(
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
 
+    # Nullify user references in logs to prevent foreign key constraint violations upon hard-delete
+    db.query(AppUsageLog).filter(AppUsageLog.user_id == staff_user.id).update({AppUsageLog.user_id: None})
+    db.query(TokenUsageLog).filter(TokenUsageLog.user_id == staff_user.id).update({TokenUsageLog.user_id: None})
+
+    if staff_user.role == "Operator":
+        worker = (
+            db.query(Worker)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter((sql_func.lower(Worker.name) == staff_user.full_name.lower()) | (Worker.phone == staff_user.phone_number))
+            .first()
+        )
+        if worker is not None:
+            db.delete(worker)
+
     db.delete(staff_user)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -319,6 +333,20 @@ def secure_delete_staff(
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
 
+    # Nullify user references in logs to prevent foreign key constraint violations upon hard-delete
+    db.query(AppUsageLog).filter(AppUsageLog.user_id == staff_user.id).update({AppUsageLog.user_id: None})
+    db.query(TokenUsageLog).filter(TokenUsageLog.user_id == staff_user.id).update({TokenUsageLog.user_id: None})
+
+    if staff_user.role == "Operator":
+        worker = (
+            db.query(Worker)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter((sql_func.lower(Worker.name) == staff_user.full_name.lower()) | (Worker.phone == staff_user.phone_number))
+            .first()
+        )
+        if worker is not None:
+            db.delete(worker)
+
     # Soft delete / deactivation is preferred but we'll support hard deleting here to safely clear E2E test staff,
     # or deactivate. To make Playwright specs extremely robust, let's hard delete the user, keeping business records clean.
     db.delete(staff_user)
@@ -366,6 +394,29 @@ def core_create_staff(payload: SecureStaffCreateRequest, creator: User, db: Sess
 
     try:
         db.add(staff_user)
+        db.flush()
+
+        # Link worker creation to PostgreSQL workers table
+        if payload.role == "worker":
+            worker = (
+                db.query(Worker)
+                .filter(Worker.factory_id == creator.factory_id)
+                .filter((sql_func.lower(Worker.name) == full_name.lower()) | (Worker.phone == phone_number))
+                .first()
+            )
+            if worker is None:
+                worker = Worker(
+                    factory_id=creator.factory_id,
+                    name=full_name,
+                    phone=phone_number,
+                    is_active=True,
+                )
+                db.add(worker)
+            else:
+                worker.name = full_name
+                worker.phone = phone_number
+                worker.is_active = True
+
         db.commit()
         db.refresh(staff_user)
         return staff_user
@@ -383,6 +434,10 @@ def core_update_staff(staff_id: int, payload: SecureStaffUpdateRequest, current_
     )
     if staff_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+
+    old_phone = staff_user.phone_number
+    old_name = staff_user.full_name
+    old_role = staff_user.role
 
     if payload.role == "sub_owner" and staff_user.role != "Sub-Owner":
         ensure_primary_owner(current_user)
@@ -410,6 +465,32 @@ def core_update_staff(staff_id: int, payload: SecureStaffUpdateRequest, current_
 
     if payload.role is not None:
         staff_user.role = normalize_staff_role(payload.role)
+
+    # Sync corresponding Worker record if they are an Operator or were an Operator
+    if staff_user.role == "Operator" or old_role == "Operator":
+        worker = (
+            db.query(Worker)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter((sql_func.lower(Worker.name) == old_name.lower()) | (Worker.phone == old_phone))
+            .first()
+        )
+        if staff_user.role == "Operator":
+            if worker is None:
+                worker = Worker(
+                    factory_id=current_user.factory_id,
+                    name=staff_user.full_name,
+                    phone=staff_user.phone_number,
+                    is_active=True,
+                )
+                db.add(worker)
+            else:
+                worker.name = staff_user.full_name
+                worker.phone = staff_user.phone_number
+                worker.is_active = True
+        else:
+            # They are no longer a worker/Operator; deactivate their worker record
+            if worker is not None:
+                worker.is_active = False
 
     db.commit()
     db.refresh(staff_user)

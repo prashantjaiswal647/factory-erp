@@ -126,6 +126,42 @@ def test_staff_creation_hashes_instantly_and_inherits_factory():
     assert db_user.password_hash != "staffSecurePassword1"  # Instantly hashed
     db.close()
 
+def test_worker_creation_syncs_with_workers_table():
+    global mock_user
+    client = build_client()
+    
+    # Log in as Owner of Factory 1
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    
+    payload = {
+        "name": "New Worker Operator",
+        "phone": "9998887776",
+        "password": "workerSecurePassword123",
+        "role": "worker"
+    }
+    
+    response = client.post("/api/v1/staff/create", json=payload)
+    assert response.status_code == 201
+    record = response.json()
+    
+    assert record["full_name"] == "New Worker Operator"
+    assert record["role"] == "Operator"
+    assert "factory_id" not in record
+    
+    # Verify in DB (both users and workers table)
+    db = TestingSessionLocal()
+    db_user = db.query(User).filter(User.full_name == "New Worker Operator").first()
+    assert db_user is not None
+    assert db_user.factory_id == 1
+    
+    # Check corresponding Worker table row
+    from models import Worker
+    db_worker = db.query(Worker).filter(Worker.factory_id == 1).filter(Worker.name == "New Worker Operator").first()
+    assert db_worker is not None
+    assert db_worker.phone == "+919998887776"
+    assert db_worker.is_active is True
+    db.close()
+
 def test_staff_edit_and_delete_with_multi_tenant_boundaries():
     global mock_user
     db = TestingSessionLocal()

@@ -34,14 +34,20 @@ try {
 
 # Step 3: Run Playwright E2E Integration Tests
 Write-Host ""
-Write-Host "[3/4] Running Playwright E2E Staff Management Lifecycle Tests..." -ForegroundColor Yellow
+Write-Host "[3/4] Running Playwright E2E Staff & Worker Lifecycle Tests..." -ForegroundColor Yellow
 try {
     $env:PLAYWRIGHT_ENABLE_STAFF_MUTATION_TESTS = "true"
+    Write-Host "Running staff-flow spec..." -ForegroundColor Gray
     npx playwright test e2e/tests/local/staff-flow.spec.ts --workers=1
     if ($LASTEXITCODE -ne 0) { throw "Playwright staff-flow tests failed" }
-    Write-Host "[SUCCESS] Playwright E2E Staff Flow Integration Tests Passed!" -ForegroundColor Green
+
+    Write-Host "Running staff-worker-flow spec..." -ForegroundColor Gray
+    npx playwright test e2e/tests/local/staff-worker-flow.spec.ts --workers=1
+    if ($LASTEXITCODE -ne 0) { throw "Playwright staff-worker-flow tests failed" }
+
+    Write-Host "[SUCCESS] Playwright E2E Staff & Worker Flow Integration Tests Passed!" -ForegroundColor Green
 } catch {
-    Write-Host "[ERROR] Playwright E2E Staff Flow Integration Tests Failed!" -ForegroundColor Red
+    Write-Host "[ERROR] Playwright E2E Staff/Worker Flow Integration Tests Failed!" -ForegroundColor Red
     Pop-Location
     Exit 1
 }
