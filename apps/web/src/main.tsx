@@ -12,7 +12,15 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .getRegistrations()
-      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .then((registrations) => {
+        for (const registration of registrations) {
+          registration.unregister();
+        }
+      })
+      .then(() => {
+        if (!("caches" in window)) return undefined;
+        return caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key))));
+      })
       .catch((err) => {
         console.error("ServiceWorker cleanup failed:", err);
       });
