@@ -25,7 +25,7 @@ class Factory(Base):
     __tablename__ = "factories"
     __table_args__ = (
         CheckConstraint(
-            "subscription_status IN ('trial_active', 'trial_expired', 'active', 'expired', 'cancelled', 'payment_pending', 'trial')",
+            "subscription_status IN ('trial_active', 'trial_expired', 'active', 'inactive', 'expired', 'cancelled', 'payment_pending', 'trial', 'suspended')",
             name="ck_factories_subscription_status",
         ),
     )
@@ -58,6 +58,7 @@ class Factory(Base):
     subscription_end = Column(DateTime(timezone=True), nullable=True, index=True)
     payment_status = Column(String(50), nullable=False, default="payment_pending", server_default="payment_pending", index=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    address = Column(Text, nullable=True)
     razorpay_customer_id = Column(String(255), nullable=True)
     razorpay_subscription_id = Column(String(255), nullable=True)
     telegram_bot_token = Column(String(255), nullable=True)
@@ -70,6 +71,9 @@ class Factory(Base):
     override_expires_at = Column(DateTime(timezone=True), nullable=True)
     override_reason = Column(Text, nullable=True)
     override_updated_at = Column(DateTime(timezone=True), nullable=True)
+    usage_limit = Column(Integer, nullable=True)
+    token_limit = Column(Integer, nullable=True)
+    admin_note = Column(Text, nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
@@ -117,6 +121,51 @@ class SubscriptionPayment(Base):
     provider_payment_id = Column(String(255), nullable=True, index=True)
     subscription_start_date = Column(DateTime(timezone=True), nullable=False)
     subscription_end_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class SuperAdminAuditLog(Base):
+    __tablename__ = "super_admin_audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_email = Column(String(255), nullable=False, index=True)
+    action_type = Column(String(100), nullable=False, index=True)
+    entity_type = Column(String(100), nullable=False, index=True)
+    entity_id = Column(String(100), nullable=True, index=True)
+    old_value = Column(JSON, nullable=True)
+    new_value = Column(JSON, nullable=True)
+    note = Column(Text, nullable=True)
+    ip_address = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class AppUsageLog(Base):
+    __tablename__ = "app_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    event_type = Column(String(100), nullable=False, index=True)
+    route_or_module = Column(String(255), nullable=True, index=True)
+    method = Column(String(20), nullable=True)
+    meta = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class TokenUsageLog(Base):
+    __tablename__ = "token_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    provider = Column(String(100), nullable=True)
+    model = Column(String(255), nullable=True)
+    feature_name = Column(String(255), nullable=False, index=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    estimated_cost = Column(Numeric(14, 6), nullable=True)
+    meta = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 

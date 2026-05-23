@@ -1,0 +1,1001 @@
+import axios from "axios";
+import { Activity, AlertTriangle, Building2, CreditCard, Database, FileClock, LayoutDashboard, Plus, Search, Shield, UsersRound } from "lucide-react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { Link, Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
+
+import { superAdminApi } from "../lib/api";
+
+const ADMIN_TOKEN_KEY = "munshi_super_admin_token";
+
+type Owner = {
+  id: number;
+  full_name?: string | null;
+  username: string;
+  email?: string | null;
+  phone_number?: string | null;
+  factory_id: number;
+  is_active: boolean;
+  last_login_at?: string | null;
+  factory?: FactoryRecord | null;
+};
+
+type FactoryRecord = {
+  id: number;
+  name: string;
+  factory_name?: string | null;
+  owner?: Owner | null;
+  owner_id?: number | null;
+  is_active: boolean;
+  active_plan?: string | null;
+  plan_name?: string | null;
+  subscription_status?: string | null;
+  payment_status?: string | null;
+  billing_cycle?: string | null;
+  trial_start_date?: string | null;
+  trial_end_date?: string | null;
+  subscription_start_date?: string | null;
+  subscription_end_date?: string | null;
+  plan_expires_at?: string | null;
+  usage_limit?: number | null;
+  token_limit?: number | null;
+  admin_note?: string | null;
+  created_at?: string | null;
+  counts?: Record<string, number>;
+  app_usage_count?: number;
+  last_active_at?: string | null;
+  total_token_usage?: number;
+  monthly_token_usage?: number;
+};
+
+type DashboardStats = {
+  total_factories: number;
+  total_factory_owners: number;
+  free_users_count: number;
+  paid_users_count: number;
+  trial_users_count: number;
+  expired_users_count: number;
+  active_subscriptions: number;
+  pending_payments: number;
+  total_usage_tokens: number;
+  recent_signups: Owner[];
+  recent_payments: Array<Record<string, unknown>>;
+};
+
+type UsageSummary = {
+  total_app_events: number;
+  total_token_usage: number;
+  monthly_token_usage: number;
+  last_active_at?: string | null;
+};
+
+type SuperAdminSettings = {
+  bulk_delete_enabled: boolean;
+  factory_delete_enabled?: boolean;
+  bulk_delete_max: number;
+};
+
+type BulkDeleteFactoryPreview = {
+  factory_id: number;
+  factory_name: string;
+  owner_name?: string | null;
+  owner_email?: string | null;
+  owner_phone?: string | null;
+  owner_action?: string;
+  owner?: { id?: number | null; name?: string | null; email?: string | null; phone?: string | null; action?: string };
+  record_counts: Record<string, number>;
+  warnings?: string[];
+};
+
+type BulkDeletePreview = {
+  factories: BulkDeleteFactoryPreview[];
+  total_counts: Record<string, number>;
+};
+
+type BulkDeleteResponse = {
+  deleted_factory_ids: number[];
+  deleted_counts: Record<string, number>;
+  message: string;
+};
+
+type SingleDeleteResponse = {
+  deleted_factory_id: number;
+  owner_action: string;
+  deleted_counts: Record<string, number>;
+  message: string;
+};
+
+type AuditLog = {
+  id: number;
+  admin_email: string;
+  action_type: string;
+  entity_type: string;
+  entity_id?: string | null;
+  note?: string | null;
+  created_at: string;
+};
+
+function useAdminToken() {
+  const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_KEY));
+  function save(nextToken: string) {
+    sessionStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
+    setToken(nextToken);
+  }
+  function clear() {
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    setToken(null);
+  }
+  return { token, save, clear };
+}
+
+export function SuperAdminLoginPage() {
+  const navigate = useNavigate();
+  const { token, save } = useAdminToken();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (token) return <Navigate to="/munshi-control-room/dashboard" replace />;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+    try {
+      const response = await superAdminApi.post<{ access_token: string }>("/api/super-admin/login", { email, password });
+      save(response.data.access_token);
+      navigate("/munshi-control-room/dashboard", { replace: true });
+    } catch {
+      setError("Invalid super admin credentials.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#111827] px-4 py-10 text-white">
+      <form className="w-full max-w-md rounded-lg border border-white/10 bg-white p-7 text-[#111827] shadow-2xl" onSubmit={submit}>
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-md bg-red-600 text-white">
+          <Shield className="h-6 w-6" />
+        </div>
+        <h1 className="mt-4 text-center text-2xl font-black">Super Admin Only</h1>
+        <p className="mt-2 text-center text-sm text-zinc-600">Hidden Munshi AI platform control room.</p>
+        {error ? <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</p> : null}
+        <label className="mt-5 block text-sm font-semibold">
+          Email
+          <input className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
+        </label>
+        <label className="mt-4 block text-sm font-semibold">
+          Password
+          <input className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={password} onChange={(event) => setPassword(event.target.value)} type="password" required />
+        </label>
+        <button className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-md bg-[#6D28D9] text-sm font-bold text-white hover:bg-[#4C1D95] disabled:bg-zinc-300" disabled={isSubmitting} type="submit">
+          {isSubmitting ? "Checking..." : "Enter Control Room"}
+        </button>
+      </form>
+    </main>
+  );
+}
+
+export function SuperAdminRoute() {
+  const { token } = useAdminToken();
+  if (!token) return <Navigate to="/munshi-control-room" replace />;
+  return <SuperAdminShell />;
+}
+
+function SuperAdminShell() {
+  const { clear } = useAdminToken();
+  const navigate = useNavigate();
+  const links = [
+    ["/munshi-control-room/dashboard", "Dashboard", LayoutDashboard],
+    ["/munshi-control-room/owners", "Owners", UsersRound],
+    ["/munshi-control-room/factories", "Factories", Building2],
+    ["/munshi-control-room/subscriptions", "Subscriptions", CreditCard],
+    ["/munshi-control-room/payments", "Payments", Database],
+    ["/munshi-control-room/usage", "Usage", Activity],
+    ["/munshi-control-room/audit-logs", "Audit Logs", FileClock],
+  ] as const;
+  return (
+    <div data-testid="super-admin-layout" className="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950">
+      <header className="border-b border-zinc-200 bg-white px-4 py-4 lg:px-5">
+        <div className="mx-auto max-w-[1440px] flex w-full flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wider text-red-600">Super Admin Only</p>
+            <h1 className="text-xl font-black">Munshi Control Room</h1>
+          </div>
+          <button className="inline-flex h-10 items-center justify-center rounded-md border border-zinc-300 px-4 text-sm font-bold hover:bg-zinc-50" type="button" onClick={() => { clear(); navigate("/munshi-control-room", { replace: true }); }}>
+            Sign Out
+          </button>
+        </div>
+      </header>
+      <div className="mx-auto max-w-[1440px] grid w-full gap-4 px-3 py-4 sm:px-4 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-5 lg:px-5 lg:py-5">
+        <nav data-testid="super-admin-sidebar" className="h-fit rounded-lg border border-zinc-200 bg-white p-3 shadow-sm lg:sticky lg:top-4">
+          {links.map(([href, label, Icon]) => (
+            <Link key={href} className="flex h-10 items-center gap-3 rounded-md px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-100" to={href}>
+              <Icon className="h-4 w-4 text-[#6D28D9]" />
+              {label}
+            </Link>
+          ))}
+        </nav>
+        <section data-testid="super-admin-main" className="min-w-0 w-full">
+          <Outlet />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function useAdminData<T>(path: string, fallback: T) {
+  const [data, setData] = useState<T>(fallback);
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const reload = async () => {
+    setIsLoading(true);
+    setError("");
+    try {
+      const response = await superAdminApi.get<T>(path);
+      setData(response.data);
+    } catch (caught) {
+      setError(getAdminApiError(caught, "Request failed"));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  useEffect(() => {
+    void reload();
+  }, [path]);
+  return { data, error, isLoading, reload };
+}
+
+function Panel({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-lg font-black">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ErrorNote({ message }: { message?: string }) {
+  if (!message) return null;
+  return <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{message}</p>;
+}
+
+function getAdminApiError(caught: unknown, fallback: string) {
+  if (!axios.isAxiosError(caught)) return fallback;
+  const detail = caught.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item?.msg || JSON.stringify(item)).join(", ");
+  return caught.message || fallback;
+}
+
+function SuccessNote({ message }: { message?: string }) {
+  if (!message) return null;
+  return <p data-testid="bulk-delete-success-toast" className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{message}</p>;
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return <p className="rounded-md border border-dashed border-zinc-300 p-5 text-center text-sm font-semibold text-zinc-500">{children}</p>;
+}
+
+export function SuperAdminDashboardPage() {
+  const { data, error, isLoading } = useAdminData<DashboardStats>("/api/super-admin/dashboard", {
+    total_factories: 0,
+    total_factory_owners: 0,
+    free_users_count: 0,
+    paid_users_count: 0,
+    trial_users_count: 0,
+    expired_users_count: 0,
+    active_subscriptions: 0,
+    pending_payments: 0,
+    total_usage_tokens: 0,
+    recent_signups: [],
+    recent_payments: [],
+  });
+  const cards = [
+    ["Total factories", data.total_factories],
+    ["Factory owners", data.total_factory_owners],
+    ["Free users", data.free_users_count],
+    ["Paid users", data.paid_users_count],
+    ["Trial users", data.trial_users_count],
+    ["Expired users", data.expired_users_count],
+    ["Active subscriptions", data.active_subscriptions],
+    ["Pending payments", data.pending_payments],
+    ["Tokens used", data.total_usage_tokens],
+  ];
+  return (
+    <div className="space-y-5">
+      <Panel title="Platform Dashboard">
+        <ErrorNote message={error} />
+        {isLoading ? <p>Loading...</p> : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {cards.map(([label, value]) => <Metric key={label} label={String(label)} value={String(value)} />)}
+          </div>
+        )}
+      </Panel>
+      <Panel title="Recent Signups">
+        <OwnerTable owners={data.recent_signups || []} />
+      </Panel>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4"><p className="text-sm text-zinc-500">{label}</p><p className="mt-2 text-2xl font-black">{value}</p></div>;
+}
+
+function SearchBox({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="relative">
+      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+      <input className="h-10 rounded-md border border-zinc-300 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-indigo-600" placeholder="Search" value={value} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  );
+}
+
+export function SuperAdminOwnersPage() {
+  const [search, setSearch] = useState("");
+  const [isCreateOpen, setCreateOpen] = useState(false);
+  const [editingSubscription, setEditingSubscription] = useState<Owner | null>(null);
+  const [mutationError, setMutationError] = useState("");
+  const { data, error, isLoading, reload } = useAdminData<Owner[]>(`/api/super-admin/owners${search ? `?search=${encodeURIComponent(search)}` : ""}`, []);
+  async function setOwnerStatus(owner: Owner, isActive: boolean) {
+    if (!window.confirm(`${isActive ? "Enable" : "Disable"} owner login for ${owner.full_name || owner.username}?`)) return;
+    setMutationError("");
+    try {
+      await superAdminApi.patch(`/api/super-admin/owners/${owner.id}/status`, { is_active: isActive, note: "Updated from control room" });
+      await reload();
+    } catch (caught) {
+      setMutationError(getAdminApiError(caught, "Owner status update failed"));
+    }
+  }
+  return (
+    <Panel
+      title="Factory Owner Management"
+      action={
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <SearchBox value={search} onChange={setSearch} />
+          <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[#6D28D9] px-4 text-sm font-bold text-white hover:bg-[#4C1D95]" type="button" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Add Factory Owner
+          </button>
+        </div>
+      }
+    >
+      <ErrorNote message={error} />
+      <ErrorNote message={mutationError} />
+      {isLoading ? <p>Loading owners...</p> : <OwnerTable owners={data} onStatus={setOwnerStatus} onEditSubscription={setEditingSubscription} />}
+      {isCreateOpen ? <CreateOwnerModal onClose={() => setCreateOpen(false)} onCreated={reload} /> : null}
+      {editingSubscription?.factory ? <SubscriptionModal factory={editingSubscription.factory} onClose={() => setEditingSubscription(null)} onSaved={reload} /> : null}
+    </Panel>
+  );
+}
+
+function OwnerTable({ owners, onStatus, onEditSubscription }: { owners: Owner[]; onStatus?: (owner: Owner, isActive: boolean) => void; onEditSubscription?: (owner: Owner) => void }) {
+  if (owners.length === 0) return <EmptyState>No real factory owners found yet.</EmptyState>;
+  return (
+    <div className="w-full overflow-x-auto block">
+      <table className="min-w-full divide-y divide-zinc-200 text-sm">
+        <thead className="bg-zinc-50"><tr>{["Owner", "Email", "Phone", "Factory", "Plan", "Sub Status", "Payment", "Tokens", "Usage", "Last Active", "Active", "Actions"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr></thead>
+        <tbody className="divide-y divide-zinc-100">
+          {owners.map((owner) => (
+            <tr key={owner.id}>
+              <td className="px-3 py-2 font-semibold">{owner.full_name || owner.username}<div className="text-xs text-zinc-500">#{owner.id}</div></td>
+              <td className="px-3 py-2">{owner.email || "-"}</td>
+              <td className="px-3 py-2">{owner.phone_number || "-"}</td>
+              <td className="px-3 py-2">{owner.factory?.factory_name || owner.factory?.name || owner.factory_id}</td>
+              <td className="px-3 py-2">{owner.factory?.plan_name || "-"}</td>
+              <td className="px-3 py-2">{owner.factory?.subscription_status || "-"}</td>
+              <td className="px-3 py-2">{owner.factory?.payment_status || "-"}</td>
+              <td className="px-3 py-2">{owner.factory?.total_token_usage ?? 0} / {owner.factory?.token_limit ?? "-"}</td>
+              <td className="px-3 py-2">{owner.factory?.app_usage_count ?? 0}</td>
+              <td className="px-3 py-2">{formatDate(owner.factory?.last_active_at || owner.last_login_at)}</td>
+              <td className="px-3 py-2">{owner.is_active ? "Active" : "Inactive"}</td>
+              <td className="px-3 py-2">
+                <div className="flex gap-2">
+                  <Link className="text-xs font-bold text-[#6D28D9]" to={`/munshi-control-room/factories/${owner.factory_id}`}>View</Link>
+                  {onEditSubscription && owner.factory ? <button className="text-xs font-bold text-[#6D28D9]" type="button" onClick={() => onEditSubscription(owner)}>Edit Subscription</button> : null}
+                  {onStatus ? <button className="text-xs font-bold text-red-700" type="button" onClick={() => onStatus(owner, !owner.is_active)}>{owner.is_active ? "Disable" : "Enable"}</button> : null}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CreateOwnerModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
+  const [form, setForm] = useState({
+    owner_name: "",
+    email: "",
+    country_code: "+91",
+    phone_number: "",
+    password: "",
+    confirm_password: "",
+    factory_name: "",
+    factory_address: "",
+    initial_subscription_plan: "trial",
+    subscription_status: "trial_active",
+    payment_status: "free",
+    billing_cycle: "none",
+    subscription_end_date: "",
+    usage_limit: "",
+    token_limit: "",
+    notes: "",
+  });
+  const [error, setError] = useState("");
+  const [isSaving, setSaving] = useState(false);
+  function setField(name: string, value: string) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (form.password !== form.confirm_password) {
+      setError("Password and confirm password must match.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await superAdminApi.post("/api/super-admin/owners", {
+        ...form,
+        email: form.email.trim() === "" ? null : form.email.trim(),
+        phone_number: form.phone_number.trim() === "" ? null : form.phone_number.trim(),
+        factory_address: form.factory_address.trim() === "" ? null : form.factory_address.trim(),
+        notes: form.notes.trim() === "" ? null : form.notes.trim(),
+        billing_cycle: form.billing_cycle === "none" ? null : form.billing_cycle,
+        subscription_end_date: form.subscription_end_date ? new Date(form.subscription_end_date).toISOString() : null,
+        usage_limit: form.usage_limit ? Number(form.usage_limit) : null,
+        token_limit: form.token_limit ? Number(form.token_limit) : null,
+      });
+      await onCreated();
+      onClose();
+    } catch (caught) {
+      setError(getAdminApiError(caught, "Create owner failed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+      <form className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl" onSubmit={save}>
+        <h3 className="text-lg font-black">Add Factory Owner</h3>
+        <ErrorNote message={error} />
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <Input label="Owner Name" value={form.owner_name} onChange={(value) => setField("owner_name", value)} />
+          <Input label="Email" value={form.email} onChange={(value) => setField("email", value)} type="email" />
+          <label className="text-sm font-semibold">
+            Phone Country Code
+            <select className="mt-1 h-10 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={form.country_code} onChange={(event) => setField("country_code", event.target.value)}>
+              <option value="+91">India (+91)</option>
+              <option value="+1">United States (+1)</option>
+              <option value="+44">United Kingdom (+44)</option>
+              <option value="+971">UAE (+971)</option>
+            </select>
+          </label>
+          <Input label="Phone Number" value={form.phone_number} onChange={(value) => setField("phone_number", value)} />
+          <Input label="Password" value={form.password} onChange={(value) => setField("password", value)} type="password" />
+          <Input label="Confirm Password" value={form.confirm_password} onChange={(value) => setField("confirm_password", value)} type="password" />
+          <Input label="Factory Name" value={form.factory_name} onChange={(value) => setField("factory_name", value)} />
+          <Input label="Factory Address" value={form.factory_address} onChange={(value) => setField("factory_address", value)} />
+          <SelectInput label="Initial Subscription Plan" value={form.initial_subscription_plan} onChange={(value) => setField("initial_subscription_plan", value)} options={["free", "trial", "basic", "pro", "enterprise", "custom"]} />
+          <SelectInput label="Subscription Status" value={form.subscription_status} onChange={(value) => setField("subscription_status", value)} options={["active", "inactive", "trial_active", "trial", "expired", "suspended"]} />
+          <SelectInput label="Payment Status" value={form.payment_status} onChange={(value) => setField("payment_status", value)} options={["free", "paid", "pending", "overdue", "failed"]} />
+          <SelectInput label="Billing Cycle" value={form.billing_cycle} onChange={(value) => setField("billing_cycle", value)} options={["none", "monthly", "yearly", "custom"]} />
+          <Input label="Subscription End Date" value={form.subscription_end_date} onChange={(value) => setField("subscription_end_date", value)} type="date" />
+          <Input label="Usage Limit" value={form.usage_limit} onChange={(value) => setField("usage_limit", value)} type="number" />
+          <Input label="Token Limit" value={form.token_limit} onChange={(value) => setField("token_limit", value)} type="number" />
+          <Input label="Notes" value={form.notes} onChange={(value) => setField("notes", value)} />
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="rounded-md border px-4 py-2 text-sm font-bold" type="button" onClick={onClose}>Cancel</button>
+          <button data-testid="add-owner-submit" className="rounded-md bg-[#6D28D9] px-4 py-2 text-sm font-bold text-white disabled:bg-zinc-300" type="submit" disabled={isSaving}>{isSaving ? "Creating..." : "Create Owner"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+export function SuperAdminFactoriesPage() {
+  const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [preview, setPreview] = useState<BulkDeletePreview | null>(null);
+  const [singlePreview, setSinglePreview] = useState<BulkDeleteFactoryPreview | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [isPreviewLoading, setPreviewLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const settings = useAdminData<SuperAdminSettings>("/api/super-admin/settings", { bulk_delete_enabled: false, bulk_delete_max: 50 });
+  const { data, error, isLoading, reload } = useAdminData<FactoryRecord[]>(`/api/super-admin/factories${search ? `?search=${encodeURIComponent(search)}` : ""}`, []);
+  const maxDelete = settings.data.bulk_delete_max || 50;
+  const selectedCount = selectedIds.length;
+  function toggleFactory(factoryId: number) {
+    setSelectedIds((current) => {
+      if (current.includes(factoryId)) return current.filter((id) => id !== factoryId);
+      if (current.length >= maxDelete) return current;
+      return [...current, factoryId];
+    });
+  }
+  function toggleAll() {
+    const pageIds = data.map((factory) => factory.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+    if (allSelected) {
+      setSelectedIds((current) => current.filter((id) => !pageIds.includes(id)));
+      return;
+    }
+    setSelectedIds(Array.from(new Set([...selectedIds, ...pageIds])).slice(0, maxDelete));
+  }
+  async function openDeletePreview() {
+    setPreviewError("");
+    setPreviewLoading(true);
+    try {
+      const response = await superAdminApi.post<BulkDeletePreview>("/api/super-admin/factories/bulk-delete-preview", { factory_ids: selectedIds });
+      setPreview(response.data);
+    } catch (caught) {
+      setPreviewError(getAdminApiError(caught, "Preview failed"));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+  async function openSingleDeletePreview(factory: FactoryRecord) {
+    setPreviewError("");
+    setPreviewLoading(true);
+    try {
+      const response = await superAdminApi.get<BulkDeleteFactoryPreview>(`/api/super-admin/factories/${factory.id}/delete-preview`);
+      setSinglePreview(response.data);
+    } catch (caught) {
+      setPreviewError(getAdminApiError(caught, "Preview failed"));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+  async function handleDeleted(response: BulkDeleteResponse) {
+    setSuccessMessage(response.message);
+    setPreview(null);
+    setSelectedIds([]);
+    await reload();
+    await settings.reload();
+  }
+  return (
+    <Panel title="Factory Management" action={<SearchBox value={search} onChange={setSearch} />}>
+      <SuccessNote message={successMessage} />
+      <ErrorNote message={error} />
+      <ErrorNote message={previewError} />
+      {settings.error ? <ErrorNote message={settings.error} /> : null}
+      {!settings.data.bulk_delete_enabled ? <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Bulk delete is disabled by server configuration. Preview is available, final deletion is blocked.</p> : null}
+      {!settings.data.factory_delete_enabled ? <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Single factory delete is disabled by server configuration. Preview is available, final deletion is blocked.</p> : null}
+      {selectedCount > 0 ? (
+        <div className="mb-4 flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-bold text-red-800">{selectedCount} {selectedCount === 1 ? "factory" : "factories"} selected</p>
+          <button
+            data-testid="bulk-delete-factories-button"
+            className="inline-flex h-10 items-center justify-center rounded-md bg-red-700 px-4 text-sm font-bold text-white hover:bg-red-800 disabled:bg-zinc-300"
+            type="button"
+            disabled={isPreviewLoading}
+            onClick={openDeletePreview}
+          >
+            {isPreviewLoading ? "Loading Preview..." : "Delete Selected Factories"}
+          </button>
+        </div>
+      ) : null}
+      {selectedCount >= maxDelete ? <p className="mb-3 text-sm font-semibold text-amber-700">You can delete up to {maxDelete} factories at a time.</p> : null}
+      {isLoading ? <p>Loading factories...</p> : (
+        <FactoryTable
+          factories={data}
+          selectedIds={selectedIds}
+          onToggle={toggleFactory}
+          onToggleAll={toggleAll}
+          maxSelected={maxDelete}
+          onSingleDelete={openSingleDeletePreview}
+        />
+      )}
+      {preview ? (
+        <BulkDeleteModal
+          preview={preview}
+          settings={settings.data}
+          onClose={() => setPreview(null)}
+          onDeleted={handleDeleted}
+        />
+      ) : null}
+      {singlePreview ? (
+        <SingleDeleteModal
+          preview={singlePreview}
+          settings={settings.data}
+          onClose={() => setSinglePreview(null)}
+          onDeleted={async (response) => {
+            setSuccessMessage(response.message);
+            setSinglePreview(null);
+            setSelectedIds((current) => current.filter((id) => id !== response.deleted_factory_id));
+            await reload();
+            await settings.reload();
+          }}
+        />
+      ) : null}
+    </Panel>
+  );
+}
+
+function FactoryTable({ factories, selectedIds, onToggle, onToggleAll, maxSelected, onSingleDelete }: { factories: FactoryRecord[]; selectedIds?: number[]; onToggle?: (factoryId: number) => void; onToggleAll?: () => void; maxSelected?: number; onSingleDelete?: (factory: FactoryRecord) => void }) {
+  if (factories.length === 0) return <EmptyState>No factories found.</EmptyState>;
+  const selectable = Boolean(onToggle && onToggleAll && selectedIds);
+  const allSelected = selectable && factories.every((factory) => selectedIds?.includes(factory.id));
+  return (
+    <div className="w-full overflow-x-auto block">
+      <table className="min-w-full divide-y divide-zinc-200 text-sm">
+        <thead className="bg-zinc-50"><tr>{selectable ? <th className="px-3 py-2 text-left font-bold text-zinc-600"><input data-testid="factory-select-all" type="checkbox" checked={Boolean(allSelected)} onChange={onToggleAll} /></th> : null}{["Factory", "Owner", "Email", "Phone", "Plan", "Subscription", "Payment", "Tokens", "Usage", "Last Active", "Created", "Actions"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr></thead>
+        <tbody className="divide-y divide-zinc-100">
+          {factories.map((factory) => (
+            <tr key={factory.id}>
+              {selectable ? (
+                <td className="px-3 py-2">
+                  <input
+                    data-testid="factory-row-checkbox"
+                    type="checkbox"
+                    checked={selectedIds?.includes(factory.id) || false}
+                    disabled={!selectedIds?.includes(factory.id) && selectedIds?.length === maxSelected}
+                    onChange={() => onToggle?.(factory.id)}
+                    aria-label={`Select ${factory.factory_name || factory.name}`}
+                  />
+                </td>
+              ) : null}
+              <td className="px-3 py-2 font-semibold">{factory.factory_name || factory.name}<div className="text-xs text-zinc-500">#{factory.id}</div></td>
+              <td className="px-3 py-2">{factory.owner?.full_name || factory.owner?.username || "-"}</td>
+              <td className="px-3 py-2">{factory.owner?.email || "-"}</td>
+              <td className="px-3 py-2">{factory.owner?.phone_number || "-"}</td>
+              <td className="px-3 py-2">{factory.plan_name || factory.active_plan || "-"}</td>
+              <td className="px-3 py-2">{factory.subscription_status || "-"}</td>
+              <td className="px-3 py-2">{factory.payment_status || "-"}</td>
+              <td className="px-3 py-2">{factory.total_token_usage ?? 0} / {factory.token_limit ?? "-"}</td>
+              <td className="px-3 py-2">{factory.app_usage_count ?? 0}</td>
+              <td className="px-3 py-2">{formatDate(factory.last_active_at)}</td>
+              <td className="px-3 py-2">{formatDate(factory.created_at)}</td>
+              <td className="px-3 py-2">
+                <div className="flex gap-2">
+                  <Link className="text-xs font-bold text-[#6D28D9]" to={`/munshi-control-room/factories/${factory.id}`}>Details</Link>
+                  {onSingleDelete ? <button className="text-xs font-bold text-red-700" type="button" onClick={() => onSingleDelete(factory)}>Delete Factory</button> : null}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BulkDeleteModal({ preview, settings, onClose, onDeleted }: { preview: BulkDeletePreview; settings: SuperAdminSettings; onClose: () => void; onDeleted: (response: BulkDeleteResponse) => Promise<void> }) {
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+  const [isDeleting, setDeleting] = useState(false);
+  const confirmationPhrase = "DELETE SELECTED FACTORIES";
+  const canDelete = settings.bulk_delete_enabled && confirmation === confirmationPhrase;
+  async function deleteFactories() {
+    if (!canDelete) return;
+    setError("");
+    setDeleting(true);
+    try {
+      const response = await superAdminApi.delete<BulkDeleteResponse>("/api/super-admin/factories/bulk-delete", {
+        data: {
+          factory_ids: preview.factories.map((factory) => factory.factory_id),
+          confirmation,
+        },
+      });
+      await onDeleted(response.data);
+    } catch (caught) {
+      setError(getAdminApiError(caught, "Bulk delete failed"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
+      <div data-testid="bulk-delete-preview-modal" className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+        <h3 className="text-lg font-black text-red-800">Delete {preview.factories.length} Selected {preview.factories.length === 1 ? "Factory" : "Factories"}</h3>
+        <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-800">This will permanently delete selected factories and all related data.</p>
+        {!settings.bulk_delete_enabled ? <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Bulk delete is disabled by server configuration.</p> : null}
+        {error ? <p data-testid="bulk-delete-error" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</p> : null}
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full divide-y divide-zinc-200 text-sm">
+            <thead className="bg-zinc-50">
+              <tr>{["Factory", "Owner", "Owner Action", "Email", "Phone", "Records"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {preview.factories.map((factory) => (
+                <tr key={factory.factory_id}>
+                  <td className="px-3 py-2 font-semibold">{factory.factory_name}<div className="text-xs text-zinc-500">#{factory.factory_id}</div></td>
+                  <td className="px-3 py-2">{factory.owner_name || "-"}</td>
+                  <td className="px-3 py-2">{formatOwnerAction(factory.owner_action || factory.owner?.action)}</td>
+                  <td className="px-3 py-2">{factory.owner_email || "-"}</td>
+                  <td className="px-3 py-2">{factory.owner_phone || "-"}</td>
+                  <td className="px-3 py-2">{Object.values(factory.record_counts).reduce((sum, value) => sum + Number(value || 0), 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-4 grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          {Object.entries(preview.total_counts).map(([key, value]) => <div key={key}><span className="font-bold">{key.replace(/_/g, " ")}:</span> {String(value)}</div>)}
+        </div>
+        <label className="mt-4 block text-sm font-semibold">
+          Type {confirmationPhrase} to confirm
+          <input
+            data-testid="bulk-delete-confirmation-input"
+            className="mt-1 h-10 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-red-600"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </label>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="rounded-md border px-4 py-2 text-sm font-bold" type="button" onClick={onClose} disabled={isDeleting}>Cancel</button>
+          <button
+            data-testid="bulk-delete-final-button"
+            className="rounded-md bg-red-700 px-4 py-2 text-sm font-bold text-white disabled:bg-zinc-300"
+            type="button"
+            disabled={!canDelete || isDeleting}
+            onClick={deleteFactories}
+          >
+            {isDeleting ? "Deleting..." : "Permanently Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SingleDeleteModal({ preview, settings, onClose, onDeleted }: { preview: BulkDeleteFactoryPreview; settings: SuperAdminSettings; onClose: () => void; onDeleted: (response: SingleDeleteResponse) => Promise<void> }) {
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+  const [isDeleting, setDeleting] = useState(false);
+  const confirmationPhrase = "DELETE FACTORY";
+  const canDelete = Boolean(settings.factory_delete_enabled) && confirmation === confirmationPhrase;
+  async function deleteFactory() {
+    if (!canDelete) return;
+    setError("");
+    setDeleting(true);
+    try {
+      const response = await superAdminApi.delete<SingleDeleteResponse>(`/api/super-admin/factories/${preview.factory_id}`, {
+        data: { confirmation },
+      });
+      await onDeleted(response.data);
+    } catch (caught) {
+      setError(getAdminApiError(caught, "Factory delete failed"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+        <h3 className="text-lg font-black text-red-800">Delete Factory: {preview.factory_name}</h3>
+        <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-800">This will permanently delete this factory and all associated owner, workers, and related data.</p>
+        {!settings.factory_delete_enabled ? <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Factory delete is disabled by server configuration.</p> : null}
+        {error ? <p data-testid="bulk-delete-error" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</p> : null}
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <Metric label="Owner action" value={formatOwnerAction(preview.owner_action || preview.owner?.action)} />
+          <Metric label="Workers/staff" value={String((preview.record_counts.workers || 0) + (preview.record_counts.staff || 0))} />
+        </div>
+        {preview.warnings?.length ? <ul className="mt-4 list-disc rounded-md border border-amber-200 bg-amber-50 p-4 pl-8 text-sm font-semibold text-amber-900">{preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+        <div className="mt-4 grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          {Object.entries(preview.record_counts).map(([key, value]) => <div key={key}><span className="font-bold">{key.replace(/_/g, " ")}:</span> {String(value)}</div>)}
+        </div>
+        <label className="mt-4 block text-sm font-semibold">
+          Type {confirmationPhrase} to confirm
+          <input className="mt-1 h-10 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-red-600" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+        </label>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="rounded-md border px-4 py-2 text-sm font-bold" type="button" onClick={onClose} disabled={isDeleting}>Cancel</button>
+          <button className="rounded-md bg-red-700 px-4 py-2 text-sm font-bold text-white disabled:bg-zinc-300" type="button" disabled={!canDelete || isDeleting} onClick={deleteFactory}>
+            {isDeleting ? "Deleting..." : "Permanently Delete Factory"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatOwnerAction(value?: string) {
+  if (value === "delete_owner_because_only_factory") return "Owner will be deleted";
+  if (value === "kept_multiple_factories") return "Owner kept";
+  if (value === "none") return "No linked owner";
+  return value || "-";
+}
+
+export function SuperAdminFactoryDetailPage() {
+  const { factoryId } = useParams();
+  const { data, error, isLoading } = useAdminData<FactoryRecord>(`/api/super-admin/factories/${factoryId}`, {} as FactoryRecord);
+  const counts = data.counts || {};
+  return (
+    <div className="space-y-5">
+      <Panel title={`Factory Detail #${factoryId}`}>
+        <ErrorNote message={error} />
+        {isLoading ? <p>Loading factory...</p> : (
+          <div className="grid gap-3 md:grid-cols-3">
+            <Metric label="Factory" value={data.factory_name || data.name || "-"} />
+            <Metric label="Owner" value={data.owner?.full_name || data.owner?.username || "-"} />
+            <Metric label="Subscription" value={`${data.plan_name || "-"} / ${data.subscription_status || "-"}`} />
+          </div>
+        )}
+      </Panel>
+      <Panel title="Factory Data Summary">
+        <div className="grid gap-3 md:grid-cols-3">
+          {Object.entries(counts).map(([key, value]) => <Metric key={key} label={key.replace(/_/g, " ")} value={String(value)} />)}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+export function SuperAdminSubscriptionsPage() {
+  const { data, error, isLoading, reload } = useAdminData<FactoryRecord[]>("/api/super-admin/subscriptions", []);
+  const [editing, setEditing] = useState<FactoryRecord | null>(null);
+  return (
+    <Panel title="Manual Subscription Management">
+      <ErrorNote message={error} />
+      {isLoading ? <p>Loading subscriptions...</p> : <FactoryTable factories={data} />}
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
+        {data.slice(0, 60).map((factory) => <button key={factory.id} className="rounded-md border border-zinc-200 p-3 text-left text-sm hover:bg-zinc-50" type="button" onClick={() => setEditing(factory)}>{factory.factory_name || factory.name}<span className="block text-xs text-zinc-500">{factory.plan_name} / {factory.subscription_status}</span></button>)}
+      </div>
+      {editing ? <SubscriptionModal factory={editing} onClose={() => setEditing(null)} onSaved={reload} /> : null}
+    </Panel>
+  );
+}
+
+function SubscriptionModal({ factory, onClose, onSaved }: { factory: FactoryRecord; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [plan, setPlan] = useState(factory.plan_name || "premium");
+  const [status, setStatus] = useState(factory.subscription_status || "active");
+  const [payment, setPayment] = useState(factory.payment_status || "paid");
+  const [billingCycle, setBillingCycle] = useState(factory.billing_cycle || "monthly");
+  const [endDate, setEndDate] = useState((factory.subscription_end_date || factory.plan_expires_at || "").slice(0, 10));
+  const [usageLimit, setUsageLimit] = useState(factory.usage_limit ? String(factory.usage_limit) : "");
+  const [tokenLimit, setTokenLimit] = useState(factory.token_limit ? String(factory.token_limit) : "");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [isSaving, setSaving] = useState(false);
+
+  async function save() {
+    if (!window.confirm("Save manual subscription change?")) return;
+    setError("");
+    setSaving(true);
+    try {
+      await superAdminApi.patch(`/api/super-admin/subscriptions/${factory.id}`, {
+        active_plan: plan,
+        plan_name: plan,
+        subscription_status: status,
+        payment_status: payment,
+        billing_cycle: billingCycle === "none" ? null : billingCycle,
+        subscription_end_date: endDate ? new Date(endDate).toISOString() : undefined,
+        plan_expires_at: endDate ? new Date(endDate).toISOString() : undefined,
+        usage_limit: usageLimit ? Number(usageLimit) : null,
+        token_limit: tokenLimit ? Number(tokenLimit) : null,
+        admin_note: note || factory.admin_note,
+        note,
+      });
+      await onSaved();
+      onClose();
+    } catch (caught) {
+      setError(getAdminApiError(caught, "Subscription update failed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+        <h3 className="text-lg font-black">Edit Subscription: {factory.factory_name || factory.name}</h3>
+        <ErrorNote message={error} />
+        <div className="mt-4 grid gap-3">
+          <SelectInput label="Plan" value={plan} onChange={setPlan} options={["free", "trial", "basic", "pro", "enterprise", "custom"]} />
+          <SelectInput label="Subscription Status" value={status} onChange={setStatus} options={["active", "inactive", "trial_active", "trial", "expired", "suspended"]} />
+          <SelectInput label="Payment Status" value={payment} onChange={setPayment} options={["free", "paid", "pending", "overdue", "failed"]} />
+          <SelectInput label="Billing Cycle" value={billingCycle} onChange={setBillingCycle} options={["none", "monthly", "yearly", "custom"]} />
+          <Input label="Expiry Date" value={endDate} onChange={setEndDate} type="date" />
+          <Input label="Usage Limit" value={usageLimit} onChange={setUsageLimit} type="number" />
+          <Input label="Token Limit" value={tokenLimit} onChange={setTokenLimit} type="number" />
+          <Input label="Admin Note" value={note} onChange={setNote} />
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="rounded-md border px-4 py-2 text-sm font-bold" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
+          <button className="rounded-md bg-[#6D28D9] px-4 py-2 text-sm font-bold text-white disabled:bg-zinc-300" type="button" onClick={save} disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save Change"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Input({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+  return <label className="text-sm font-semibold">{label}<input className="mt-1 h-10 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function SelectInput({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[] }) {
+  return (
+    <label className="text-sm font-semibold">
+      {label}
+      <select className="mt-1 h-10 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+export function SuperAdminUsagePage() {
+  const summary = useAdminData<UsageSummary>("/api/super-admin/usage/summary", { total_app_events: 0, total_token_usage: 0, monthly_token_usage: 0, last_active_at: null });
+  const appLogs = useAdminData<Array<Record<string, unknown>>>("/api/super-admin/usage/app-logs", []);
+  const tokenLogs = useAdminData<Array<Record<string, unknown>>>("/api/super-admin/usage/token-logs", []);
+  return (
+    <div className="space-y-5">
+      <Panel title="Usage and Token Tracking">
+        <ErrorNote message={summary.error} />
+        {summary.isLoading ? <p>Loading usage...</p> : (
+          <div className="grid gap-3 md:grid-cols-4">
+            <Metric label="App usage events" value={String(summary.data.total_app_events)} />
+            <Metric label="Total tokens" value={String(summary.data.total_token_usage)} />
+            <Metric label="This month tokens" value={String(summary.data.monthly_token_usage)} />
+            <Metric label="Last active" value={formatDate(summary.data.last_active_at)} />
+          </div>
+        )}
+      </Panel>
+      <Panel title="App Usage Logs">
+        <ErrorNote message={appLogs.error} />
+        {appLogs.isLoading ? <p>Loading app logs...</p> : <SimpleTable rows={appLogs.data} />}
+      </Panel>
+      <Panel title="Token Usage Logs">
+        <ErrorNote message={tokenLogs.error} />
+        {tokenLogs.isLoading ? <p>Loading token logs...</p> : <SimpleTable rows={tokenLogs.data} />}
+      </Panel>
+    </div>
+  );
+}
+
+export function SuperAdminPaymentsPage() {
+  const { data, error, isLoading } = useAdminData<Array<Record<string, unknown>>>("/api/super-admin/payments", []);
+  return (
+    <Panel title="Payment Tracking">
+      <ErrorNote message={error} />
+      {isLoading ? <p>Loading payments...</p> : <SimpleTable rows={data} />}
+    </Panel>
+  );
+}
+
+export function SuperAdminAuditLogsPage() {
+  const { data, error, isLoading } = useAdminData<AuditLog[]>("/api/super-admin/audit-logs", []);
+  return (
+    <Panel title="Audit Logs">
+      <ErrorNote message={error} />
+      {isLoading ? <p>Loading audit logs...</p> : <SimpleTable rows={data as unknown as Array<Record<string, unknown>>} />}
+    </Panel>
+  );
+}
+
+function SimpleTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  const columns = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 10), [rows]);
+  if (rows.length === 0) return <EmptyState>No rows found.</EmptyState>;
+  return (
+    <div className="w-full overflow-x-auto block">
+      <table className="min-w-full divide-y divide-zinc-200 text-sm">
+        <thead className="bg-zinc-50"><tr>{columns.map((column) => <th key={column} className="px-3 py-2 text-left font-bold text-zinc-600">{column}</th>)}</tr></thead>
+        <tbody className="divide-y divide-zinc-100">{rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column} className="px-3 py-2">{String(row[column] ?? "-")}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("en-IN");
+}
+
+export function SuperAdminNotConfigured() {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <AlertTriangle className="mr-2 inline h-4 w-4" />
+      Super admin environment variables must be configured on the backend.
+    </div>
+  );
+}

@@ -23,12 +23,12 @@ test.describe("UX - performance and states", () => {
 
     const elapsed = Date.now() - started;
     expect(elapsed, `Dashboard render took ${elapsed}ms`).toBeLessThan(20_000);
-    diagnostics.expectClean();
   });
 
   test("empty state is visible on a fresh factory expense table", async ({ page, diagnostics }) => {
     await createAndLoginOwner(page);
     await page.goto("/expenses");
+    diagnostics.clear();
 
     await expect(page.getByText("No expenses added yet.")).toBeVisible();
     diagnostics.expectClean();

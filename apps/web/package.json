@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "test:e2e": "playwright test",
-    "test:e2e:local": "playwright test e2e/tests/local",
+    "test:e2e:local": "playwright test e2e/tests/local --workers=1",
     "test:e2e:prod": "playwright test e2e/tests/production",
     "test:e2e:ux": "playwright test e2e/tests/ux",
     "test:e2e:headed": "playwright test --headed",

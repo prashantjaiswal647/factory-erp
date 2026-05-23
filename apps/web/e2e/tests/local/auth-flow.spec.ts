@@ -63,4 +63,46 @@ test.describe("local auth and subscription-safe startup", () => {
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByRole("heading", { name: "Secure Login" })).toBeVisible();
   });
+
+  for (const statusCode of [404, 500]) {
+    test(`dashboard loads with subscription fallback when subscription API returns ${statusCode}`, async ({ page, diagnostics }) => {
+      const user = uniqueLocalUser();
+      const signup = new SignupPage(page);
+      const login = new LoginPage(page);
+      const dashboard = new DashboardPage(page);
+      let legacySubscriptionStatusCalls = 0;
+
+      await page.route("**/api/v1/dashboard/subscription-status**", async (route) => {
+        legacySubscriptionStatusCalls += 1;
+        await route.fulfill({
+          status: statusCode,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Forced legacy subscription-status failure" }),
+        });
+      });
+      await page.route("**/api/v1/users/me/subscription**", async (route) => {
+        await route.fulfill({
+          status: statusCode,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Forced subscription profile failure" }),
+        });
+      });
+
+      await signup.goto();
+      await signup.signup(user);
+      await login.login(user.phone, user.password);
+
+      await dashboard.expectLoaded();
+      await expect(page.getByTestId("subscription-status-card")).toBeVisible();
+      await expect(page.getByTestId("subscription-fallback-message")).toHaveText("Subscription status unavailable");
+      expect(legacySubscriptionStatusCalls).toBe(0);
+      expect(
+        diagnostics.entries.filter(
+          (entry) =>
+            entry.type === "console" &&
+            /Error fetching subscription|AxiosError/i.test(entry.message),
+        ),
+      ).toEqual([]);
+    });
+  }
 });

@@ -1,5 +1,6 @@
 import { expect, test } from "../../fixtures/diagnostics";
 import { createAndLoginOwner } from "../../fixtures/auth";
+import { DashboardPage } from "../../pages/DashboardPage";
 
 test.describe("UX - navigation", () => {
   test("sidebar navigation highlights active route and browser history works", async ({ page, diagnostics }) => {
@@ -14,8 +15,7 @@ test.describe("UX - navigation", () => {
     await expect(page.getByRole("link", { name: "Inventory" })).toHaveClass(/bg-\[#F3E8FF\]/);
 
     await page.goBack();
-    await expect(page).toHaveURL(/\/dashboard$/);
-    await expect(page.getByRole("heading", { name: "Live Factory Overview" })).toBeVisible();
+    await new DashboardPage(page).expectLoaded();
 
     await page.goForward();
     await expect(page).toHaveURL(/\/inventory$/);

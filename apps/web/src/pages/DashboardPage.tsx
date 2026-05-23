@@ -51,7 +51,7 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError("");
     try {
-      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, pendingRes, duesRes] = await Promise.all([
+      const results = await Promise.allSettled([
         getDashboardWorkers(),
         getDashboardMachines(),
         getDashboardMaterials(),
@@ -62,15 +62,30 @@ export default function DashboardPage() {
         user?.role === "Owner" ? getPendingSales() : Promise.resolve({ data: [] as PendingSale[] }),
         user?.role === "Owner" ? getPendingPaymentDues() : Promise.resolve({ data: [] as PendingDue[] })
       ]);
-      setWorkers(workerRes.data);
-      setMachines(machineRes.data);
-      setMaterials(materialRes.data);
-      setCustomers(customerRes.data);
-      setInventory(inventoryRes.data);
-      setProductionAlerts(alertRes.data);
-      setAiInsights(aiRes.data);
-      setPendingSales(pendingRes.data);
-      setPendingDues(duesRes.data);
+
+      const rejected = results.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected" && axios.isAxiosError(rejected.reason) && rejected.reason.response?.status === 401) {
+        localStorage.clear();
+        setError("Session expired. Please log in again.");
+        navigate("/login", { replace: true });
+        return;
+      }
+
+      const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, pendingRes, duesRes] = results;
+      if (workerRes.status === "fulfilled") setWorkers(workerRes.value.data);
+      if (machineRes.status === "fulfilled") setMachines(machineRes.value.data);
+      if (materialRes.status === "fulfilled") setMaterials(materialRes.value.data);
+      if (customerRes.status === "fulfilled") setCustomers(customerRes.value.data);
+      if (inventoryRes.status === "fulfilled") setInventory(inventoryRes.value.data);
+      if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
+      if (aiRes.status === "fulfilled") setAiInsights(aiRes.value.data);
+      if (pendingRes.status === "fulfilled") setPendingSales(pendingRes.value.data);
+      if (duesRes.status === "fulfilled") setPendingDues(duesRes.value.data);
+
+      if (rejected?.status === "rejected") {
+        const detail = axios.isAxiosError(rejected.reason) ? rejected.reason.response?.data?.detail : null;
+        setError(`Some dashboard data could not be refreshed: ${typeof detail === "string" ? detail : "showing available data."}`);
+      }
     } catch (caught) {
       if (axios.isAxiosError(caught) && caught.response?.status === 401) {
         localStorage.clear();
@@ -184,16 +199,12 @@ export default function DashboardPage() {
     return <div className="rounded-lg border border-[#E5E7EB] bg-white p-8 text-sm text-[#4B5563]">Loading live factory overview...</div>;
   }
 
-  if (error) {
-    return <div className="rounded-lg border border-[#DC2626]/30 bg-[#DC2626]/10 p-8 text-sm font-medium text-[#DC2626]">{error}</div>;
-  }
-
   return (
     <div className="space-y-6">
       {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#111827]">Live Factory Overview</h1>
+          <h1 className="text-2xl font-semibold text-[#111827]" data-testid="dashboard-heading">Live Factory Overview</h1>
           <p className="mt-1 text-sm text-[#4B5563]">Workers, machines, material mapping, and opening stock status.</p>
         </div>
         <button className="inline-flex h-10 items-center gap-2 rounded-md border border-[#E5E7EB] bg-white px-4 text-sm font-semibold text-[#4B5563] hover:bg-[#FFF7ED]" type="button" onClick={load}>
@@ -201,6 +212,12 @@ export default function DashboardPage() {
           Refresh
         </button>
       </header>
+
+      {error ? (
+        <div className="rounded-lg border border-[#F59E0B]/30 bg-[#F59E0B]/10 p-4 text-sm font-medium text-[#92400E]">
+          {error}
+        </div>
+      ) : null}
 
       {user?.role === "Owner" ? <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm">
         <button className="flex w-full items-center justify-between gap-4 text-left" type="button" onClick={() => setIsApprovalsOpen((current) => !current)}>

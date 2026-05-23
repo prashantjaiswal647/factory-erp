@@ -128,3 +128,10 @@ CADDY_HTTPS_PORT=8443:443
 # Local n8n network settings
 N8N_PROTOCOL=http
 WEBHOOK_URL=http://localhost:5678/
+
+# Temporary Playwright/UX test diagnostics
+apps/web/all-playwright-errors.txt
+apps/web/playwright-output.txt
+apps/web/ux-errors.txt
+*errors.txt
+*output.txt

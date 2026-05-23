@@ -14,7 +14,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import Factory, OTPStore, User
+from models import AppUsageLog, Factory, OTPStore, User
 
 try:
     from google.auth.transport import requests as google_requests
@@ -554,6 +554,17 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
         user.phone_number_normalized = normalized_phone_digits_for_lookup(user.phone_number)
     user_uuid = ensure_user_uuid(user, db)
     ensure_factory_trial(user.factory)
+    if user.factory_id:
+        db.add(
+            AppUsageLog(
+                factory_id=user.factory_id,
+                user_id=user.id,
+                event_type="login",
+                route_or_module="auth",
+                method="POST",
+                meta={"role": user.role},
+            )
+        )
     db.commit()
     db.refresh(user)
     subject = user.phone_number if user.phone_number else user.username

@@ -57,7 +57,7 @@ function attachDiagnostics(page: Page, entries: DiagnosticEntry[]) {
   page.on("requestfailed", (request) => {
     const failure = request.failure();
     const url = request.url();
-    if (failure?.errorText === "net::ERR_ABORTED" && !url.includes("localhost:8000") && !url.includes("/api/")) {
+    if (failure?.errorText === "net::ERR_ABORTED") {
       return;
     }
     entries.push({

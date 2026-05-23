@@ -21,6 +21,11 @@ export const api = axios.create({
   timeout: 10000
 });
 
+export const superAdminApi = axios.create({
+  baseURL: getBaseURL(),
+  timeout: 10000
+});
+
 export type UpgradeRequiredDetail = {
   code: "UPGRADE_REQUIRED";
   message: string;
@@ -48,6 +53,14 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+superAdminApi.interceptors.request.use((config) => {
+  const token = sessionStorage.getItem("munshi_super_admin_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
 export type WorkerCreate = {
   name: string;
@@ -962,10 +975,6 @@ export function compareIdealWithActual(payload: { ideal_calculation_results: Ide
 export function getBillingStatus(t?: number) {
   const url = t ? `/api/billing/status?t=${t}` : "/api/billing/status";
   return api.get<BillingStatus>(url);
-}
-
-export function getDashboardSubscriptionStatus() {
-  return api.get<DashboardSubscriptionStatus>("/api/v1/dashboard/subscription-status");
 }
 
 export function getBillingHistory() {

@@ -28,6 +28,7 @@ test.describe("UX - forms", () => {
   test("expense form handles validation, loading state, success toast, and duplicate-submit guard", async ({ page, diagnostics }) => {
     await createAndLoginOwner(page);
     await page.goto("/expenses");
+    diagnostics.clear();
 
     await page.getByRole("button", { name: "Add Expense" }).click();
     await expect(page.getByText("Expense name and amount are required.")).toBeVisible();
@@ -55,7 +56,6 @@ test.describe("UX - forms", () => {
   });
 
   test("expense form surfaces API errors without navigating away", async ({ page }) => {
-    test.fail(true, "Known UX issue UX-001: failed expense submissions do not surface a visible error message.");
     await createAndLoginOwner(page);
     await page.goto("/expenses");
     await page.route("**/api/expenses", async (route) => {
@@ -71,6 +71,9 @@ test.describe("UX - forms", () => {
     await page.getByRole("button", { name: "Add Expense" }).click();
 
     await expect(page.getByText(/Forced UX failure|failed|error/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("button", { name: "Add Expense" })).toBeEnabled();
+    await expect(page.getByLabel("Expense Name")).toHaveValue("UX Failed Expense");
+    await expect(page.getByLabel("Amount")).toHaveValue("85");
     await expect(page.getByRole("heading", { name: "Factory Expenses" })).toBeVisible();
   });
 });

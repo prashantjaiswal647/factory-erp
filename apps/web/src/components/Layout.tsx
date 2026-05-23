@@ -5,7 +5,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { getDashboardSubscriptionStatus, getUserSubscription } from "../lib/api";
+import { getUserSubscription } from "../lib/api";
 import type { DashboardSubscriptionStatus, UserSubscriptionResponse } from "../lib/api";
 
 type NavigationItem = {
@@ -44,6 +44,7 @@ export default function Layout() {
   // Dynamic subscription tracking
   const [subData, setSubData] = useState<UserSubscriptionResponse | null>(null);
   const [layoutStatus, setLayoutStatus] = useState<DashboardSubscriptionStatus | null>(null);
+  const [isSubscriptionUnavailable, setIsSubscriptionUnavailable] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(() => {
     if (typeof window !== "undefined") {
       return sessionStorage.getItem("dismiss_banner") === "true";
@@ -53,30 +54,60 @@ export default function Layout() {
 
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
 
+  function buildLayoutStatus(data: UserSubscriptionResponse, role: UserRole): DashboardSubscriptionStatus {
+    const daysLeft = Number(data.days_left ?? 0);
+    const accessAllowed = data.access_allowed === true;
+    const isExpired = !accessAllowed;
+    let alertState: DashboardSubscriptionStatus["alert_state"] = "none";
+    if (isExpired) {
+      alertState = "expired";
+    } else if (daysLeft > 0 && daysLeft <= 3) {
+      alertState = "critical";
+    } else if (daysLeft > 0 && daysLeft <= 10) {
+      alertState = "warning";
+    }
+
+    return {
+      access_allowed: accessAllowed,
+      alert_state: alertState,
+      should_warn: accessAllowed && daysLeft > 0 && daysLeft <= 10,
+      is_expired: isExpired,
+      days_left: daysLeft,
+      plan_name: data.effective_plan || data.plan_name || "Free Trial",
+      subscription_status: data.effective_status || data.subscription_status,
+      payment_status: data.payment_status,
+      subscription_start: null,
+      subscription_end: data.effective_expires_at || data.subscription_end_date || data.plan_expires_at || data.trial_end_date || null,
+      server_time: data.server_time,
+      role
+    };
+  }
+
   async function refreshSubscriptionState() {
-    const [data, statusResponse] = await Promise.all([
-      getUserSubscription(Date.now()),
-      getDashboardSubscriptionStatus()
-    ]);
+    if (!user) return;
+    const data = await getUserSubscription(Date.now());
     setSubData(data);
-    setLayoutStatus(statusResponse.data);
+    setLayoutStatus(buildLayoutStatus(data, user.role));
+    setIsSubscriptionUnavailable(false);
   }
 
   useEffect(() => {
     let active = true;
     if (!user) return;
+    const currentUser = user;
     async function fetchSub() {
       try {
-        const [data, statusResponse] = await Promise.all([
-          getUserSubscription(Date.now()),
-          getDashboardSubscriptionStatus()
-        ]);
+        const data = await getUserSubscription(Date.now());
         if (active) {
           setSubData(data);
-          setLayoutStatus(statusResponse.data);
+          setLayoutStatus(buildLayoutStatus(data, currentUser.role));
+          setIsSubscriptionUnavailable(false);
         }
-      } catch (err) {
-        console.error("Error fetching subscription:", err);
+      } catch {
+        if (active) {
+          setLayoutStatus(null);
+          setIsSubscriptionUnavailable(true);
+        }
       }
     }
     fetchSub();
@@ -121,8 +152,8 @@ export default function Layout() {
     }
     try {
       await refreshSubscriptionState();
-    } catch (err) {
-      console.error("Error refreshing subscription:", err);
+    } catch {
+      setIsSubscriptionUnavailable(true);
     }
   }
 
@@ -278,7 +309,15 @@ export default function Layout() {
               <RotateCw className="h-4 w-4 transition-transform duration-500 group-hover:rotate-180" />
             </button>
 
-            {isTrialActive ? (
+            <div data-testid="subscription-status-card">
+            {isSubscriptionUnavailable ? (
+              <span
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-amber-300 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-sm"
+                data-testid="subscription-fallback-message"
+              >
+                Subscription status unavailable
+              </span>
+            ) : isTrialActive ? (
               <button
                 className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-[#F59E0B]/40 bg-[#F59E0B]/15 px-4 text-sm font-bold text-[#111827] shadow-sm transition hover:bg-[#F59E0B]/25"
                 type="button"
@@ -294,6 +333,7 @@ export default function Layout() {
                 Plan: {formatPlanName(planName)}
               </span>
             ) : null}
+            </div>
 
             <div className="relative">
               <button

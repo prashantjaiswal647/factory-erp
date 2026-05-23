@@ -2,7 +2,14 @@ import { defineConfig, devices } from "@playwright/test";
 
 const isProductionSuite = process.argv.some((arg) => arg.includes("e2e/tests/production"));
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || (isProductionSuite ? "https://munshiai.co.in" : "http://localhost:5173");
-const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:5173)?/i.test(baseURL);
+const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(baseURL);
+const localPort = (() => {
+  try {
+    return new URL(baseURL).port || "5173";
+  } catch {
+    return "5173";
+  }
+})();
 
 export default defineConfig({
   testDir: "./e2e/tests",
@@ -26,9 +33,9 @@ export default defineConfig({
   ],
   webServer: isLocal
     ? {
-        command: "npm run dev",
+        command: `npm run dev -- --port ${localPort}`,
         url: baseURL,
-        reuseExistingServer: true,
+        reuseExistingServer: !process.env.CI && process.env.PLAYWRIGHT_REUSE_SERVER === "1",
         timeout: 120_000,
       }
     : undefined,

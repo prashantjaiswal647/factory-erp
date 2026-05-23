@@ -26,6 +26,18 @@ import StaffManagement from "./pages/StaffManagement";
 import StorefrontPage from "./pages/StorefrontPage";
 import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
 import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
+import {
+  SuperAdminAuditLogsPage,
+  SuperAdminDashboardPage,
+  SuperAdminFactoriesPage,
+  SuperAdminFactoryDetailPage,
+  SuperAdminLoginPage,
+  SuperAdminOwnersPage,
+  SuperAdminPaymentsPage,
+  SuperAdminRoute,
+  SuperAdminSubscriptionsPage,
+  SuperAdminUsagePage,
+} from "./pages/SuperAdminPages";
 import UnauthorizedPage from "./pages/UnauthorizedPage";
 
 function RoleLanding() {
@@ -48,6 +60,17 @@ export default function App() {
       <Route path="store/:storeToken/success" element={<StorefrontSuccessPage />} />
       <Route path="storefront/:storeToken" element={<StorefrontPage />} />
       <Route path="storefront/:storeToken/success" element={<StorefrontSuccessPage />} />
+      <Route path="munshi-control-room" element={<SuperAdminLoginPage />} />
+      <Route path="munshi-control-room" element={<SuperAdminRoute />}>
+        <Route path="dashboard" element={<SuperAdminDashboardPage />} />
+        <Route path="owners" element={<SuperAdminOwnersPage />} />
+        <Route path="factories" element={<SuperAdminFactoriesPage />} />
+        <Route path="factories/:factoryId" element={<SuperAdminFactoryDetailPage />} />
+        <Route path="subscriptions" element={<SuperAdminSubscriptionsPage />} />
+        <Route path="payments" element={<SuperAdminPaymentsPage />} />
+        <Route path="usage" element={<SuperAdminUsagePage />} />
+        <Route path="audit-logs" element={<SuperAdminAuditLogsPage />} />
+      </Route>
       <Route
         element={
           <PrivateRoute>

@@ -62,6 +62,8 @@ from models import (
     User,
     Worker,
     HisabSettlement,
+    AppUsageLog,
+    TokenUsageLog,
 )
 from routers.onboarding import router as onboarding_router
 from routers.calculator import router as calculator_router
@@ -75,6 +77,7 @@ from routers import dashboard
 from routers import attendance
 from routers import billing
 from routers import staff
+from routers import super_admin
 from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
@@ -84,7 +87,12 @@ app = FastAPI(title="AI ERP API", version="0.1.0")
 
 
 def parse_cors_origins() -> List[str]:
-    default_origins = ["http://localhost:5173", "http://localhost:3000"]
+    default_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "https://munshiai.co.in",
+    ]
     configured = [
         os.getenv("FRONTEND_ORIGIN"),
         os.getenv("HOSTINGER_DOMAIN"),
@@ -108,7 +116,7 @@ def parse_cors_origins() -> List[str]:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -132,6 +140,7 @@ app.include_router(attendance.router)
 app.include_router(billing.router)
 app.include_router(staff.router)
 app.include_router(staff.v1_router)
+app.include_router(super_admin.router)
 app.include_router(expenses.router)
 app.include_router(integrations.router)
 app.include_router(machine_onboarding.router)
@@ -996,10 +1005,11 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) NOT NULL DEFAULT 'payment_pending'",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS address TEXT",
         "ALTER TABLE factories DROP CONSTRAINT IF EXISTS ck_factories_subscription_status",
         (
             "ALTER TABLE factories ADD CONSTRAINT ck_factories_subscription_status "
-            "CHECK (subscription_status IN ('trial_active', 'trial_expired', 'active', 'expired', 'cancelled', 'payment_pending', 'trial'))"
+            "CHECK (subscription_status IN ('trial_active', 'trial_expired', 'active', 'inactive', 'expired', 'cancelled', 'payment_pending', 'trial', 'suspended'))"
         ),
         "UPDATE factories SET subscription_status = 'trial_active' WHERE subscription_status = 'trial'",
         (
@@ -1018,6 +1028,9 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_expires_at TIMESTAMP WITH TIME ZONE",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_reason TEXT",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS override_updated_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS usage_limit INTEGER",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS token_limit INTEGER",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS admin_note TEXT",
         "UPDATE factories SET plan_name = COALESCE(active_plan, 'Free Trial') WHERE plan_name IS NULL",
         "UPDATE factories SET subscription_start = subscription_start_date WHERE subscription_start IS NULL AND subscription_start_date IS NOT NULL",
         "UPDATE factories SET subscription_end = subscription_end_date WHERE subscription_end IS NULL AND subscription_end_date IS NOT NULL",
@@ -1063,9 +1076,59 @@ def ensure_runtime_schema():
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         ),
+        (
+            "CREATE TABLE IF NOT EXISTS super_admin_audit_logs ("
+            "id SERIAL PRIMARY KEY, "
+            "admin_email VARCHAR(255) NOT NULL, "
+            "action_type VARCHAR(100) NOT NULL, "
+            "entity_type VARCHAR(100) NOT NULL, "
+            "entity_id VARCHAR(100), "
+            "old_value JSONB, "
+            "new_value JSONB, "
+            "note TEXT, "
+            "ip_address VARCHAR(100), "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS app_usage_logs ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "user_id INTEGER REFERENCES users(id), "
+            "event_type VARCHAR(100) NOT NULL, "
+            "route_or_module VARCHAR(255), "
+            "method VARCHAR(20), "
+            "meta JSONB, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS token_usage_logs ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "user_id INTEGER REFERENCES users(id), "
+            "provider VARCHAR(100), "
+            "model VARCHAR(255), "
+            "feature_name VARCHAR(255) NOT NULL, "
+            "prompt_tokens INTEGER, "
+            "completion_tokens INTEGER, "
+            "total_tokens INTEGER, "
+            "estimated_cost NUMERIC(14, 6), "
+            "meta JSONB, "
+            "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
         "CREATE INDEX IF NOT EXISTS ix_custom_plan_enquiries_factory_id ON custom_plan_enquiries (factory_id)",
         "CREATE INDEX IF NOT EXISTS ix_demo_booking_requests_factory_id ON demo_booking_requests (factory_id)",
         "CREATE INDEX IF NOT EXISTS ix_subscription_payments_factory_id ON subscription_payments (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_super_admin_audit_logs_created_at ON super_admin_audit_logs (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_super_admin_audit_logs_entity ON super_admin_audit_logs (entity_type, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_app_usage_logs_factory_id ON app_usage_logs (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_app_usage_logs_user_id ON app_usage_logs (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_app_usage_logs_created_at ON app_usage_logs (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_token_usage_logs_factory_id ON token_usage_logs (factory_id)",
+        "CREATE INDEX IF NOT EXISTS ix_token_usage_logs_user_id ON token_usage_logs (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_token_usage_logs_created_at ON token_usage_logs (created_at)",
         "CREATE INDEX IF NOT EXISTS ix_factories_subscription_end_date ON factories (subscription_end_date)",
         "CREATE INDEX IF NOT EXISTS ix_factories_subscription_end ON factories (subscription_end)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
@@ -2726,7 +2789,7 @@ def ask_ai(
     if payload.system_prompt:
         chat_history = [{"role": "system", "content": payload.system_prompt}, *chat_history]
 
-    return process_factory_message(
+    response = process_factory_message(
         message=payload.message,
         session_id=payload.session_id,
         factory_id=current_user.factory_id,
@@ -2734,6 +2797,31 @@ def ask_ai(
         chat_history=chat_history,
         actor_role=current_user.role,
     )
+    db.add(
+        AppUsageLog(
+            factory_id=current_user.factory_id,
+            user_id=current_user.id,
+            event_type="ai_supervisor_call",
+            route_or_module="ai-supervisor",
+            method="POST",
+            meta={"action_taken": response.action_taken, "status": response.status},
+        )
+    )
+    db.add(
+        TokenUsageLog(
+            factory_id=current_user.factory_id,
+            user_id=current_user.id,
+            provider=os.getenv("AI_PROVIDER") or "unknown",
+            model=os.getenv("OPENAI_MODEL") or os.getenv("GROQ_MODEL"),
+            feature_name="ai-supervisor",
+            prompt_tokens=None,
+            completion_tokens=None,
+            total_tokens=None,
+            meta={"note": "Provider token counts are not exposed in this flow yet."},
+        )
+    )
+    db.commit()
+    return response
 
 
 @app.get("/api/ai/context")
