@@ -34,7 +34,7 @@ export default function ProductionLog() {
 
       try {
         const response = await api.get<ProductionLogRow[]>("/report/production-log");
-        setRows(response.data);
+        setRows(Array.isArray(response.data) ? response.data : []);
       } catch {
         setError("Unable to load production log.");
       } finally {

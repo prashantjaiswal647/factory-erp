@@ -27,7 +27,7 @@ export default function CustomersPage() {
     setIsLoadingCustomers(true);
     try {
       const response = await searchCustomers("");
-      setCustomers(response.data);
+      setCustomers(Array.isArray(response.data) ? response.data : []);
     } finally {
       setIsLoadingCustomers(false);
     }
@@ -38,9 +38,10 @@ export default function CustomersPage() {
   }, []);
 
   const filteredCustomers = useMemo(() => {
+    const cleanCustomers = Array.isArray(customers) ? customers : [];
     const query = listQuery.trim().toLowerCase();
-    if (!query) return customers;
-    return customers.filter((customer) =>
+    if (!query) return cleanCustomers;
+    return cleanCustomers.filter((customer) =>
       [customer.name, customer.company_name || "", customer.phone_number, customer.place].some((value) => value.toLowerCase().includes(query))
     );
   }, [customers, listQuery]);

@@ -28,7 +28,7 @@ export default function FactoryExpensesPage() {
 
   async function loadExpenses() {
     const response = await getFactoryExpenses();
-    setExpenses(response.data);
+    setExpenses(Array.isArray(response.data) ? response.data : []);
   }
 
   async function submit() {

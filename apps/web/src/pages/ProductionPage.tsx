@@ -38,20 +38,22 @@ export default function ProductionPage() {
 
   async function loadOptions() {
     const [workerRes, machineRes, finalStockRes] = await Promise.all([getDashboardWorkers(), getDashboardMachines(), getFinalStockOptions()]);
-    const variations = finalStockRes.data;
+    const variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
     const firstVariation = variations[0];
-    setWorkers(workerRes.data);
-    setMachines(machineRes.data);
+    const cleanWorkers = Array.isArray(workerRes.data) ? workerRes.data : [];
+    const cleanMachines = Array.isArray(machineRes.data) ? machineRes.data : [];
+    setWorkers(cleanWorkers);
+    setMachines(cleanMachines);
     setFinalStockOptions(variations);
     setForm((current) => ({
       ...current,
-      worker_id: current.worker_id || workerRes.data[0]?.id || 0,
-      machine_id: current.machine_id || machineRes.data[0]?.id || 0,
+      worker_id: current.worker_id || cleanWorkers[0]?.id || 0,
+      machine_id: current.machine_id || cleanMachines[0]?.id || 0,
       product_id: current.product_id || firstVariation?.id || null,
-      product_size_ml: current.product_size_ml || firstVariation?.product_size_ml || machineRes.data[0]?.mould_size_ml || null,
+      product_size_ml: current.product_size_ml || firstVariation?.product_size_ml || cleanMachines[0]?.mould_size_ml || null,
       variety: current.variety || firstVariation?.variety || "Plain White",
       packaging_size: current.packaging_size || firstVariation?.packaging_size || firstVariation?.packaging_size_name || current.packaging_size_name,
-      packaging_size_name: firstVariation?.packaging_size_name || (machineRes.data[0]?.mould_size_ml ? `${machineRes.data[0].mould_size_ml}ml Standard Box` : current.packaging_size_name),
+      packaging_size_name: firstVariation?.packaging_size_name || (cleanMachines[0]?.mould_size_ml ? `${cleanMachines[0].mould_size_ml}ml Standard Box` : current.packaging_size_name),
       pieces_per_packet: firstVariation?.pieces_per_packet || current.pieces_per_packet,
       packets_per_box_limit: firstVariation?.packets_per_box || firstVariation?.packets_per_box_limit || current.packets_per_box_limit
     }));
@@ -242,7 +244,8 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
 }
 
 function ProductSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
-  const uniqueProducts = Array.from(new Map(options.map((item) => [`${item.product_size_ml}-${item.variety}`, item])).values());
+  const cleanOptions = Array.isArray(options) ? options : [];
+  const uniqueProducts = Array.from(new Map(cleanOptions.map((item) => [`${item.product_size_ml}-${item.variety}`, item])).values());
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
@@ -259,12 +262,13 @@ function ProductSelectField({ label, value, options, onChange }: { label: string
 }
 
 function VariationSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
+  const cleanOptions = Array.isArray(options) ? options : [];
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
       <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
         <option value={0}>Select Variation</option>
-        {options.map((option) => (
+        {cleanOptions.map((option) => (
           <option key={option.id} value={option.id}>
             {option.product_size_ml}ml - {option.pieces_per_packet || 0} Pcs/Pkt - {option.packaging_size || option.packaging_size_name}
           </option>

@@ -80,7 +80,7 @@ export default function StaffManagement() {
     setError("");
     try {
       const response = await getStaffMembers();
-      setStaff(response.data);
+      setStaff(Array.isArray(response.data) ? response.data : []);
     } catch (caught) {
       setError("Staff list load failed.");
     } finally {
@@ -94,9 +94,10 @@ export default function StaffManagement() {
 
   // Filter staff by search query
   const filteredStaff = useMemo(() => {
+    const cleanStaff = Array.isArray(staff) ? staff : [];
     const loweredQuery = query.trim().toLowerCase();
-    if (!loweredQuery) return staff;
-    return staff.filter((member) =>
+    if (!loweredQuery) return cleanStaff;
+    return cleanStaff.filter((member) =>
       [member.full_name || "", member.phone_number || "", displayRole(member.role)].some((value) =>
         value.toLowerCase().includes(loweredQuery)
       )
@@ -138,15 +139,14 @@ export default function StaffManagement() {
         role: createForm.role,
         status: "active"
       };
-
       const response = await createStaffMember(payload);
       const newStaff = response.data;
-      
       setStaff((current) => {
-        if (current.some((item) => item.id === newStaff.id)) {
-          return current;
+        const cleanCurrent = Array.isArray(current) ? current : [];
+        if (cleanCurrent.some((item) => item.id === newStaff.id)) {
+          return cleanCurrent;
         }
-        return [...current, newStaff];
+        return [...cleanCurrent, newStaff];
       });
 
       setToast("Staff account created successfully");

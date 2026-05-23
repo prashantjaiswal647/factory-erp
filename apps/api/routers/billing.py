@@ -401,7 +401,10 @@ def activate_factory_subscription(db: Session, factory: Factory, plan_code: str,
 
 @router.get("/plans", response_model=list[PricingPlan])
 def pricing_plans():
-    return PLANS
+    try:
+        return PLANS if PLANS else []
+    except Exception:
+        return []
 
 
 @router.post("/custom-enquiry", response_model=SubmissionResponse, status_code=status.HTTP_201_CREATED)

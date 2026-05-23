@@ -615,8 +615,9 @@ function formatRupees(amountPaise: number) {
 }
 
 function mergePricingPlans(serverPlans: PricingPlan[]) {
+  const cleanServerPlans = Array.isArray(serverPlans) ? serverPlans : [];
   return fallbackPlans.map((fallback) => {
-    const serverPlan = serverPlans.find((plan) => plan.code === fallback.code);
+    const serverPlan = cleanServerPlans.find((plan) => plan.code === fallback.code);
     return serverPlan ? { ...fallback, ...serverPlan, features: serverPlan.features?.length ? serverPlan.features : fallback.features } : fallback;
   });
 }

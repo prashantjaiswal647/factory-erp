@@ -25,7 +25,7 @@ export default function CustomerBalances() {
 
       try {
         const response = await api.get<CustomerBalance[]>("/report/customer-balance");
-        setRows(response.data);
+        setRows(Array.isArray(response.data) ? response.data : []);
       } catch {
         setError("Unable to load customer balances.");
       } finally {

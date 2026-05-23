@@ -51,7 +51,12 @@ export default function LiveInventory() {
 
       try {
         const response = await api.get<LiveInventoryReport>("/report/live-inventory");
-        setReport(response.data);
+        const data = response.data;
+        setReport({
+          raw_materials: data && Array.isArray(data.raw_materials) ? data.raw_materials : [],
+          packaging_materials: data && Array.isArray(data.packaging_materials) ? data.packaging_materials : [],
+          finished_goods: data && Array.isArray(data.finished_goods) ? data.finished_goods : []
+        });
       } catch {
         setError("Unable to load live inventory.");
       } finally {
@@ -67,12 +72,12 @@ export default function LiveInventory() {
       return [];
     }
     if (activeTab === "raw") {
-      return report.raw_materials;
+      return Array.isArray(report.raw_materials) ? report.raw_materials : [];
     }
     if (activeTab === "packaging") {
-      return report.packaging_materials;
+      return Array.isArray(report.packaging_materials) ? report.packaging_materials : [];
     }
-    return report.finished_goods;
+    return Array.isArray(report.finished_goods) ? report.finished_goods : [];
   }, [activeTab, report]);
 
   if (isLoading) {

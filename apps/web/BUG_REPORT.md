@@ -548,3 +548,42 @@ apps/web/src/pages/LoginPage.tsx
 
 **How to identify similar bugs in future:**
 If a page has tabs and forms using the same labels, selectors must be scoped to the active form or container.
+
+---
+
+## BUG-005: Service Worker API Cache Interception and Frontend Type Safety Crash
+
+**Bug ID:** BUG-005
+
+**Bug Title:** Service Worker proxy connection fails on `/api/billing/plans` and triggers global React TypeError crash
+
+**Route/Page where bug occurred:** Homepage, Dashboard pages, and data entry forms.
+
+**Steps to reproduce:**
+1. Register a PWA Service Worker (`sw.js`) that captures all fetch requests.
+2. In an environment where backend payment gateway/secrets are not configured, hit a dynamic list API like `GET /api/billing/plans`.
+3. The Service Worker rejects the fetch event promise, yielding `net::ERR_FAILED` and `sw.js:1 Uncaught (in promise) no-response`.
+4. The React client Axios fetch fails to load the plans list, passing a null/undefined structure to the pricing card component.
+5. The component attempts a `.filter()` or `.map()` operation on it, instantly crashing the whole script with `TypeError: R.filter is not a function`.
+
+**Expected behavior:**
+1. Dynamic backend APIs under `/api/*` should never be cached or intercepted by the Service Worker.
+2. If any network fetch fails, the frontend should type-guard the dynamic payload and safely default to an empty list `[]` without crashing the page or logging out the user.
+
+**Actual behavior:**
+The service worker intercepted all API requests, causing a promise rejection network error. The frontend crashed with a TypeError, forcing user session dropouts.
+
+**Root cause analysis:**
+1. Caching of authenticated or dynamic API endpoints inside Service Worker configuration.
+2. Lack of defensive runtime type-checking (`Array.isArray()`) on dynamic network collection arrays in the React frontend.
+
+**Suggested fix:**
+1. Exclude `/api/*` requests from the fetch event handler inside `sw.js` with a pass-through networkOnly filter.
+2. Enforce immutable array checks on all React page collection states before rendering or performing maps/filters.
+
+**Actual implemented fix if safely fixed:**
+1. Added network pass-through bypass right at the top of the Service Worker fetch hook.
+2. Implemented `Array.isArray(x) ? x : []` safety fallbacks across all frontend page state sets and filters.
+3. Updated backend list endpoint responses to gracefully catch exceptions and return `[]` on db errors.
+4. Created an E2E Playwright stability spec asserting safe fallback degradation.
+

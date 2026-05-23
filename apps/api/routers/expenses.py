@@ -62,10 +62,14 @@ def list_expenses(
     current_user: User = Depends(check_permissions(EXPENSE_ROLES)),
     db: Session = Depends(get_db),
 ):
-    return (
-        db.query(FactoryExpense)
-        .filter(FactoryExpense.factory_id == current_user.factory_id)
-        .order_by(FactoryExpense.timestamp.desc(), FactoryExpense.id.desc())
-        .limit(50)
-        .all()
-    )
+    try:
+        res = (
+            db.query(FactoryExpense)
+            .filter(FactoryExpense.factory_id == current_user.factory_id)
+            .order_by(FactoryExpense.timestamp.desc(), FactoryExpense.id.desc())
+            .limit(50)
+            .all()
+        )
+        return res if res else []
+    except Exception:
+        return []

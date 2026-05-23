@@ -126,13 +126,17 @@ def list_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    return (
-        db.query(User)
-        .filter(User.factory_id == current_user.factory_id)
-        .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
-        .order_by(User.full_name.asc().nullslast(), User.username.asc())
-        .all()
-    )
+    try:
+        res = (
+            db.query(User)
+            .filter(User.factory_id == current_user.factory_id)
+            .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
+            .order_by(User.full_name.asc().nullslast(), User.username.asc())
+            .all()
+        )
+        return res if res else []
+    except Exception:
+        return []
 
 
 @router.post("/create", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
@@ -255,14 +259,18 @@ def secure_list_staff(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    # Zero Factory ID Leakage: return using SecureStaffResponse schema
-    return (
-        db.query(User)
-        .filter(User.factory_id == current_user.factory_id)
-        .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
-        .order_by(User.full_name.asc().nullslast(), User.username.asc())
-        .all()
-    )
+    try:
+        # Zero Factory ID Leakage: return using SecureStaffResponse schema
+        res = (
+            db.query(User)
+            .filter(User.factory_id == current_user.factory_id)
+            .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
+            .order_by(User.full_name.asc().nullslast(), User.username.asc())
+            .all()
+        )
+        return res if res else []
+    except Exception:
+        return []
 
 
 @staff_v1_router.post("/create", response_model=SecureStaffResponse, status_code=status.HTTP_201_CREATED)

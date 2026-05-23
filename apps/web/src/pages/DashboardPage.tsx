@@ -72,15 +72,21 @@ export default function DashboardPage() {
       }
 
       const [workerRes, machineRes, materialRes, customerRes, inventoryRes, alertRes, aiRes, pendingRes, duesRes] = results;
-      if (workerRes.status === "fulfilled") setWorkers(workerRes.value.data);
-      if (machineRes.status === "fulfilled") setMachines(machineRes.value.data);
-      if (materialRes.status === "fulfilled") setMaterials(materialRes.value.data);
-      if (customerRes.status === "fulfilled") setCustomers(customerRes.value.data);
-      if (inventoryRes.status === "fulfilled") setInventory(inventoryRes.value.data);
+      if (workerRes.status === "fulfilled") setWorkers(Array.isArray(workerRes.value.data) ? workerRes.value.data : []);
+      if (machineRes.status === "fulfilled") setMachines(Array.isArray(machineRes.value.data) ? machineRes.value.data : []);
+      if (materialRes.status === "fulfilled") {
+        const matData = materialRes.value.data;
+        setMaterials({
+          raw_material_metrics: matData && Array.isArray(matData.raw_material_metrics) ? matData.raw_material_metrics : [],
+          packaging_metrics: matData && Array.isArray(matData.packaging_metrics) ? matData.packaging_metrics : []
+        });
+      }
+      if (customerRes.status === "fulfilled") setCustomers(Array.isArray(customerRes.value.data) ? customerRes.value.data : []);
+      if (inventoryRes.status === "fulfilled") setInventory(Array.isArray(inventoryRes.value.data) ? inventoryRes.value.data : []);
       if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
       if (aiRes.status === "fulfilled") setAiInsights(aiRes.value.data);
-      if (pendingRes.status === "fulfilled") setPendingSales(pendingRes.value.data);
-      if (duesRes.status === "fulfilled") setPendingDues(duesRes.value.data);
+      if (pendingRes.status === "fulfilled") setPendingSales(Array.isArray(pendingRes.value.data) ? pendingRes.value.data : []);
+      if (duesRes.status === "fulfilled") setPendingDues(Array.isArray(duesRes.value.data) ? duesRes.value.data : []);
 
       if (rejected?.status === "rejected") {
         const detail = axios.isAxiosError(rejected.reason) ? rejected.reason.response?.data?.detail : null;
@@ -162,14 +168,17 @@ export default function DashboardPage() {
   }
 
   const stockStatus = useMemo(() => {
-    if (inventory.length === 0) return "Not initialized";
-    if (inventory.some((row) => Number(row.quantity) < 0)) return "Negative stock";
+    const cleanInventory = Array.isArray(inventory) ? inventory : [];
+    if (cleanInventory.length === 0) return "Not initialized";
+    if (cleanInventory.some((row) => Number(row.quantity) < 0)) return "Negative stock";
     return "Ready";
   }, [inventory]);
 
   const materialMappings = useMemo(() => {
-    return materials.raw_material_metrics.map((metric) => {
-      const machine = machines.find((item) => item.mould_size_ml === metric.size_ml_or_mm || item.bottom_size_mm === metric.size_ml_or_mm);
+    const rawMetrics = materials && Array.isArray(materials.raw_material_metrics) ? materials.raw_material_metrics : [];
+    const cleanMachines = Array.isArray(machines) ? machines : [];
+    return rawMetrics.map((metric) => {
+      const machine = cleanMachines.find((item) => item.mould_size_ml === metric.size_ml_or_mm || item.bottom_size_mm === metric.size_ml_or_mm);
       return {
         id: metric.id,
         label: `${metric.size_ml_or_mm}${metric.material_type === "Blank" ? "ml" : "mm"} ${metric.material_type}`,
@@ -177,9 +186,12 @@ export default function DashboardPage() {
         percent: machine ? 100 : 35
       };
     });
-  }, [machines, materials.raw_material_metrics]);
+  }, [machines, materials]);
 
-  const bottomStockRows = useMemo(() => inventory.filter((row) => row.stock_type === "Bottom"), [inventory]);
+  const bottomStockRows = useMemo(() => {
+    const cleanInventory = Array.isArray(inventory) ? inventory : [];
+    return cleanInventory.filter((row) => row.stock_type === "Bottom");
+  }, [inventory]);
 
   useEffect(() => {
     if (!aiInsights?.insights) return;

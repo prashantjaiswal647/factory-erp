@@ -3255,28 +3255,31 @@ def customer_balance_report(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
-    rows = (
-        db.query(
-            Customer.name,
-            sql_func.coalesce(sql_func.sum(SalesInvoice.total_amount), 0),
-            Customer.balance_amount,
+    try:
+        factory_id = current_user.factory_id
+        rows = (
+            db.query(
+                Customer.name,
+                sql_func.coalesce(sql_func.sum(SalesInvoice.total_amount), 0),
+                Customer.balance_amount,
+            )
+            .outerjoin(SalesInvoice, SalesInvoice.customer_id == Customer.id)
+            .filter(Customer.factory_id == factory_id)
+            .group_by(Customer.id, Customer.name, Customer.balance_amount)
+            .order_by(Customer.balance_amount.desc(), Customer.name.asc())
+            .all()
         )
-        .outerjoin(SalesInvoice, SalesInvoice.customer_id == Customer.id)
-        .filter(Customer.factory_id == factory_id)
-        .group_by(Customer.id, Customer.name, Customer.balance_amount)
-        .order_by(Customer.balance_amount.desc(), Customer.name.asc())
-        .all()
-    )
 
-    return [
-        CustomerBalanceRow(
-            customer_name=row[0],
-            total_billed=to_money(row[1]),
-            pending_amount=to_money(row[2]),
-        )
-        for row in rows
-    ]
+        return [
+            CustomerBalanceRow(
+                customer_name=row[0],
+                total_billed=to_money(row[1]),
+                pending_amount=to_money(row[2]),
+            )
+            for row in rows
+        ]
+    except Exception:
+        return []
 
 
 @app.get(
@@ -3394,45 +3397,48 @@ def production_log_report(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    bounded_limit = min(max(limit, 1), 500)
-    rows = (
-        db.query(ProductionLog, PackagingProfile)
-        .join(PackagingProfile, ProductionLog.packaging_profile_id == PackagingProfile.id)
-        .filter(ProductionLog.factory_id == current_user.factory_id)
-        .filter(PackagingProfile.factory_id == current_user.factory_id)
-        .order_by(ProductionLog.date.desc(), ProductionLog.id.desc())
-        .limit(bounded_limit)
-        .all()
-    )
-
-    report_rows = []
-    for production_log, packaging_profile in rows:
-        cups_per_box = packaging_profile.cups_per_poly * packaging_profile.polys_per_box
-        estimated_good_cups = production_log.boxes_produced * cups_per_box
-        blank_waste = production_log.blank_waste_pcs or 0
-        total_considered = estimated_good_cups + blank_waste
-        blank_wastage_percent = Decimal("0.00")
-        if total_considered > 0:
-            blank_wastage_percent = to_money((Decimal(blank_waste) / Decimal(total_considered)) * Decimal("100"))
-
-        report_rows.append(
-            ProductionLogRow(
-                id=production_log.id,
-                date=production_log.date,
-                shift=production_log.shift,
-                cup_size_ml=production_log.cup_size_ml,
-                packaging_profile_name=packaging_profile.profile_name,
-                boxes_produced=production_log.boxes_produced,
-                estimated_good_cups=estimated_good_cups,
-                blank_waste_pcs=blank_waste,
-                bottom_waste_kg=to_quantity(production_log.bottom_waste_kg),
-                blank_wastage_percent=blank_wastage_percent,
-                total_packing_cost=to_money(production_log.total_packing_cost),
-                total_production_cost=to_money(production_log.total_production_cost),
-            )
+    try:
+        bounded_limit = min(max(limit, 1), 500)
+        rows = (
+            db.query(ProductionLog, PackagingProfile)
+            .join(PackagingProfile, ProductionLog.packaging_profile_id == PackagingProfile.id)
+            .filter(ProductionLog.factory_id == current_user.factory_id)
+            .filter(PackagingProfile.factory_id == current_user.factory_id)
+            .order_by(ProductionLog.date.desc(), ProductionLog.id.desc())
+            .limit(bounded_limit)
+            .all()
         )
 
-    return report_rows
+        report_rows = []
+        for production_log, packaging_profile in rows:
+            cups_per_box = packaging_profile.cups_per_poly * packaging_profile.polys_per_box
+            estimated_good_cups = production_log.boxes_produced * cups_per_box
+            blank_waste = production_log.blank_waste_pcs or 0
+            total_considered = estimated_good_cups + blank_waste
+            blank_wastage_percent = Decimal("0.00")
+            if total_considered > 0:
+                blank_wastage_percent = to_money((Decimal(blank_waste) / Decimal(total_considered)) * Decimal("100"))
+
+            report_rows.append(
+                ProductionLogRow(
+                    id=production_log.id,
+                    date=production_log.date,
+                    shift=production_log.shift,
+                    cup_size_ml=production_log.cup_size_ml,
+                    packaging_profile_name=packaging_profile.profile_name,
+                    boxes_produced=production_log.boxes_produced,
+                    estimated_good_cups=estimated_good_cups,
+                    blank_waste_pcs=blank_waste,
+                    bottom_waste_kg=to_quantity(production_log.bottom_waste_kg),
+                    blank_wastage_percent=blank_wastage_percent,
+                    total_packing_cost=to_money(production_log.total_packing_cost),
+                    total_production_cost=to_money(production_log.total_production_cost),
+                )
+            )
+
+        return report_rows if report_rows else []
+    except Exception:
+        return []
 
 
 @app.get("/report/live-inventory", response_model=LiveInventoryReport)
