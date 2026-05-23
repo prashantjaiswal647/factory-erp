@@ -1,6 +1,7 @@
 import { Bot, CheckCircle2, KeyRound, Loader2, Send } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 
+import PasswordInput from "../components/PasswordInput";
 import { getTelegramIntegration, saveTelegramIntegration } from "../lib/api";
 
 export default function Integrations() {
@@ -84,18 +85,15 @@ export default function Integrations() {
             <label className="text-sm font-medium text-zinc-700" htmlFor="telegram-token">
               Bot Token
             </label>
-            <div className="relative">
-              <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-              <input
-                id="telegram-token"
-                className="h-11 w-full rounded-md border border-zinc-200 bg-zinc-50 pl-9 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
-                placeholder="1234567890:AA..."
-                type="password"
-                value={telegramToken}
-                onChange={(event) => setTelegramToken(event.target.value)}
-                disabled={isLoading || isSaving}
-              />
-            </div>
+            <PasswordInput
+              id="telegram-token"
+              value={telegramToken}
+              onChange={setTelegramToken}
+              placeholder="1234567890:AA..."
+              disabled={isLoading || isSaving}
+              leftIcon={KeyRound}
+              data-testid="telegram-token-input"
+            />
           </div>
 
           {message ? <p className="mt-4 text-sm font-medium text-emerald-700">{message}</p> : null}

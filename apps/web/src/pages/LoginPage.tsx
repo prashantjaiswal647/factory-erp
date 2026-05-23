@@ -3,6 +3,7 @@ import axios from "axios";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { roleHomePath } from "../components/PrivateRoute";
 import { useAuth } from "../context/AuthContext";
@@ -222,7 +223,7 @@ export default function LoginPage() {
             <form onSubmit={submitLogin}>
               <div className="space-y-4">
                 <Field label="Email or Mobile Number" placeholder="someone@gmail.com or 9876543210" value={identifier} onChange={setIdentifier} autoComplete="username" />
-                <Field label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" type="password" />
+                <PasswordInput label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" data-testid="staff-password-input" />
               </div>
               <Messages error={error} notice={notice} />
               <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED] disabled:cursor-not-allowed disabled:bg-[#E5E7EB]" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Login with Google"} onClick={startGoogleSignup} type="button">
@@ -247,8 +248,8 @@ export default function LoginPage() {
                   onLocalNumberChange={(phone_number) => setSignupForm({ ...signupForm, phone_number })}
                 />
                 <Field label="Factory Name" value={signupForm.factory_name} onChange={(factory_name) => setSignupForm({ ...signupForm, factory_name })} />
-                <Field label="Password" value={signupForm.password} onChange={(password) => setSignupForm({ ...signupForm, password })} autoComplete="new-password" type="password" />
-                <Field label="Confirm Password" value={signupForm.confirm_password} onChange={(confirm_password) => setSignupForm({ ...signupForm, confirm_password })} autoComplete="new-password" type="password" />
+                <PasswordInput label="Password" value={signupForm.password} onChange={(password) => setSignupForm({ ...signupForm, password })} autoComplete="new-password" data-testid="signup-password-input" />
+                <PasswordInput label="Confirm Password" value={signupForm.confirm_password} onChange={(confirm_password) => setSignupForm({ ...signupForm, confirm_password })} autoComplete="new-password" data-testid="signup-confirm-password-input" />
               </div>
               <Messages error={error} notice={notice} />
               <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#6D28D9] px-4 text-sm font-bold text-white shadow-lg shadow-purple-200 hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]" disabled={isSubmitting} type="submit">

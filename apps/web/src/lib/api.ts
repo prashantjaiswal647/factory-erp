@@ -284,7 +284,8 @@ export type StaffMember = {
   full_name?: string | null;
   phone_number?: string | null;
   role: "Sub-Owner" | "Supervisor" | "Operator";
-  factory_id: number;
+  factory_id?: number | null;
+  last_login_at?: string | null;
 };
 
 export type FactoryExpenseCreate = {
@@ -986,15 +987,54 @@ export function getPricingPlans() {
 }
 
 export function getStaffMembers() {
-  return api.get<StaffMember[]>("/api/staff");
+  return api.get<StaffMember[]>("/api/v1/staff/list");
 }
 
-export function createStaffMember(payload: StaffCreate) {
-  return api.post<StaffMember>("/api/v1/users/create-staff", payload);
+export function createStaffMember(payload: {
+  name: string;
+  phone: string;
+  password: string;
+  role: string;
+  email?: string;
+  confirm_password?: string;
+  status?: string;
+  notes?: string;
+}) {
+  return api.post<StaffMember>("/api/v1/staff/create", payload);
+}
+
+export function updateStaffMember(id: number, payload: {
+  name?: string;
+  phone?: string;
+  password?: string;
+  confirm_password?: string;
+  role?: string;
+  email?: string;
+  status?: string;
+  notes?: string;
+}) {
+  return api.put<StaffMember>(`/api/v1/staff/${id}/update`, payload);
 }
 
 export function deleteStaffMember(id: number) {
-  return api.delete(`/api/staff/${id}`);
+  return api.delete(`/api/v1/staff/${id}/delete`);
+}
+
+export function changePassword(payload: {
+  current_password?: string;
+  new_password: string;
+  confirm_password: string;
+  user_id?: number;
+}) {
+  return api.patch<{ message: string }>("/api/v1/profile/change-password", payload);
+}
+
+export function requestFactoryId(payload: { phone_number: string; country_code?: string }) {
+  return api.post<{ message: string; phone_number: string }>("/api/v1/security/request-factory-id", payload);
+}
+
+export function verifyFactoryId(payload: { phone_number: string; country_code?: string; otp_code: string }) {
+  return api.post<string>("/api/v1/security/verify-factory-id", payload, { responseType: "text" });
 }
 
 export function getFactoryExpenses() {

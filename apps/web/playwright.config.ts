@@ -35,7 +35,7 @@ export default defineConfig({
     ? {
         command: `npm run dev -- --port ${localPort}`,
         url: baseURL,
-        reuseExistingServer: !process.env.CI && process.env.PLAYWRIGHT_REUSE_SERVER === "1",
+        reuseExistingServer: !process.env.CI,
         timeout: 120_000,
       }
     : undefined,

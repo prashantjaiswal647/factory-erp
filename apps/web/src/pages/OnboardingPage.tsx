@@ -98,12 +98,19 @@ export default function OnboardingPage() {
   async function saveWorker() {
     if (!worker.name.trim()) return;
     setIsSaving(true);
-    await createWorker(worker);
-    setToast("Worker saved");
-    setWorker(todayWorker);
-    setStep(1);
-    navigate("/");
-    setIsSaving(false);
+    try {
+      const response = await createWorker(worker);
+      const newWorker = response.data;
+      setToast(`Worker ${newWorker.name || ""} saved`);
+      setWorker(todayWorker);
+      setStep(1);
+      navigate("/");
+    } catch (caught) {
+      console.error("Failed to save worker during onboarding:", caught);
+      setToast("Worker save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function saveMachines() {

@@ -1,10 +1,12 @@
-import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletCards } from "lucide-react";
+import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletCards, ShieldAlert } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 
+import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
-import { getBillingHistory, getBillingStatus, updateUserProfile } from "../lib/api";
+import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
@@ -22,6 +24,59 @@ export default function ProfilePage() {
     phone_country_code: splitE164Phone(user?.phone_number).country.dialCode,
     phone_number: splitE164Phone(user?.phone_number).localNumber
   });
+
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: "",
+    new_password: "",
+    confirm_password: ""
+  });
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState("");
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  async function handlePasswordChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordSuccess("");
+
+    if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+      setPasswordError("All fields are required.");
+      return;
+    }
+
+    if (passwordForm.new_password !== passwordForm.confirm_password) {
+      setPasswordError("New Password and Confirm Password do not match.");
+      return;
+    }
+
+    if (passwordForm.new_password.length < 8) {
+      setPasswordError("Password must be at least 8 characters long.");
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      await changePassword({
+        current_password: passwordForm.current_password,
+        new_password: passwordForm.new_password,
+        confirm_password: passwordForm.confirm_password
+      });
+      setPasswordSuccess("Password changed successfully.");
+      setPasswordForm({
+        current_password: "",
+        new_password: "",
+        confirm_password: ""
+      });
+    } catch (caught) {
+      if (axios.isAxiosError(caught)) {
+        setPasswordError(caught.response?.data?.detail || "Unable to change password. Please try again.");
+      } else {
+        setPasswordError("Unable to change password. Please try again.");
+      }
+    } finally {
+      setIsChangingPassword(false);
+    }
+  }
 
   const displayName = form.full_name || user?.username || "User";
   const initials = useMemo(() => {
@@ -156,9 +211,9 @@ export default function ProfilePage() {
             <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase text-zinc-500">
                 <Building2 className="h-4 w-4 text-brand-700" />
-                Factory ID
+                Factory Workspace
               </div>
-              <p className="mt-3 text-sm font-semibold text-zinc-950">{user?.factory_id ?? "Not assigned"}</p>
+              <p className="mt-3 text-sm font-semibold text-zinc-950">{user?.factory_name ?? "Not assigned"}</p>
             </div>
           </div>
 
@@ -170,6 +225,67 @@ export default function ProfilePage() {
               </button>
             </div>
           ) : null}
+        </form>
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" data-testid="change-password-section">
+        <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">
+          <h2 className="text-lg font-semibold text-zinc-950">Change Password</h2>
+          <p className="text-sm text-zinc-500">Ensure your account is protected with a highly secure password.</p>
+        </div>
+        <form className="p-5 space-y-4" onSubmit={handlePasswordChange}>
+          <div className="grid gap-4 md:grid-cols-3">
+            <PasswordInput
+              id="current-password"
+              label="Current Password"
+              placeholder="Enter current password"
+              value={passwordForm.current_password}
+              onChange={(value) => setPasswordForm((prev) => ({ ...prev, current_password: value }))}
+              data-testid="current-password-input"
+              required
+            />
+            <PasswordInput
+              id="new-password"
+              label="New Password"
+              placeholder="Min 8 characters, 1 letter, 1 number"
+              value={passwordForm.new_password}
+              onChange={(value) => setPasswordForm((prev) => ({ ...prev, new_password: value }))}
+              data-testid="new-password-input"
+              required
+            />
+            <PasswordInput
+              id="confirm-new-password"
+              label="Confirm New Password"
+              placeholder="Repeat your new password"
+              value={passwordForm.confirm_password}
+              onChange={(value) => setPasswordForm((prev) => ({ ...prev, confirm_password: value }))}
+              data-testid="confirm-new-password-input"
+              required
+            />
+          </div>
+
+          {passwordError && (
+            <p className="text-sm font-medium text-red-600 rounded-md border border-red-200 bg-red-50 px-3 py-2" data-testid="change-password-error">
+              {passwordError}
+            </p>
+          )}
+
+          {passwordSuccess && (
+            <p className="text-sm font-medium text-[#16A34A] rounded-md border border-green-200 bg-green-50 px-3 py-2" data-testid="change-password-success">
+              {passwordSuccess}
+            </p>
+          )}
+
+          <div className="flex justify-end pt-2">
+            <button
+              className="inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-zinc-300 transition"
+              type="submit"
+              disabled={isChangingPassword}
+              data-testid="change-password-submit"
+            >
+              {isChangingPassword ? "Updating..." : "Change Password"}
+            </button>
+          </div>
         </form>
       </section>
 

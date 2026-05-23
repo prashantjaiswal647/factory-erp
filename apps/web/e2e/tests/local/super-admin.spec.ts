@@ -33,7 +33,7 @@ test.describe("hidden super admin control room", () => {
 
     await page.goto("/munshi-control-room");
     await page.getByLabel("Email").fill(adminEmail);
-    await page.getByLabel("Password").fill(adminPassword);
+    await page.getByLabel("Password", { exact: true }).fill(adminPassword);
     await page.getByRole("button", { name: "Enter Control Room" }).click();
 
     await expect(page).toHaveURL(/\/munshi-control-room\/dashboard$/);
@@ -143,7 +143,7 @@ test.describe("hidden super admin control room", () => {
 
     await page.goto("/munshi-control-room");
     await page.getByLabel("Email").fill(adminEmail);
-    await page.getByLabel("Password").fill(adminPassword);
+    await page.getByLabel("Password", { exact: true }).fill(adminPassword);
     await page.getByRole("button", { name: "Enter Control Room" }).click();
     await page.getByRole("link", { name: "Owners" }).click();
     await page.getByRole("button", { name: "Add Factory Owner" }).click();

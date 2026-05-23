@@ -14,7 +14,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import AppUsageLog, Factory, OTPStore, User
+from models import AppUsageLog, Factory, OTPStore, User, SuperAdminAuditLog
 
 try:
     from google.auth.transport import requests as google_requests
@@ -702,7 +702,12 @@ def verify_stored_otp(db: Session, phone_number: str, otp_code: str) -> bool:
     )
     if record is None:
         return False
-    if datetime.now(timezone.utc) > record.expires_at:
+    expires_at = record.expires_at
+    if expires_at.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.utcnow()
+    if now > expires_at:
         return False
     # Clean up used OTP
     db.delete(record)
@@ -1047,6 +1052,98 @@ def update_user_profile(
         trial_end_date=current_user.factory.trial_end_date if current_user.factory else None,
         trial_days_remaining=trial_days_remaining(current_user.factory),
     )
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: Optional[str] = Field(default=None)
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str = Field(..., min_length=8)
+    user_id: Optional[int] = Field(default=None)
+
+
+@v1_router.patch("/profile/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    import re
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match.",
+        )
+    
+    if len(payload.new_password) < 8 or not re.search(r"[A-Za-z]", payload.new_password) or not re.search(r"\d", payload.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long and contain both letters and numbers.",
+        )
+        
+    if payload.user_id is not None and payload.user_id != current_user.id:
+        if current_user.role != "Owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the Owner can reset other users' passwords.",
+            )
+        
+        target_user = db.query(User).filter(User.id == payload.user_id).first()
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Staff member not found.",
+            )
+            
+        if target_user.factory_id != current_user.factory_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only manage users in your own factory.",
+            )
+            
+        target_user.password_hash = hash_password(payload.new_password)
+        
+        db.add(
+            SuperAdminAuditLog(
+                admin_email=current_user.username,
+                action_type="CHANGE_PASSWORD",
+                entity_type="user",
+                entity_id=str(target_user.id),
+                old_value=None,
+                new_value={"password_changed": True},
+                note="Owner reset staff password",
+            )
+        )
+        db.commit()
+        return {"message": "Password changed successfully."}
+        
+    else:
+        if not payload.current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is required.",
+            )
+            
+        if not verify_password(payload.current_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect.",
+            )
+            
+        current_user.password_hash = hash_password(payload.new_password)
+        
+        db.add(
+            SuperAdminAuditLog(
+                admin_email=current_user.username,
+                action_type="CHANGE_PASSWORD",
+                entity_type="user",
+                entity_id=str(current_user.id),
+                old_value=None,
+                new_value={"password_changed": True},
+                note="User changed password",
+            )
+        )
+        db.commit()
+        return {"message": "Password changed successfully."}
 
 
 from schemas import UserSubscriptionResponse

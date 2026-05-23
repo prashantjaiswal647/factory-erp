@@ -14,12 +14,12 @@ export class LoginPage {
   async expectVisible() {
     await expect(this.page.getByRole("heading", { name: "Secure Login" })).toBeVisible();
     await expect(this.identifierField()).toBeVisible();
-    await expect(this.page.getByLabel("Password")).toBeVisible();
+    await expect(this.page.getByLabel("Password", { exact: true })).toBeVisible();
   }
 
   async login(identifier: string, password: string) {
     await this.identifierField().fill(identifier);
-    await this.page.getByLabel("Password").fill(password);
+    await this.page.getByLabel("Password", { exact: true }).fill(password);
     await this.form().getByRole("button", { name: "Login", exact: true }).click();
   }
 

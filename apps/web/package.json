@@ -13,7 +13,8 @@
     "test:e2e:ux": "playwright test e2e/tests/ux",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "verify:local": "powershell -ExecutionPolicy Bypass -File ../../scripts/local-verify.ps1"
   },
   "dependencies": {
     "axios": "^1.7.9",

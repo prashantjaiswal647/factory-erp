@@ -58,7 +58,7 @@ export default function CustomersPage() {
 
     setIsSaving(true);
     try {
-      await createSalesCustomer({
+      const response = await createSalesCustomer({
         ...form,
         phone_number: form.phone_number.trim(),
         name: form.name.trim(),
@@ -66,7 +66,8 @@ export default function CustomersPage() {
         place: form.place.trim(),
         gst_number: form.gst_number?.trim() || null
       });
-      setToast("Customer saved");
+      const newCustomer = response.data;
+      setToast(`Customer ${newCustomer.name || ""} saved successfully`);
       setForm(initialForm);
       await loadCustomers();
     } catch {

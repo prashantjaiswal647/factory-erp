@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, Building2, CreditCard, Database, FileClock, La
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
 
+import PasswordInput from "../components/PasswordInput";
 import { superAdminApi } from "../lib/api";
 
 const ADMIN_TOKEN_KEY = "munshi_super_admin_token";
@@ -165,10 +166,14 @@ export function SuperAdminLoginPage() {
           Email
           <input className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
         </label>
-        <label className="mt-4 block text-sm font-semibold">
-          Password
-          <input className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3 outline-none focus:ring-2 focus:ring-indigo-600" value={password} onChange={(event) => setPassword(event.target.value)} type="password" required />
-        </label>
+        <PasswordInput
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          required
+          className="mt-4"
+          data-testid="super-admin-password-input"
+        />
         <button className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-md bg-[#6D28D9] text-sm font-bold text-white hover:bg-[#4C1D95] disabled:bg-zinc-300" disabled={isSubmitting} type="submit">
           {isSubmitting ? "Checking..." : "Enter Control Room"}
         </button>
@@ -479,8 +484,8 @@ function CreateOwnerModal({ onClose, onCreated }: { onClose: () => void; onCreat
             </select>
           </label>
           <Input label="Phone Number" value={form.phone_number} onChange={(value) => setField("phone_number", value)} />
-          <Input label="Password" value={form.password} onChange={(value) => setField("password", value)} type="password" />
-          <Input label="Confirm Password" value={form.confirm_password} onChange={(value) => setField("confirm_password", value)} type="password" />
+          <PasswordInput label="Password" value={form.password} onChange={(value) => setField("password", value)} data-testid="super-admin-owner-password-input" />
+          <PasswordInput label="Confirm Password" value={form.confirm_password} onChange={(value) => setField("confirm_password", value)} data-testid="super-admin-owner-confirm-password-input" />
           <Input label="Factory Name" value={form.factory_name} onChange={(value) => setField("factory_name", value)} />
           <Input label="Factory Address" value={form.factory_address} onChange={(value) => setField("factory_address", value)} />
           <SelectInput label="Initial Subscription Plan" value={form.initial_subscription_plan} onChange={(value) => setField("initial_subscription_plan", value)} options={["free", "trial", "basic", "pro", "enterprise", "custom"]} />
