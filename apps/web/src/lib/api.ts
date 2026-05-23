@@ -16,13 +16,16 @@ const getBaseURL = () => {
   return origin;
 };
 
+// Exported base URL — usable by any component that needs the raw base
+export const API_BASE_URL = getBaseURL();
+
 export const api = axios.create({
-  baseURL: getBaseURL(),
+  baseURL: API_BASE_URL,
   timeout: 10000
 });
 
 export const superAdminApi = axios.create({
-  baseURL: getBaseURL(),
+  baseURL: API_BASE_URL,
   timeout: 10000
 });
 

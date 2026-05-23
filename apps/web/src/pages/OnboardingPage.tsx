@@ -1,6 +1,5 @@
 import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 
 import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock } from "../lib/api";
 import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate } from "../lib/api";
@@ -40,7 +39,6 @@ export default function OnboardingPage() {
   const [finalProducts, setFinalProducts] = useState<FinalStockOption[]>([]);
   const [machineUsage, setMachineUsage] = useState<MachineLimitUsage | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const navigate = useNavigate();
   const { showToast, showUpgradeModal } = useUpgrade();
   const { updateUser } = useAuth();
 
@@ -119,7 +117,6 @@ export default function OnboardingPage() {
       setToast(`Worker ${newWorker.name || ""} saved`);
       setWorker(todayWorker);
       setStep(1);
-      navigate("/");
     } catch (caught) {
       console.error("Failed to save worker during onboarding:", caught);
       setToast("Worker save failed.");
@@ -157,7 +154,9 @@ export default function OnboardingPage() {
       setToast("Machines saved");
       setStep(2);
       await loadMachineUsage();
-      navigate("/");
+    } catch (caught) {
+      console.error("Failed to save machines during onboarding:", caught);
+      setToast("Machine save failed.");
     } finally {
       setIsSaving(false);
     }
@@ -165,44 +164,74 @@ export default function OnboardingPage() {
 
   async function addBlankStock() {
     setIsSaving(true);
-    await createBlankStock(blankStock);
-    setToast("Blank stock saved");
-    setBlankStock(blankStockDraft);
-    setIsSaving(false);
+    try {
+      await createBlankStock(blankStock);
+      setToast("Blank stock saved");
+      setBlankStock(blankStockDraft);
+    } catch (caught) {
+      console.error("Failed to save blank stock during onboarding:", caught);
+      setToast("Blank stock save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function addBottomStock() {
     setIsSaving(true);
-    await createBottomStock(bottomStock);
-    setToast("Bottom stock saved");
-    setBottomStock(bottomStockDraft);
-    setIsSaving(false);
+    try {
+      await createBottomStock(bottomStock);
+      setToast("Bottom stock saved");
+      setBottomStock(bottomStockDraft);
+    } catch (caught) {
+      console.error("Failed to save bottom stock during onboarding:", caught);
+      setToast("Bottom stock save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function addBoxStock() {
     setIsSaving(true);
-    await createBoxPackagingStock(boxStock);
-    setToast("Box stock saved");
-    setBoxStock(boxStockDraft);
-    setIsSaving(false);
+    try {
+      await createBoxPackagingStock(boxStock);
+      setToast("Box stock saved");
+      setBoxStock(boxStockDraft);
+    } catch (caught) {
+      console.error("Failed to save box stock during onboarding:", caught);
+      setToast("Box stock save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function addPlasticStock() {
     setIsSaving(true);
-    await createPlasticStock(plasticStock);
-    setToast("Plastic stock saved");
-    setPlasticStock(plasticStockDraft);
-    setIsSaving(false);
+    try {
+      await createPlasticStock(plasticStock);
+      setToast("Plastic stock saved");
+      setPlasticStock(plasticStockDraft);
+    } catch (caught) {
+      console.error("Failed to save plastic stock during onboarding:", caught);
+      setToast("Plastic stock save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function addFinalProductStock() {
     if (!finalProductStock.product_id) return;
     setIsSaving(true);
-    await saveFinalProductOpeningStock(finalProductStock);
-    setToast("Final product opening stock saved");
-    setFinalProductStock(finalProductStockDraft);
-    await loadFinalProducts();
-    setIsSaving(false);
+    try {
+      await saveFinalProductOpeningStock(finalProductStock);
+      setToast("Final product opening stock saved");
+      setFinalProductStock(finalProductStockDraft);
+      await loadFinalProducts();
+    } catch (caught) {
+      console.error("Failed to save final product opening stock during onboarding:", caught);
+      setToast("Final product stock save failed.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   function updateBottomStock(patch: Partial<typeof bottomStockDraft>) {

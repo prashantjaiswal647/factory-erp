@@ -88,10 +88,20 @@ app = FastAPI(title="AI ERP API", version="0.1.0")
 
 def parse_cors_origins() -> List[str]:
     default_origins = [
+        # Local development
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:4173",   # Vite preview mode
+        "http://127.0.0.1:4173",
+        "http://localhost:8000",   # Direct API access during dev
+        "http://127.0.0.1:8000",
+        "http://localhost:80",
+        "http://localhost",
+        # Production
         "https://munshiai.co.in",
+        "https://www.munshiai.co.in",
     ]
     configured = [
         os.getenv("FRONTEND_ORIGIN"),
