@@ -14,9 +14,15 @@ export default function ConfigurationOverview() {
 
   async function load() {
     setIsLoading(true);
-    const response = await getOnboardingOverview();
-    setData(response.data);
-    setIsLoading(false);
+    try {
+      const response = await getOnboardingOverview();
+      setData(response.data);
+    } catch (err) {
+      console.error("Failed to load onboarding overview:", err);
+      setData(null);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   const completion = useMemo(() => {

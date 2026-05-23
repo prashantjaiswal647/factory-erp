@@ -37,11 +37,32 @@ export default function ProductionPage() {
   }, []);
 
   async function loadOptions() {
-    const [workerRes, machineRes, finalStockRes] = await Promise.all([getDashboardWorkers(), getDashboardMachines(), getFinalStockOptions()]);
-    const variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
+    let cleanWorkers: DashboardWorker[] = [];
+    let cleanMachines: DashboardMachine[] = [];
+    let variations: FinalStockOption[] = [];
+
+    try {
+      const workerRes = await getDashboardWorkers();
+      cleanWorkers = Array.isArray(workerRes.data) ? workerRes.data : [];
+    } catch (err) {
+      console.error("Failed to load dashboard workers:", err);
+    }
+
+    try {
+      const machineRes = await getDashboardMachines();
+      cleanMachines = Array.isArray(machineRes.data) ? machineRes.data : [];
+    } catch (err) {
+      console.error("Failed to load dashboard machines:", err);
+    }
+
+    try {
+      const finalStockRes = await getFinalStockOptions();
+      variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
+    } catch (err) {
+      console.error("Failed to load final stock options:", err);
+    }
+
     const firstVariation = variations[0];
-    const cleanWorkers = Array.isArray(workerRes.data) ? workerRes.data : [];
-    const cleanMachines = Array.isArray(machineRes.data) ? machineRes.data : [];
     setWorkers(cleanWorkers);
     setMachines(cleanMachines);
     setFinalStockOptions(variations);

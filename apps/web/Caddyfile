@@ -1,5 +1,12 @@
 :80 {
     root * /usr/share/caddy
+
+    # Disable caching for the service worker file to ensure immediate updates
+    @sw_file {
+        path /sw.js
+    }
+    header @sw_file Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+
     file_server
     try_files {path} /index.html
 }

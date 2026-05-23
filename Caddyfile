@@ -1,4 +1,11 @@
 munshiai.co.in, www.munshiai.co.in {
+    # Route API requests to the FastAPI backend
+    @backend_routes {
+        path /api/*
+    }
+    reverse_proxy @backend_routes api:8000
+
+    # Serve the static web files for everything else
     reverse_proxy web:80
 }
 
@@ -11,7 +18,7 @@ n8n.munshiai.co.in {
 }
 
 db.munshiai.co.in {
-    basicauth {
+    basic_auth {
         admin $2a$14$dU.IHlaKBRe1i3WZe6NkJecPFEQ8wH0s0zm7GPLg16En2Sp2zrNdK
     }
 

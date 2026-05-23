@@ -84,6 +84,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Global 401 handler: if any API call returns Unauthorized, cleanly clear session
+  useEffect(() => {
+    function handleUnauthorized() {
+      const savedToken = localStorage.getItem(tokenKey);
+      // Only logout if the user was previously logged in (token exists in storage)
+      if (savedToken) {
+        localStorage.removeItem("subscription");
+        sessionStorage.removeItem("subscription");
+        localStorage.removeItem("token");
+        localStorage.removeItem("factory_id");
+        localStorage.removeItem(tokenKey);
+        localStorage.removeItem(userKey);
+        setUser(null);
+      }
+    }
+    window.addEventListener("auth-unauthorized", handleUnauthorized);
+    return () => {
+      window.removeEventListener("auth-unauthorized", handleUnauthorized);
+    };
+  }, []);
+
   async function login(identifier: string, password: string) {
     const response = await api.post<TokenResponse>("/api/auth/login", {
       identifier,

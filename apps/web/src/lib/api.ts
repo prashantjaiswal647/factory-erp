@@ -47,8 +47,14 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const detail = error?.response?.data?.detail;
-    if (error?.response?.status === 403 && detail?.code === "UPGRADE_REQUIRED" && typeof window !== "undefined") {
+    const status = error?.response?.status;
+    if (status === 403 && detail?.code === "UPGRADE_REQUIRED" && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent<UpgradeRequiredDetail>("upgrade-required", { detail }));
+    }
+    // 401 Unauthorized: Token missing/expired. Dispatch event so AuthContext can react.
+    // Do NOT throw to console — silently reject so callers can handle gracefully.
+    if (status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("auth-unauthorized", { detail: { url: error?.config?.url } }));
     }
     return Promise.reject(error);
   }
@@ -121,22 +127,22 @@ export async function listMachineOnboardings(params?: {
 }
 
 export async function submitMachineTemplate(payload: MachineOnboardingPayload) {
-  const response = await api.post<MachineTemplateRecord>("/templates/submit", payload);
+  const response = await api.post<MachineTemplateRecord>("/api/templates/submit", payload);
   return response.data;
 }
 
 export async function listMachineTemplates() {
-  const response = await api.get<MachineTemplateRecord[]>("/templates");
+  const response = await api.get<MachineTemplateRecord[]>("/api/templates");
   return response.data;
 }
 
 export async function getMachineTemplate(templateId: number) {
-  const response = await api.get<MachineTemplateRecord>(`/templates/${templateId}`);
+  const response = await api.get<MachineTemplateRecord>(`/api/templates/${templateId}`);
   return response.data;
 }
 
 export async function approveMachineTemplate(templateId: number) {
-  const response = await api.patch<MachineTemplateRecord>(`/admin/templates/${templateId}/approve`);
+  const response = await api.patch<MachineTemplateRecord>(`/api/admin/templates/${templateId}/approve`);
   return response.data;
 }
 

@@ -55,30 +55,45 @@ export default function OnboardingPage() {
   }, [machineTemplates]);
 
   async function loadFinalProducts() {
-    const response = await getFinalStockOptions();
-    setFinalProducts(response.data);
-    setFinalProductStock((current) => ({
-      ...current,
-      product_id: current.product_id || response.data[0]?.id || 0
-    }));
+    try {
+      const response = await getFinalStockOptions();
+      setFinalProducts(response.data);
+      setFinalProductStock((current) => ({
+        ...current,
+        product_id: current.product_id || response.data[0]?.id || 0
+      }));
+    } catch (err) {
+      console.error("Failed to load final product options:", err);
+      setFinalProducts([]);
+    }
   }
 
   async function loadMachineUsage() {
-    const response = await getMachineLimits();
-    setMachineUsage(response.data);
-    updateUser({
-      machines_used: response.data.used,
-      machine_limit: response.data.limit,
-      machine_plan: response.data.plan
-    });
-    if (response.data.nearing_limit && !response.data.limit_reached) {
-      showToast(`You have ${response.data.used}/${response.data.limit} machines used`, "warning");
+    try {
+      const response = await getMachineLimits();
+      setMachineUsage(response.data);
+      updateUser({
+        machines_used: response.data.used,
+        machine_limit: response.data.limit,
+        machine_plan: response.data.plan
+      });
+      if (response.data.nearing_limit && !response.data.limit_reached) {
+        showToast(`You have ${response.data.used}/${response.data.limit} machines used`, "warning");
+      }
+    } catch (err) {
+      console.error("Failed to load machine limits/usage:", err);
+      setMachineUsage(null);
     }
   }
 
   async function loadMachineTemplates() {
-    const templates = await listMachineTemplates();
-    setMachineTemplates(templates.filter((template) => template.status === "approved"));
+    try {
+      const templates = await listMachineTemplates();
+      setMachineTemplates(templates.filter((template) => template.status === "approved"));
+    } catch (err) {
+      console.error("Failed to load machine templates:", err);
+      setMachineTemplates([]);
+    }
   }
 
   function applyTemplateFields(machineType: MachineCreate["machine_type"]) {

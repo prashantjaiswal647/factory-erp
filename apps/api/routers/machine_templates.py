@@ -60,7 +60,7 @@ def get_template_verification_runner():
     return run_ai_template_verification
 
 
-@router.post("/templates/submit", response_model=MachineTemplateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/api/templates/submit", response_model=MachineTemplateResponse, status_code=status.HTTP_201_CREATED)
 def submit_template(
     payload: MachineTemplateCreate,
     background_tasks: BackgroundTasks,
@@ -83,7 +83,7 @@ def submit_template(
     return template
 
 
-@router.get("/templates/{template_id}", response_model=MachineTemplateResponse)
+@router.get("/api/templates/{template_id}", response_model=MachineTemplateResponse)
 def get_template(
     template_id: int,
     current_user: User = Depends(get_current_user),
@@ -97,7 +97,7 @@ def get_template(
     return template
 
 
-@router.get("/templates", response_model=List[MachineTemplateResponse])
+@router.get("/api/templates", response_model=List[MachineTemplateResponse])
 def list_templates(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -108,7 +108,7 @@ def list_templates(
     return query.order_by(MachineTemplate.created_at.desc(), MachineTemplate.id.desc()).all()
 
 
-@router.patch("/admin/templates/{template_id}/approve", response_model=MachineTemplateResponse)
+@router.patch("/api/admin/templates/{template_id}/approve", response_model=MachineTemplateResponse)
 def approve_template(
     template_id: int,
     current_user: User = Depends(check_permissions(["Owner"])),

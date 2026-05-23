@@ -10,9 +10,11 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  // Rigid interceptor filter block at the absolute top of the Fetch event listener hook:
-  if (event.request.url.includes('/api/')) {
-    event.respondWith(fetch(event.request)); // Force absolute immediate clean network request pass-through
+  const url = event.request.url;
+
+  // Rigid interceptor filter block: Bypass Service Worker completely for backend API endpoints and templates.
+  // Return early without calling event.respondWith() so the browser handles these fetches natively via the standard network stack.
+  if (url.includes("/api/") || url.includes("/templates")) {
     return;
   }
 
