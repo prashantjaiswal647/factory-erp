@@ -77,6 +77,7 @@ export type WorkerCreate = {
   phone?: string;
   daily_wages: number;
   duty_hours: number;
+  opening_attendance?: OpeningAttendancePayload;
 };
 
 export type MachineCreate = {
@@ -287,6 +288,35 @@ export type StaffCreate = {
   role: StaffRoleCreate;
 };
 
+export type OpeningAttendancePayload = {
+  period_start: string;
+  period_end: string;
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  paid_leave_days: number;
+  overtime_hours: number;
+  advance_paid: number;
+  deductions: number;
+  notes?: string;
+};
+
+export type OpeningAttendanceResponse = {
+  id: number;
+  worker_id: number;
+  period_start: string;
+  period_end: string;
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  paid_leave_days: number;
+  overtime_hours: number;
+  advance_paid: number;
+  deductions: number;
+  notes?: string | null;
+  created_at?: string;
+};
+
 export type StaffMember = {
   id: number;
   user_id?: string | null;
@@ -295,6 +325,7 @@ export type StaffMember = {
   role: "Sub-Owner" | "Supervisor" | "Operator";
   factory_id?: number | null;
   last_login_at?: string | null;
+  opening_attendance?: OpeningAttendanceResponse | null;
 };
 
 export type FactoryExpenseCreate = {
@@ -628,6 +659,7 @@ export type WorkerLedgerResponse = {
   worker_name: string;
   month: string;
   days: WorkerLedgerDay[];
+  opening_attendance?: OpeningAttendanceResponse | null;
 };
 
 export type SettlementRequest = {
@@ -1008,6 +1040,7 @@ export function createStaffMember(payload: {
   confirm_password?: string;
   status?: string;
   notes?: string;
+  opening_attendance?: OpeningAttendancePayload;
 }) {
   return api.post<StaffMember>("/api/v1/staff/create", payload);
 }
@@ -1027,6 +1060,65 @@ export function updateStaffMember(id: number, payload: {
 
 export function deleteStaffMember(id: number) {
   return api.delete(`/api/v1/staff/${id}/delete`);
+}
+
+export function getStaffOpeningAttendance(staffId: number) {
+  return api.get<OpeningAttendanceResponse>(`/api/v1/staff/${staffId}/opening-attendance`);
+}
+
+export function createStaffOpeningAttendance(staffId: number, payload: OpeningAttendancePayload) {
+  return api.post<OpeningAttendanceResponse>(`/api/v1/staff/${staffId}/opening-attendance`, payload);
+}
+
+export function updateStaffOpeningAttendance(staffId: number, payload: Partial<OpeningAttendancePayload>) {
+  return api.patch<OpeningAttendanceResponse>(`/api/v1/staff/${staffId}/opening-attendance`, payload);
+}
+
+export function deleteStaffOpeningAttendance(staffId: number) {
+  return api.delete(`/api/v1/staff/${staffId}/opening-attendance`);
+}
+
+export type OpeningAttendanceSummary = {
+  period_start: string;
+  period_end: string;
+  payable_days: number;
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  overtime_hours: number;
+  advance_paid: number;
+  deductions: number;
+};
+
+export type DailyAttendanceSummary = {
+  payable_days: number;
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  overtime_hours: number;
+};
+
+export type FinalPayrollSummary = {
+  total_payable_days: number;
+  gross_salary: number;
+  overtime_pay: number;
+  total_advance: number;
+  total_deductions: number;
+  net_payable: number;
+};
+
+export type PayrollSummaryResponse = {
+  worker_id: number;
+  worker_name: string;
+  month: string;
+  daily_wage_rate: number;
+  opening_attendance?: OpeningAttendanceSummary | null;
+  daily_attendance: DailyAttendanceSummary;
+  final: FinalPayrollSummary;
+};
+
+export function getWorkerPayrollSummary(workerId: number, month: string) {
+  return api.get<PayrollSummaryResponse>(`/api/workers/${workerId}/payroll-summary?month=${month}`);
 }
 
 export function changePassword(payload: {

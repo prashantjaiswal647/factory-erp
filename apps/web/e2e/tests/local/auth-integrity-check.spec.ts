@@ -62,7 +62,7 @@ test.describe("Owner Session Persistence and Auth Integrity Sweep", () => {
     // 4. Assert that we remain logged in and layout context is NOT corrupted
     await expect(page.getByText(/saved/i)).toBeVisible();
     await expect(page).toHaveURL(/\/onboarding/);
-    await expect(page.getByRole("button", { name: "Machines" })).toHaveClass(/border-\[\#6D28D9\]/);
+    await expect(page.getByRole("button", { name: "Machines", exact: true })).toHaveClass(/border-\[\#6D28D9\]/);
     await expect(page).not.toHaveURL(/.*\/login/);
     
     // Explicitly go to dashboard first to see the overview heading

@@ -217,16 +217,35 @@ export default function AttendancePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
-                  {ledger.days.map((day) => (
-                    <tr key={day.date}>
-                      <td className="px-4 py-3 font-medium text-zinc-900">{day.date}</td>
-                      <td className="px-4 py-3">
-                        <select className="h-9 rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500" value={day.status} onChange={(event) => updateAttendance(day, { status: event.target.value as WorkerLedgerDay["status"] })}>
-                          <option value="Present">Present</option>
-                          <option value="Absent">Absent</option>
-                          <option value="Half-day">Half-day</option>
-                        </select>
-                      </td>
+                  {ledger.days.map((day) => {
+                    const isDateInOpeningPeriod = () => {
+                      if (!ledger?.opening_attendance) return false;
+                      const d = new Date(day.date);
+                      const start = new Date(ledger.opening_attendance.period_start);
+                      const end = new Date(ledger.opening_attendance.period_end);
+                      return d >= start && d <= end;
+                    };
+                    const inOpening = isDateInOpeningPeriod();
+                    return (
+                      <tr key={day.date}>
+                        <td className="px-4 py-3 font-medium text-zinc-900">
+                          <div>{day.date}</div>
+                          {inOpening && (
+                            <span 
+                              className="mt-1 inline-block rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 leading-none"
+                              title="This date is covered by opening attendance and will not be double-counted in salary."
+                            >
+                              Opening Period
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <select className="h-9 rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500" value={day.status} onChange={(event) => updateAttendance(day, { status: event.target.value as WorkerLedgerDay["status"] })}>
+                            <option value="Present">Present</option>
+                            <option value="Absent">Absent</option>
+                            <option value="Half-day">Half-day</option>
+                          </select>
+                        </td>
                       <td className="px-4 py-3">
                         <input className="h-9 w-28 rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500" inputMode="decimal" type="number" value={day.production_qty || ""} onFocus={(event) => event.target.select()} onChange={(event) => updateAttendance(day, { production_qty: event.target.value })} />
                       </td>
@@ -239,7 +258,7 @@ export default function AttendancePage() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>

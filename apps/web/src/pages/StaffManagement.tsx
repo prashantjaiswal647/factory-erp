@@ -26,9 +26,11 @@ import {
   deleteStaffMember,
   changePassword,
   requestFactoryId,
-  verifyFactoryId
+  verifyFactoryId,
+  createStaffOpeningAttendance,
+  deleteStaffOpeningAttendance
 } from "../lib/api";
-import type { StaffMember } from "../lib/api";
+import type { StaffMember, OpeningAttendancePayload, OpeningAttendanceResponse } from "../lib/api";
 import { validateLocalPhone } from "../lib/phoneCountries";
 
 export default function StaffManagement() {
@@ -49,6 +51,20 @@ export default function StaffManagement() {
     role: "supervisor" as "supervisor" | "worker"
   });
 
+  const [showOpeningAttendance, setShowOpeningAttendance] = useState(false);
+  const [openingAttendance, setOpeningAttendance] = useState({
+    period_start: "",
+    period_end: "",
+    present_days: 0,
+    half_days: 0,
+    absent_days: 0,
+    paid_leave_days: 0,
+    overtime_hours: 0,
+    advance_paid: 0,
+    deductions: 0,
+    notes: ""
+  });
+
   // Edit Modal State
   const [editModal, setEditModal] = useState<{
     member: StaffMember;
@@ -57,6 +73,7 @@ export default function StaffManagement() {
     role: "supervisor" | "worker";
     password?: string;
     confirm_password?: string;
+    opening_attendance?: OpeningAttendanceResponse | null;
   } | null>(null);
   const [editError, setEditError] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
@@ -129,9 +146,32 @@ export default function StaffManagement() {
       return;
     }
 
+    if (createForm.role === "worker" && showOpeningAttendance) {
+      if (!openingAttendance.period_start || !openingAttendance.period_end) {
+        setError("Opening attendance period start and end dates are required.");
+        return;
+      }
+      if (new Date(openingAttendance.period_start) > new Date(openingAttendance.period_end)) {
+        setError("Opening attendance start date must be before or equal to end date.");
+        return;
+      }
+      if (
+        Number(openingAttendance.present_days) < 0 ||
+        Number(openingAttendance.half_days) < 0 ||
+        Number(openingAttendance.absent_days) < 0 ||
+        Number(openingAttendance.paid_leave_days) < 0 ||
+        Number(openingAttendance.overtime_hours) < 0 ||
+        Number(openingAttendance.advance_paid) < 0 ||
+        Number(openingAttendance.deductions) < 0
+      ) {
+        setError("Opening attendance values cannot be negative.");
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
-      const payload = {
+      const payload: any = {
         name: createForm.name.trim(),
         phone: createForm.phone.trim(),
         password: createForm.password,
@@ -139,6 +179,22 @@ export default function StaffManagement() {
         role: createForm.role,
         status: "active"
       };
+
+      if (createForm.role === "worker" && showOpeningAttendance) {
+        payload.opening_attendance = {
+          period_start: openingAttendance.period_start,
+          period_end: openingAttendance.period_end,
+          present_days: Number(openingAttendance.present_days),
+          half_days: Number(openingAttendance.half_days),
+          absent_days: Number(openingAttendance.absent_days),
+          paid_leave_days: Number(openingAttendance.paid_leave_days),
+          overtime_hours: Number(openingAttendance.overtime_hours),
+          advance_paid: Number(openingAttendance.advance_paid),
+          deductions: Number(openingAttendance.deductions),
+          notes: openingAttendance.notes ? openingAttendance.notes.trim() : undefined
+        };
+      }
+
       const response = await createStaffMember(payload);
       const newStaff = response.data;
       setStaff((current) => {
@@ -159,6 +215,20 @@ export default function StaffManagement() {
         password: "",
         confirm_password: "",
         role: "supervisor"
+      });
+
+      setShowOpeningAttendance(false);
+      setOpeningAttendance({
+        period_start: "",
+        period_end: "",
+        present_days: 0,
+        half_days: 0,
+        absent_days: 0,
+        paid_leave_days: 0,
+        overtime_hours: 0,
+        advance_paid: 0,
+        deductions: 0,
+        notes: ""
       });
 
       // Reload list to ensure dynamic fields (like last login time) match backend completely
@@ -214,6 +284,30 @@ export default function StaffManagement() {
           confirm_password: confirm_password,
           user_id: member.id
         });
+      }
+
+      // Save opening attendance if provided
+      if (editModal.role === "worker" && editModal.opening_attendance) {
+        const oa = editModal.opening_attendance;
+        if (oa.period_start && oa.period_end) {
+          if (new Date(oa.period_start) > new Date(oa.period_end)) {
+            setEditError("Opening attendance start date must be before or equal to end date.");
+            setIsUpdating(false);
+            return;
+          }
+          await createStaffOpeningAttendance(member.id, {
+            period_start: oa.period_start,
+            period_end: oa.period_end,
+            present_days: Number(oa.present_days || 0),
+            half_days: Number(oa.half_days || 0),
+            absent_days: Number(oa.absent_days || 0),
+            paid_leave_days: Number(oa.paid_leave_days || 0),
+            overtime_hours: Number(oa.overtime_hours || 0),
+            advance_paid: Number(oa.advance_paid || 0),
+            deductions: Number(oa.deductions || 0),
+            notes: oa.notes || undefined
+          });
+        }
       }
 
       setToast("Staff account updated successfully");
@@ -389,6 +483,138 @@ export default function StaffManagement() {
                 <option value="worker">Worker (Operator)</option>
               </select>
             </label>
+
+            {createForm.role === "worker" && (
+              <div className="mt-4 border-t border-zinc-100 pt-4 space-y-4">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showOpeningAttendance}
+                    onChange={(e) => setShowOpeningAttendance(e.target.checked)}
+                    className="h-4 w-4 rounded border-zinc-300 text-[#6D28D9] focus:ring-[#6D28D9]"
+                    data-testid="opening-attendance-toggle"
+                  />
+                  <span className="text-sm font-semibold text-zinc-700">Add previous attendance details?</span>
+                </label>
+
+                {showOpeningAttendance && (
+                  <div className="space-y-3 p-3 bg-zinc-50 rounded-lg border border-zinc-100" data-testid="opening-attendance-section">
+                    <p className="text-xs text-zinc-500">
+                      Enter historical attendance details before onboarding the worker to Munshi AI.
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Period Start</span>
+                        <input
+                          type="date"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.period_start}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, period_start: e.target.value })}
+                          data-testid="opening-period-start"
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Period End</span>
+                        <input
+                          type="date"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.period_end}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, period_end: e.target.value })}
+                          data-testid="opening-period-end"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Present</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.present_days || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, present_days: Number(e.target.value) })}
+                          data-testid="opening-present-days"
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Half Days</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.half_days || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, half_days: Number(e.target.value) })}
+                          data-testid="opening-half-days"
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Absent</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.absent_days || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, absent_days: Number(e.target.value) })}
+                          data-testid="opening-absent-days"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Advance Paid</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.advance_paid || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, advance_paid: Number(e.target.value) })}
+                          data-testid="opening-advance-paid"
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Deductions</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.deductions || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, deductions: Number(e.target.value) })}
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Paid Leave</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.paid_leave_days || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, paid_leave_days: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-600">Overtime Hours</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={openingAttendance.overtime_hours || ""}
+                          onChange={(e) => setOpeningAttendance({ ...openingAttendance, overtime_hours: Number(e.target.value) })}
+                          data-testid="opening-overtime-hours"
+                        />
+                      </label>
+                    </div>
+                    <label className="block text-xs">
+                      <span className="font-semibold text-zinc-600">Notes (Optional)</span>
+                      <textarea
+                        className="mt-1 w-full rounded border border-[#E5E7EB] p-2 outline-none text-xs"
+                        rows={2}
+                        placeholder="Add some notes..."
+                        value={openingAttendance.notes}
+                        onChange={(e) => setOpeningAttendance({ ...openingAttendance, notes: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {error ? (
@@ -448,7 +674,17 @@ export default function StaffManagement() {
                 <tbody className="divide-y divide-zinc-100 bg-white">
                   {filteredStaff.map((member) => (
                     <tr key={member.id} className="hover:bg-zinc-50 transition">
-                      <td className="px-5 py-4 font-semibold text-zinc-950">{member.full_name || "-"}</td>
+                      <td className="px-5 py-4 font-semibold text-zinc-950">
+                        <div>{member.full_name || "-"}</div>
+                        {member.opening_attendance && (
+                          <div 
+                            className="mt-1 text-xs font-normal text-zinc-500" 
+                            data-testid="staff-opening-attendance-summary"
+                          >
+                            Prev Att: {member.opening_attendance.present_days}P / {member.opening_attendance.half_days}H ({member.opening_attendance.period_start} to {member.opening_attendance.period_end})
+                          </div>
+                        )}
+                      </td>
                       <td className="px-5 py-4 text-zinc-700">{member.phone_number || "-"}</td>
                       <td className="px-5 py-4">
                         <span className="inline-flex items-center gap-1 rounded-md bg-[#F3E8FF] px-2.5 py-1 text-xs font-bold text-[#6D28D9]">
@@ -477,7 +713,8 @@ export default function StaffManagement() {
                                 member,
                                 name: member.full_name || "",
                                 phone: member.phone_number || "",
-                                role: member.role === "Supervisor" ? "supervisor" : "worker"
+                                role: member.role === "Supervisor" ? "supervisor" : "worker",
+                                opening_attendance: member.opening_attendance ? { ...member.opening_attendance } : null
                               })
                             }
                             data-testid="edit-staff-button"
@@ -522,7 +759,7 @@ export default function StaffManagement() {
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="max-h-[60vh] overflow-y-auto pr-1 space-y-4">
               <label className="block text-sm">
                 <span className="font-semibold text-zinc-700">Full Name</span>
                 <input
@@ -573,6 +810,170 @@ export default function StaffManagement() {
                   onChange={(value) => setEditModal({ ...editModal, confirm_password: value })}
                 />
               </div>
+
+              {editModal.role === "worker" && (() => {
+                const currentOA = editModal.opening_attendance || {
+                  id: editModal.member.opening_attendance?.id || 0,
+                  worker_id: editModal.member.opening_attendance?.worker_id || 0,
+                  period_start: "",
+                  period_end: "",
+                  present_days: 0,
+                  half_days: 0,
+                  absent_days: 0,
+                  paid_leave_days: 0,
+                  overtime_hours: 0,
+                  advance_paid: 0,
+                  deductions: 0,
+                };
+                
+                return (
+                  <div className="border-t border-zinc-100 pt-4 space-y-4">
+                    <h4 className="text-sm font-bold text-[#6D28D9] flex items-center gap-1.5">
+                      Previous Attendance (Opening)
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Period Start</span>
+                        <input
+                          type="date"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.period_start}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              period_start: e.target.value
+                            }
+                          })}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Period End</span>
+                        <input
+                          type="date"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.period_end}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              period_end: e.target.value
+                            }
+                          })}
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Present</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.present_days ?? ""}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              present_days: Number(e.target.value)
+                            }
+                          })}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Half Days</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.half_days ?? ""}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              half_days: Number(e.target.value)
+                            }
+                          })}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Absent</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.absent_days ?? ""}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              absent_days: Number(e.target.value)
+                            }
+                          })}
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Advance Paid</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.advance_paid ?? ""}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              advance_paid: Number(e.target.value)
+                            }
+                          })}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="font-semibold text-zinc-700">Deductions</span>
+                        <input
+                          type="number"
+                          className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                          value={currentOA.deductions ?? ""}
+                          onChange={(e) => setEditModal({
+                            ...editModal,
+                            opening_attendance: {
+                              ...currentOA,
+                              deductions: Number(e.target.value)
+                            }
+                          })}
+                        />
+                      </label>
+                    </div>
+                  {editModal.member.opening_attendance && (
+                    <button
+                      type="button"
+                      className="mt-1 text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 bg-transparent border-none p-0 cursor-pointer"
+                      onClick={async () => {
+                        if (window.confirm("Are you sure you want to delete this worker's opening attendance?")) {
+                          try {
+                            await deleteStaffOpeningAttendance(editModal.member.id);
+                            setToast("Opening attendance deleted successfully");
+                            setEditModal({
+                              ...editModal,
+                              opening_attendance: null,
+                              member: {
+                                ...editModal.member,
+                                opening_attendance: null
+                              }
+                            });
+                            await loadStaff();
+                          } catch (caught) {
+                            setEditError("Failed to delete opening attendance.");
+                          }
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3 w-3" /> Remove Previous Attendance
+                    </button>
+                  )}
+                </div>
+              );})()}
             </div>
 
             {editError ? (

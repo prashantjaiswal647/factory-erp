@@ -2,7 +2,7 @@ import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from 
 import { useEffect, useState } from "react";
 
 import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock } from "../lib/api";
-import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate } from "../lib/api";
+import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
@@ -27,6 +27,19 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [toast, setToast] = useState("");
   const [worker, setWorker] = useState<WorkerCreate>(todayWorker);
+  const [showOpeningAttendance, setShowOpeningAttendance] = useState(false);
+  const [openingAttendance, setOpeningAttendance] = useState<OpeningAttendancePayload>({
+    period_start: "",
+    period_end: "",
+    present_days: 0,
+    half_days: 0,
+    absent_days: 0,
+    paid_leave_days: 0,
+    overtime_hours: 0,
+    advance_paid: 0,
+    deductions: 0,
+    notes: ""
+  });
   const [machine, setMachine] = useState<MachineCreate>(machineDraft);
   const [machines, setMachines] = useState<MachineCreate[]>([]);
   const [machineTemplates, setMachineTemplates] = useState<MachineTemplateRecord[]>([]);
@@ -110,12 +123,64 @@ export default function OnboardingPage() {
 
   async function saveWorker() {
     if (!worker.name.trim()) return;
+    if (showOpeningAttendance) {
+      if (!openingAttendance.period_start || !openingAttendance.period_end) {
+        setToast("Opening attendance start and end dates are required.");
+        return;
+      }
+      if (new Date(openingAttendance.period_start) > new Date(openingAttendance.period_end)) {
+        setToast("Opening attendance start date must be before or equal to end date.");
+        return;
+      }
+      if (
+        Number(openingAttendance.present_days) < 0 ||
+        Number(openingAttendance.half_days) < 0 ||
+        Number(openingAttendance.absent_days) < 0 ||
+        Number(openingAttendance.paid_leave_days) < 0 ||
+        Number(openingAttendance.overtime_hours) < 0 ||
+        Number(openingAttendance.advance_paid) < 0 ||
+        Number(openingAttendance.deductions) < 0
+      ) {
+        setToast("Opening attendance values cannot be negative.");
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
-      const response = await createWorker(worker);
+      const payload: WorkerCreate = {
+        ...worker,
+        opening_attendance: showOpeningAttendance ? {
+          period_start: openingAttendance.period_start,
+          period_end: openingAttendance.period_end,
+          present_days: Number(openingAttendance.present_days),
+          half_days: Number(openingAttendance.half_days),
+          absent_days: Number(openingAttendance.absent_days),
+          paid_leave_days: Number(openingAttendance.paid_leave_days),
+          overtime_hours: Number(openingAttendance.overtime_hours),
+          advance_paid: Number(openingAttendance.advance_paid),
+          deductions: Number(openingAttendance.deductions),
+          notes: openingAttendance.notes ? openingAttendance.notes.trim() : undefined
+        } : undefined
+      };
+
+      const response = await createWorker(payload);
       const newWorker = response.data;
       setToast(`Worker ${newWorker.name || ""} saved`);
       setWorker(todayWorker);
+      setShowOpeningAttendance(false);
+      setOpeningAttendance({
+        period_start: "",
+        period_end: "",
+        present_days: 0,
+        half_days: 0,
+        absent_days: 0,
+        paid_leave_days: 0,
+        overtime_hours: 0,
+        advance_paid: 0,
+        deductions: 0,
+        notes: ""
+      });
       setStep(1);
     } catch (caught) {
       console.error("Failed to save worker during onboarding:", caught);
@@ -292,6 +357,144 @@ export default function OnboardingPage() {
             <NumberInput label="Daily wages" value={worker.daily_wages} onChange={(daily_wages) => setWorker({ ...worker, daily_wages })} />
             <NumberInput label="Duty hours" value={worker.duty_hours} onChange={(duty_hours) => setWorker({ ...worker, duty_hours })} />
           </div>
+
+          <div className="mt-4 border-t border-zinc-100 pt-4 space-y-4">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showOpeningAttendance}
+                onChange={(e) => setShowOpeningAttendance(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-300 text-[#6D28D9] focus:ring-[#6D28D9]"
+                data-testid="opening-attendance-toggle"
+              />
+              <span className="text-sm font-semibold text-zinc-700">Add previous attendance details?</span>
+            </label>
+
+            {showOpeningAttendance && (
+              <div className="space-y-4 p-4 bg-zinc-50 rounded-lg border border-zinc-200 shadow-inner" data-testid="opening-attendance-section">
+                <p className="text-xs text-zinc-500">
+                  Enter historical attendance details before onboarding the worker to Munshi AI.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Period Start</span>
+                    <input
+                      type="date"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.period_start}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, period_start: e.target.value })}
+                      data-testid="opening-period-start"
+                    />
+                  </label>
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Period End</span>
+                    <input
+                      type="date"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.period_end}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, period_end: e.target.value })}
+                      data-testid="opening-period-end"
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Present</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.present_days || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, present_days: Number(e.target.value) })}
+                      data-testid="opening-present-days"
+                    />
+                  </label>
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Half Days</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.half_days || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, half_days: Number(e.target.value) })}
+                      data-testid="opening-half-days"
+                    />
+                  </label>
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Absent</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.absent_days || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, absent_days: Number(e.target.value) })}
+                      data-testid="opening-absent-days"
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Advance Paid</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.advance_paid || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, advance_paid: Number(e.target.value) })}
+                      data-testid="opening-advance-paid"
+                    />
+                  </label>
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Deductions</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.deductions || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, deductions: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Paid Leave</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.paid_leave_days || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, paid_leave_days: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label className="block text-xs">
+                    <span className="font-semibold text-zinc-600">Overtime Hours</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      className="mt-1 h-9 w-full rounded border border-zinc-200 px-2 outline-none text-xs"
+                      value={openingAttendance.overtime_hours || ""}
+                      onChange={(e) => setOpeningAttendance({ ...openingAttendance, overtime_hours: Number(e.target.value) })}
+                      data-testid="opening-overtime-hours"
+                    />
+                  </label>
+                </div>
+                <label className="block text-xs">
+                  <span className="font-semibold text-zinc-600">Notes (Optional)</span>
+                  <textarea
+                    className="mt-1 w-full rounded border border-zinc-200 p-2 outline-none text-xs"
+                    rows={2}
+                    placeholder="Add some notes..."
+                    value={openingAttendance.notes}
+                    onChange={(e) => setOpeningAttendance({ ...openingAttendance, notes: e.target.value })}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
           <SaveButton label="Save Worker" isSaving={isSaving} onClick={saveWorker} />
         </Panel>
       ) : null}

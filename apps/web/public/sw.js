@@ -20,19 +20,17 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  if (event.request.url.includes("/api/")) {
+    // Force the browser to bypass service worker storage entirely and fetch directly from live server.
+    return event.respondWith(fetch(event.request));
+  }
+
   // Network-only gateway: no runtime cache strategy may handle data entry,
   // manufacturing summaries, auth, billing, onboarding, inventory, production,
   // sales, expenses, templates, or any backend REST endpoint.
-  if (event.request.url.includes("/api/")) {
-    // Bypasses service worker caching for all dynamic backend REST queries.
-    event.respondWith(fetch(event.request));
-    return;
-  }
-
   if (event.request.url.includes("/templates")) {
-    event.respondWith(fetch(event.request));
-    return;
+    return event.respondWith(fetch(event.request));
   }
 
-  event.respondWith(fetch(event.request));
+  return event.respondWith(fetch(event.request));
 });
