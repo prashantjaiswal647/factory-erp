@@ -813,6 +813,38 @@ class HisabSettlement(TenantMixin, Base):
     )
 
 
+class WorkerOpeningAttendance(TenantMixin, Base):
+    __tablename__ = "worker_opening_attendance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    present_days = Column(Numeric(6, 1), nullable=False, default=0)
+    half_days = Column(Numeric(6, 1), nullable=False, default=0)
+    absent_days = Column(Numeric(6, 1), nullable=False, default=0)
+    paid_leave_days = Column(Numeric(6, 1), nullable=False, default=0)
+    overtime_hours = Column(Numeric(8, 2), nullable=False, default=0)
+    advance_paid = Column(Numeric(14, 2), nullable=False, default=0)
+    deductions = Column(Numeric(14, 2), nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("period_start <= period_end", name="ck_opening_attendance_period"),
+        CheckConstraint("present_days >= 0", name="ck_opening_attendance_present_days"),
+        CheckConstraint("half_days >= 0", name="ck_opening_attendance_half_days"),
+        CheckConstraint("absent_days >= 0", name="ck_opening_attendance_absent_days"),
+        CheckConstraint("paid_leave_days >= 0", name="ck_opening_attendance_paid_leave"),
+        CheckConstraint("overtime_hours >= 0", name="ck_opening_attendance_overtime"),
+        CheckConstraint("advance_paid >= 0", name="ck_opening_attendance_advance"),
+        CheckConstraint("deductions >= 0", name="ck_opening_attendance_deductions"),
+        UniqueConstraint("factory_id", "worker_id", name="uq_opening_attendance_worker"),
+    )
+
+
 class Order(TenantMixin, Base):
     __tablename__ = "orders"
 

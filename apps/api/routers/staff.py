@@ -22,7 +22,8 @@ from auth import (
     verify_password,
 )
 from db import get_db
-from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog
+from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog, WorkerOpeningAttendance
+from schemas import OpeningAttendanceCreate, OpeningAttendanceResponse
 
 # Existing router prefixes
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -64,6 +65,7 @@ class SecureStaffResponse(BaseModel):
     phone_number: str | None = None
     role: str
     last_login_at: datetime | None = None
+    opening_attendance: Optional[OpeningAttendanceResponse] = None
 
 
 class SecureStaffCreateRequest(BaseModel):
@@ -75,6 +77,7 @@ class SecureStaffCreateRequest(BaseModel):
     email: Optional[str] = Field(default=None)
     status: Optional[str] = Field(default="active")
     notes: Optional[str] = Field(default=None)
+    opening_attendance: Optional[OpeningAttendanceCreate] = None
 
 
 class SecureStaffUpdateRequest(BaseModel):
@@ -282,6 +285,25 @@ def secure_list_staff(
             .order_by(User.full_name.asc().nullslast(), User.username.asc())
             .all()
         )
+        if res:
+            # Let's map worker_id and load their opening attendance
+            workers = db.query(Worker).filter(Worker.factory_id == current_user.factory_id).all()
+            worker_by_name_phone = {
+                (w.name.lower(), w.phone): w for w in workers
+            }
+            # Fetch all opening attendance for these workers
+            worker_ids = [w.id for w in workers]
+            opening_att_map = {}
+            if worker_ids:
+                oas = db.query(WorkerOpeningAttendance).filter(WorkerOpeningAttendance.worker_id.in_(worker_ids)).all()
+                opening_att_map = {oa.worker_id: oa for oa in oas}
+            
+            for u in res:
+                u.opening_attendance = None
+                if u.role == "Operator":
+                    worker = worker_by_name_phone.get((u.full_name.lower(), u.phone_number))
+                    if worker:
+                        u.opening_attendance = opening_att_map.get(worker.id)
         return res if res else []
     except Exception:
         return []
@@ -412,10 +434,32 @@ def core_create_staff(payload: SecureStaffCreateRequest, creator: User, db: Sess
                     is_active=True,
                 )
                 db.add(worker)
+                db.flush()
             else:
                 worker.name = full_name
                 worker.phone = phone_number
                 worker.is_active = True
+                db.flush()
+
+            if payload.opening_attendance is not None:
+                opening_att = WorkerOpeningAttendance(
+                    factory_id=creator.factory_id,
+                    worker_id=worker.id,
+                    period_start=payload.opening_attendance.period_start,
+                    period_end=payload.opening_attendance.period_end,
+                    present_days=payload.opening_attendance.present_days,
+                    half_days=payload.opening_attendance.half_days,
+                    absent_days=payload.opening_attendance.absent_days,
+                    paid_leave_days=payload.opening_attendance.paid_leave_days,
+                    overtime_hours=payload.opening_attendance.overtime_hours,
+                    advance_paid=payload.opening_attendance.advance_paid,
+                    deductions=payload.opening_attendance.deductions,
+                    notes=payload.opening_attendance.notes,
+                    created_by_user_id=creator.id,
+                )
+                db.add(opening_att)
+                db.flush()
+                staff_user.opening_attendance = opening_att
 
         db.commit()
         db.refresh(staff_user)
@@ -553,3 +597,192 @@ def verify_factory_id(
 
     # string return the raw factory_id explicitly to the client
     return Response(content=str(user.factory_id), media_type="text/plain")
+
+
+# Worker Opening Attendance CRUD Routes
+# ---------------------------------------------------------------------------
+
+def _get_synced_worker_for_user(db: Session, user: User) -> Worker:
+    worker = (
+        db.query(Worker)
+        .filter(Worker.factory_id == user.factory_id)
+        .filter((sql_func.lower(Worker.name) == user.full_name.lower()) | (Worker.phone == user.phone_number))
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No synced worker profile found for this staff member."
+        )
+    return worker
+
+
+@staff_v1_router.get("/{staff_id}/opening-attendance", response_model=OpeningAttendanceResponse)
+def get_staff_opening_attendance(
+    staff_id: int,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    staff_user = (
+        db.query(User)
+        .filter(User.id == staff_id)
+        .filter(User.factory_id == current_user.factory_id)
+        .first()
+    )
+    if staff_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    
+    worker = _get_synced_worker_for_user(db, staff_user)
+    
+    oa = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    if oa is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opening attendance not found for this worker")
+    return oa
+
+
+@staff_v1_router.post("/{staff_id}/opening-attendance", response_model=OpeningAttendanceResponse, status_code=status.HTTP_201_CREATED)
+def create_staff_opening_attendance(
+    staff_id: int,
+    payload: OpeningAttendanceCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    staff_user = (
+        db.query(User)
+        .filter(User.id == staff_id)
+        .filter(User.factory_id == current_user.factory_id)
+        .first()
+    )
+    if staff_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    
+    worker = _get_synced_worker_for_user(db, staff_user)
+    
+    existing_oa = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    if existing_oa is not None:
+        existing_oa.period_start = payload.period_start
+        existing_oa.period_end = payload.period_end
+        existing_oa.present_days = payload.present_days
+        existing_oa.half_days = payload.half_days
+        existing_oa.absent_days = payload.absent_days
+        existing_oa.paid_leave_days = payload.paid_leave_days
+        existing_oa.overtime_hours = payload.overtime_hours
+        existing_oa.advance_paid = payload.advance_paid
+        existing_oa.deductions = payload.deductions
+        existing_oa.notes = payload.notes
+        db.commit()
+        db.refresh(existing_oa)
+        return existing_oa
+
+    oa = WorkerOpeningAttendance(
+        factory_id=current_user.factory_id,
+        worker_id=worker.id,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        present_days=payload.present_days,
+        half_days=payload.half_days,
+        absent_days=payload.absent_days,
+        paid_leave_days=payload.paid_leave_days,
+        overtime_hours=payload.overtime_hours,
+        advance_paid=payload.advance_paid,
+        deductions=payload.deductions,
+        notes=payload.notes,
+        created_by_user_id=current_user.id,
+    )
+    db.add(oa)
+    db.commit()
+    db.refresh(oa)
+    return oa
+
+
+@staff_v1_router.patch("/{staff_id}/opening-attendance", response_model=OpeningAttendanceResponse)
+def update_staff_opening_attendance(
+    staff_id: int,
+    payload: OpeningAttendanceCreate,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    staff_user = (
+        db.query(User)
+        .filter(User.id == staff_id)
+        .filter(User.factory_id == current_user.factory_id)
+        .first()
+    )
+    if staff_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    
+    worker = _get_synced_worker_for_user(db, staff_user)
+    
+    oa = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    if oa is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opening attendance not found for this worker")
+    
+    if payload.period_start is not None:
+        oa.period_start = payload.period_start
+    if payload.period_end is not None:
+        oa.period_end = payload.period_end
+    if payload.present_days is not None:
+        oa.present_days = payload.present_days
+    if payload.half_days is not None:
+        oa.half_days = payload.half_days
+    if payload.absent_days is not None:
+        oa.absent_days = payload.absent_days
+    if payload.paid_leave_days is not None:
+        oa.paid_leave_days = payload.paid_leave_days
+    if payload.overtime_hours is not None:
+        oa.overtime_hours = payload.overtime_hours
+    if payload.advance_paid is not None:
+        oa.advance_paid = payload.advance_paid
+    if payload.deductions is not None:
+        oa.deductions = payload.deductions
+    if payload.notes is not None:
+        oa.notes = payload.notes
+        
+    db.commit()
+    db.refresh(oa)
+    return oa
+
+
+@staff_v1_router.delete("/{staff_id}/opening-attendance", status_code=status.HTTP_204_NO_CONTENT)
+def delete_staff_opening_attendance(
+    staff_id: int,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    staff_user = (
+        db.query(User)
+        .filter(User.id == staff_id)
+        .filter(User.factory_id == current_user.factory_id)
+        .first()
+    )
+    if staff_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    
+    worker = _get_synced_worker_for_user(db, staff_user)
+    
+    oa = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    if oa is not None:
+        db.delete(oa)
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+

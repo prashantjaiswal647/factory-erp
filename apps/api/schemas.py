@@ -343,12 +343,58 @@ class PolybagStockResponse(BaseModel):
     total_packets: int
 
 
+# ---------------------------------------------------------------------------
+# Worker Opening Attendance Schemas
+# ---------------------------------------------------------------------------
+
+class OpeningAttendanceCreate(BaseModel):
+    period_start: date
+    period_end: date
+    present_days: float = 0.0
+    half_days: float = 0.0
+    absent_days: float = 0.0
+    paid_leave_days: float = 0.0
+    overtime_hours: float = 0.0
+    advance_paid: float = 0.0
+    deductions: float = 0.0
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.period_start > self.period_end:
+            raise ValueError("period_start must be <= period_end")
+        for field in ["present_days", "half_days", "absent_days", "paid_leave_days", "overtime_hours", "advance_paid", "deductions"]:
+            val = getattr(self, field)
+            if val is not None and val < 0:
+                raise ValueError(f"{field} cannot be negative")
+        return self
+
+
+class OpeningAttendanceResponse(BaseModel):
+    id: int
+    worker_id: int
+    period_start: date
+    period_end: date
+    present_days: float
+    half_days: float
+    absent_days: float
+    paid_leave_days: float
+    overtime_hours: float
+    advance_paid: float
+    deductions: float
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class WorkerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     country_code: Optional[str] = Field(default=None, max_length=8)
     phone: Optional[str] = Field(default=None, max_length=50)
     daily_wages: Decimal = Field(..., ge=0)
     duty_hours: float = Field(..., gt=0)
+    opening_attendance: Optional[OpeningAttendanceCreate] = None
+
 
 
 class WorkerResponse(BaseModel):
@@ -505,3 +551,7 @@ class UserSubscriptionResponse(BaseModel):
     effective_plan: Optional[str] = None
     effective_status: Optional[str] = None
     effective_expires_at: Optional[datetime] = None
+
+
+
+

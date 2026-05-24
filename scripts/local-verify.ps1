@@ -23,11 +23,15 @@ Write-Host ""
 Write-Host "[2/4] Verifying Frontend TypeScript Compilation and Build..." -ForegroundColor Yellow
 try {
     Push-Location "apps/web"
+    $OldEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     npm run build
-    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $OldEAP
+    if ($exitCode -ne 0) { throw "Frontend build failed with exit code $exitCode" }
     Write-Host "[SUCCESS] Frontend Build Successful!" -ForegroundColor Green
 } catch {
-    Write-Host "[ERROR] Frontend Build Failed!" -ForegroundColor Red
+    Write-Host "[ERROR] Frontend Build Failed! $_" -ForegroundColor Red
     Pop-Location
     Exit 1
 }
@@ -44,6 +48,10 @@ try {
     Write-Host "Running staff-worker-flow spec..." -ForegroundColor Gray
     npx playwright test e2e/tests/local/staff-worker-flow.spec.ts --workers=1
     if ($LASTEXITCODE -ne 0) { throw "Playwright staff-worker-flow tests failed" }
+
+    Write-Host "Running worker-opening-attendance spec..." -ForegroundColor Gray
+    npx playwright test e2e/tests/local/worker-opening-attendance.spec.ts --workers=1
+    if ($LASTEXITCODE -ne 0) { throw "Playwright worker-opening-attendance tests failed" }
 
     Write-Host "[SUCCESS] Playwright E2E Staff & Worker Flow Integration Tests Passed!" -ForegroundColor Green
 } catch {

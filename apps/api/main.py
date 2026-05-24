@@ -990,6 +990,7 @@ def ensure_runtime_schema():
         "material_yields",
         "costing_master",
         "payments",
+        "worker_opening_attendance",
     ]
     statements = [
         (
@@ -1555,6 +1556,35 @@ def ensure_runtime_schema():
             "total_advance_deducted NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "net_paid NUMERIC(14, 2) NOT NULL DEFAULT 0, "
             "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
+            ")"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS worker_opening_attendance ("
+            "id SERIAL PRIMARY KEY, "
+            "factory_id INTEGER NOT NULL REFERENCES factories(id), "
+            "worker_id INTEGER NOT NULL REFERENCES workers(id), "
+            "period_start DATE NOT NULL, "
+            "period_end DATE NOT NULL, "
+            "present_days NUMERIC(6,1) NOT NULL DEFAULT 0, "
+            "half_days NUMERIC(6,1) NOT NULL DEFAULT 0, "
+            "absent_days NUMERIC(6,1) NOT NULL DEFAULT 0, "
+            "paid_leave_days NUMERIC(6,1) NOT NULL DEFAULT 0, "
+            "overtime_hours NUMERIC(8,2) NOT NULL DEFAULT 0, "
+            "advance_paid NUMERIC(14,2) NOT NULL DEFAULT 0, "
+            "deductions NUMERIC(14,2) NOT NULL DEFAULT 0, "
+            "notes TEXT, "
+            "created_by_user_id INTEGER NOT NULL REFERENCES users(id), "
+            "created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(), "
+            "updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(), "
+            "CONSTRAINT chk_period CHECK (period_start <= period_end), "
+            "CONSTRAINT chk_present_days CHECK (present_days >= 0), "
+            "CONSTRAINT chk_half_days CHECK (half_days >= 0), "
+            "CONSTRAINT chk_absent_days CHECK (absent_days >= 0), "
+            "CONSTRAINT chk_paid_leave CHECK (paid_leave_days >= 0), "
+            "CONSTRAINT chk_overtime CHECK (overtime_hours >= 0), "
+            "CONSTRAINT chk_advance CHECK (advance_paid >= 0), "
+            "CONSTRAINT chk_deductions CHECK (deductions >= 0), "
+            "CONSTRAINT uq_opening_attendance_worker UNIQUE (factory_id, worker_id)"
             ")"
         ),
     ]

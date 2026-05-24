@@ -29,6 +29,7 @@ from models import (
     PlasticStock,
     User,
     Worker,
+    WorkerOpeningAttendance,
 )
 from schemas import (
     CustomerPayload,
@@ -653,6 +654,7 @@ def onboarding_step1_create_worker(
     if worker is None:
         worker = Worker(factory_id=current_user.factory_id, name=payload.name.strip())
         db.add(worker)
+        db.flush()
 
     if payload.phone:
         worker.phone, _ = normalize_phone_number(payload.phone, payload.country_code)
@@ -662,6 +664,44 @@ def onboarding_step1_create_worker(
     worker.salary = payload.daily_wages
     worker.shift_hours = payload.duty_hours
     worker.is_active = True
+    db.flush()
+
+    if payload.opening_attendance is not None:
+        existing_oa = (
+            db.query(WorkerOpeningAttendance)
+            .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+            .filter(WorkerOpeningAttendance.worker_id == worker.id)
+            .first()
+        )
+        if existing_oa is not None:
+            existing_oa.period_start = payload.opening_attendance.period_start
+            existing_oa.period_end = payload.opening_attendance.period_end
+            existing_oa.present_days = payload.opening_attendance.present_days
+            existing_oa.half_days = payload.opening_attendance.half_days
+            existing_oa.absent_days = payload.opening_attendance.absent_days
+            existing_oa.paid_leave_days = payload.opening_attendance.paid_leave_days
+            existing_oa.overtime_hours = payload.opening_attendance.overtime_hours
+            existing_oa.advance_paid = payload.opening_attendance.advance_paid
+            existing_oa.deductions = payload.opening_attendance.deductions
+            existing_oa.notes = payload.opening_attendance.notes
+        else:
+            opening_att = WorkerOpeningAttendance(
+                factory_id=current_user.factory_id,
+                worker_id=worker.id,
+                period_start=payload.opening_attendance.period_start,
+                period_end=payload.opening_attendance.period_end,
+                present_days=payload.opening_attendance.present_days,
+                half_days=payload.opening_attendance.half_days,
+                absent_days=payload.opening_attendance.absent_days,
+                paid_leave_days=payload.opening_attendance.paid_leave_days,
+                overtime_hours=payload.opening_attendance.overtime_hours,
+                advance_paid=payload.opening_attendance.advance_paid,
+                deductions=payload.opening_attendance.deductions,
+                notes=payload.opening_attendance.notes,
+                created_by_user_id=current_user.id,
+            )
+            db.add(opening_att)
+
     db.commit()
     db.refresh(worker)
     return worker

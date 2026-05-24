@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
-from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker
+from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker, WorkerOpeningAttendance
+from schemas import OpeningAttendanceResponse
 
 
 router = APIRouter(prefix="/api/workers", tags=["attendance-ledger"])
@@ -83,6 +84,7 @@ class WorkerLedgerResponse(BaseModel):
     worker_name: str
     month: str
     days: List[DayLedgerRow]
+    opening_attendance: Optional[OpeningAttendanceResponse] = None
 
 
 class AttendanceUpsert(BaseModel):
@@ -130,15 +132,63 @@ def attendance_summary(
         .all()
     )
     for worker in workers:
-        logs = (
+        opening_att = (
+            db.query(WorkerOpeningAttendance)
+            .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+            .filter(WorkerOpeningAttendance.worker_id == worker.id)
+            .first()
+        )
+        
+        opening_payable_days = Decimal("0")
+        opening_advance = Decimal("0")
+        opening_deductions = Decimal("0")
+        opening_ot_hours = Decimal("0")
+        overlap_present = False
+        
+        if opening_att is not None:
+            # Check if settled
+            settled_count = (
+                db.query(HisabSettlement)
+                .filter(HisabSettlement.factory_id == current_user.factory_id)
+                .filter(HisabSettlement.worker_id == worker.id)
+                .filter(HisabSettlement.duty_to_date >= opening_att.period_end)
+                .count()
+            )
+            if settled_count == 0:
+                # Only include if not settled and overlaps with month
+                if opening_att.period_start <= end and opening_att.period_end >= start:
+                    overlap_present = True
+                    opening_payable_days = Decimal(str(opening_att.present_days or 0)) + \
+                                           Decimal(str(opening_att.half_days or 0)) * Decimal("0.5") + \
+                                           Decimal(str(opening_att.paid_leave_days or 0))
+                    opening_advance = Decimal(str(opening_att.advance_paid or 0))
+                    opening_deductions = Decimal(str(opening_att.deductions or 0))
+                    opening_ot_hours = Decimal(str(opening_att.overtime_hours or 0))
+
+        # Query daily logs, excluding those overlapping with opening range
+        query = (
             db.query(AttendanceLog)
             .filter(AttendanceLog.factory_id == current_user.factory_id)
             .filter(AttendanceLog.worker_id == worker.id)
             .filter(AttendanceLog.date >= start)
             .filter(AttendanceLog.date <= end)
-            .all()
         )
-        duty_days = sum((attendance_units(log.status) for log in logs), Decimal("0"))
+        if opening_att is not None:
+            query = query.filter((AttendanceLog.date < opening_att.period_start) | (AttendanceLog.date > opening_att.period_end))
+        logs = query.all()
+        
+        daily_duty_days = sum((attendance_units(log.status) for log in logs), Decimal("0"))
+        duty_days = daily_duty_days + opening_payable_days
+        
+        # Overtime pay
+        daily_ot_hours = sum((Decimal(str(log.overtime_hours or 0)) for log in logs), Decimal("0"))
+        total_ot_hours = daily_ot_hours + opening_ot_hours
+        shift_hours = Decimal(str(worker.shift_hours or 8.0))
+        if shift_hours <= 0:
+            shift_hours = Decimal("8.0")
+        hourly_rate = worker_rate(worker) / shift_hours
+        overtime_pay = total_ot_hours * hourly_rate
+
         advance_total = money(
             db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0))
             .filter(AdvancePayment.factory_id == current_user.factory_id)
@@ -146,7 +196,11 @@ def attendance_summary(
             .filter(AdvancePayment.is_settled.is_(False))
             .scalar()
         )
-        duty_amount = money(duty_days * worker_rate(worker))
+        
+        if overlap_present:
+            advance_total = money(advance_total + opening_advance + opening_deductions)
+            
+        duty_amount = money((duty_days * worker_rate(worker)) + overtime_pay)
         rows.append(
             AttendanceSummaryRow(
                 worker_id=worker.id,
@@ -208,7 +262,20 @@ def worker_ledger(
             )
         )
         current += timedelta(days=1)
-    return WorkerLedgerResponse(worker_id=worker.id, worker_name=worker.name, month=month, days=days)
+        
+    opening_att = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    return WorkerLedgerResponse(
+        worker_id=worker.id,
+        worker_name=worker.name,
+        month=month,
+        days=days,
+        opening_attendance=opening_att,
+    )
 
 
 @router.post("/{worker_id}/attendance", response_model=DayLedgerRow)
@@ -277,26 +344,81 @@ def add_worker_advance(
 def calculate_settlement(db: Session, factory_id: int, worker: Worker, payload: SettlementRequest) -> SettlementResponse:
     if payload.duty_to_date < payload.duty_from_date:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Duty To cannot be before Duty From")
-    attendance_rows = (
+    
+    opening_att = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+
+    opening_payable_days = Decimal("0")
+    opening_advance = Decimal("0")
+    opening_deductions = Decimal("0")
+    opening_ot_hours = Decimal("0")
+    overlap_present = False
+
+    if opening_att is not None:
+        # Check if settled
+        settled_count = (
+            db.query(HisabSettlement)
+            .filter(HisabSettlement.factory_id == factory_id)
+            .filter(HisabSettlement.worker_id == worker.id)
+            .filter(HisabSettlement.duty_to_date >= opening_att.period_end)
+            .count()
+        )
+        if settled_count == 0:
+            if opening_att.period_start <= payload.duty_to_date and opening_att.period_end >= payload.duty_from_date:
+                overlap_present = True
+                opening_payable_days = Decimal(str(opening_att.present_days or 0)) + \
+                                       Decimal(str(opening_att.half_days or 0)) * Decimal("0.5") + \
+                                       Decimal(str(opening_att.paid_leave_days or 0))
+                opening_advance = Decimal(str(opening_att.advance_paid or 0))
+                opening_deductions = Decimal(str(opening_att.deductions or 0))
+                opening_ot_hours = Decimal(str(opening_att.overtime_hours or 0))
+
+    query = (
         db.query(AttendanceLog)
         .filter(AttendanceLog.factory_id == factory_id)
         .filter(AttendanceLog.worker_id == worker.id)
         .filter(AttendanceLog.is_settled.is_(False))
         .filter(AttendanceLog.date >= payload.duty_from_date)
         .filter(AttendanceLog.date <= payload.duty_to_date)
-        .all()
     )
-    duty_days = sum((attendance_units(row.status) for row in attendance_rows), Decimal("0"))
-    total_duty = money(duty_days * worker_rate(worker))
-    advance_rows = (
+    if opening_att is not None:
+        query = query.filter((AttendanceLog.date < opening_att.period_start) | (AttendanceLog.date > opening_att.period_end))
+    attendance_rows = query.all()
+
+    daily_duty_days = sum((attendance_units(row.status) for row in attendance_rows), Decimal("0"))
+    total_duty_days = daily_duty_days + opening_payable_days
+
+    # Overtime pay
+    daily_ot_hours = sum((Decimal(str(row.overtime_hours or 0)) for row in attendance_rows), Decimal("0"))
+    total_ot_hours = daily_ot_hours + opening_ot_hours
+    shift_hours = Decimal(str(worker.shift_hours or 8.0))
+    if shift_hours <= 0:
+        shift_hours = Decimal("8.0")
+    hourly_rate = worker_rate(worker) / shift_hours
+    overtime_pay = total_ot_hours * hourly_rate
+
+    total_duty = money((total_duty_days * worker_rate(worker)) + overtime_pay)
+
+    advance_query = (
         db.query(AdvancePayment)
         .filter(AdvancePayment.factory_id == factory_id)
         .filter(AdvancePayment.worker_id == worker.id)
         .filter(AdvancePayment.is_settled.is_(False))
         .filter(AdvancePayment.date <= payload.advance_cutoff_date)
-        .all()
     )
-    total_advance = money(sum((Decimal(str(row.amount or 0)) for row in advance_rows), Decimal("0")))
+    if opening_att is not None:
+        advance_query = advance_query.filter((AdvancePayment.date < opening_att.period_start) | (AdvancePayment.date > opening_att.period_end))
+    advance_rows = advance_query.all()
+    
+    daily_advance = sum((Decimal(str(row.amount or 0)) for row in advance_rows), Decimal("0"))
+    total_advance = money(daily_advance)
+    if overlap_present:
+        total_advance = money(daily_advance + opening_advance + opening_deductions)
+
     return SettlementResponse(
         worker_id=worker.id,
         total_duty_amount=total_duty,
@@ -354,3 +476,169 @@ def settle_hisab(
     db.refresh(settlement)
     preview.settlement_id = settlement.id
     return preview
+
+
+# Worker Payroll Summary Schemas & Route
+# ---------------------------------------------------------------------------
+
+class OpeningAttendanceSummary(BaseModel):
+    period_start: date
+    period_end: date
+    payable_days: float
+    present_days: float
+    half_days: float
+    absent_days: float
+    overtime_hours: float
+    advance_paid: float
+    deductions: float
+
+
+class DailyAttendanceSummary(BaseModel):
+    payable_days: float
+    present_days: float
+    half_days: float
+    absent_days: float
+    overtime_hours: float
+
+
+class FinalPayrollSummary(BaseModel):
+    total_payable_days: float
+    gross_salary: float
+    overtime_pay: float
+    total_advance: float
+    total_deductions: float
+    net_payable: float
+
+
+class PayrollSummaryResponse(BaseModel):
+    worker_id: int
+    worker_name: str
+    month: str
+    daily_wage_rate: float
+    opening_attendance: Optional[OpeningAttendanceSummary] = None
+    daily_attendance: DailyAttendanceSummary
+    final: FinalPayrollSummary
+
+
+@router.get("/{worker_id}/payroll-summary", response_model=PayrollSummaryResponse)
+def get_worker_payroll_summary(
+    worker_id: int,
+    month: str,  # YYYY-MM
+    current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
+    db: Session = Depends(get_db),
+):
+    worker = get_worker(db, current_user.factory_id, worker_id)
+    start, end = month_bounds(month)
+    
+    opening_att = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .first()
+    )
+    
+    opening_summary = None
+    opening_payable_days = Decimal("0")
+    opening_advance = Decimal("0")
+    opening_deductions = Decimal("0")
+    opening_ot_hours = Decimal("0")
+    overlap_present = False
+    
+    if opening_att is not None:
+        if opening_att.period_start <= end and opening_att.period_end >= start:
+            overlap_present = True
+            opening_payable_days = Decimal(str(opening_att.present_days or 0)) + \
+                                   Decimal(str(opening_att.half_days or 0)) * Decimal("0.5") + \
+                                   Decimal(str(opening_att.paid_leave_days or 0))
+            opening_advance = Decimal(str(opening_att.advance_paid or 0))
+            opening_deductions = Decimal(str(opening_att.deductions or 0))
+            opening_ot_hours = Decimal(str(opening_att.overtime_hours or 0))
+            
+            opening_summary = OpeningAttendanceSummary(
+                period_start=opening_att.period_start,
+                period_end=opening_att.period_end,
+                payable_days=float(opening_payable_days),
+                present_days=float(opening_att.present_days or 0),
+                half_days=float(opening_att.half_days or 0),
+                absent_days=float(opening_att.absent_days or 0),
+                overtime_hours=float(opening_att.overtime_hours or 0),
+                advance_paid=float(opening_att.advance_paid or 0),
+                deductions=float(opening_att.deductions or 0),
+            )
+            
+    # Load daily logs for this month
+    query = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == current_user.factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.date >= start)
+        .filter(AttendanceLog.date <= end)
+    )
+    if opening_att is not None:
+        query = query.filter((AttendanceLog.date < opening_att.period_start) | (AttendanceLog.date > opening_att.period_end))
+    logs = query.all()
+    
+    daily_present = sum((1 for log in logs if log.status == "Present"))
+    daily_half = sum((1 for log in logs if log.status == "Half-day"))
+    daily_absent = sum((1 for log in logs if log.status == "Absent"))
+    daily_payable_days = sum((attendance_units(log.status) for log in logs), Decimal("0"))
+    daily_ot_hours = sum((Decimal(str(log.overtime_hours or 0)) for log in logs), Decimal("0"))
+    
+    daily_summary = DailyAttendanceSummary(
+        payable_days=float(daily_payable_days),
+        present_days=float(daily_present),
+        half_days=float(daily_half),
+        absent_days=float(daily_absent),
+        overtime_hours=float(daily_ot_hours),
+    )
+    
+    total_payable_days = daily_payable_days + opening_payable_days
+    rate = worker_rate(worker)
+    gross_salary = total_payable_days * rate
+    
+    # Overtime calculation
+    total_ot_hours = daily_ot_hours + opening_ot_hours
+    shift_hours = Decimal(str(worker.shift_hours or 8.0))
+    if shift_hours <= 0:
+        shift_hours = Decimal("8.0")
+    hourly_rate = rate / shift_hours
+    overtime_pay = total_ot_hours * hourly_rate
+    
+    # Advances
+    daily_advance = db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0)).filter(
+        AdvancePayment.factory_id == current_user.factory_id,
+        AdvancePayment.worker_id == worker.id,
+        AdvancePayment.date >= start,
+        AdvancePayment.date <= end,
+    )
+    if opening_att is not None:
+        daily_advance = daily_advance.filter((AdvancePayment.date < opening_att.period_start) | (AdvancePayment.date > opening_att.period_end))
+    daily_advance_total = Decimal(str(daily_advance.scalar()))
+    
+    total_advance = daily_advance_total
+    total_deductions = Decimal("0")
+    if overlap_present:
+        total_advance = daily_advance_total + opening_advance
+        total_deductions = opening_deductions
+        
+    net_payable = (gross_salary + overtime_pay) - (total_advance + total_deductions)
+    
+    final_summary = FinalPayrollSummary(
+        total_payable_days=float(total_payable_days),
+        gross_salary=float(money(gross_salary)),
+        overtime_pay=float(money(overtime_pay)),
+        total_advance=float(money(total_advance)),
+        total_deductions=float(money(total_deductions)),
+        net_payable=float(money(net_payable)),
+    )
+    
+    return PayrollSummaryResponse(
+        worker_id=worker.id,
+        worker_name=worker.name,
+        month=month,
+        daily_wage_rate=float(rate),
+        opening_attendance=opening_summary,
+        daily_attendance=daily_summary,
+        final=final_summary,
+    )
+
