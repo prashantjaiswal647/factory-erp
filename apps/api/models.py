@@ -1083,7 +1083,7 @@ class DailyProduction(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
-    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
     machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False, index=True)
     product_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)

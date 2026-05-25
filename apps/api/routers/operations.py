@@ -641,3 +641,51 @@ def create_daily_sale(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Daily sale failed and was rolled back: {exc}",
         ) from exc
+
+
+@router.delete("/production/daily/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_daily_production(
+    log_id: int,
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    production = (
+        db.query(DailyProduction)
+        .filter(DailyProduction.id == log_id)
+        .filter(DailyProduction.factory_id == str(current_user.factory_id))
+        .first()
+    )
+    if production is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Daily production log not found"
+        )
+    
+    product_size_ml = production.product_size_ml
+    variety = production.variety
+    packaging_size_name = production.packaging_size_name
+    factory_id = production.factory_id
+    
+    try:
+        db.delete(production)
+        db.flush()
+        
+        # Recalculate dynamic live stock balance and sync caches
+        from routers.inventory import recalculate_and_sync_sku_stock
+        recalculate_and_sync_sku_stock(
+            db=db,
+            factory_id=str(factory_id),
+            product_size_ml=product_size_ml,
+            variety=variety,
+            packaging_size_name=packaging_size_name,
+        )
+        
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete production log: {exc}"
+        )
+    return None
+

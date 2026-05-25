@@ -1271,3 +1271,14 @@ export async function getUserSubscription(t?: number) {
   const response = await api.get<UserSubscriptionResponse>(url);
   return response.data;
 }
+
+export function deleteDailyProductionLog(logId: number) {
+  return api.delete(`/api/production/daily/${logId}`);
+}
+
+export function deleteOnboardingEntry(entryId: string, type?: string) {
+  return api.delete(`/api/onboarding/entry/${entryId}`, {
+    params: type ? { type } : undefined
+  });
+}
+

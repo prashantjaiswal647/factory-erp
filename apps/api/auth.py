@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models import AppUsageLog, Factory, OTPStore, User, SuperAdminAuditLog
-from services.google_sheets_provider import initialize_factory_google_sheet_task
+#from services.google_sheets_provider import initialize_factory_google_sheet_task
 
 try:
     from google.auth.transport import requests as google_requests

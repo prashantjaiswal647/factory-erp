@@ -1314,3 +1314,94 @@ def get_or_create_inventory(db: Session, factory_id: int, item_name: str, catego
         db.add(item)
         db.flush()
     return item
+
+
+@router.delete("/entry/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_onboarding_entry(
+    entry_id: str,
+    type: Optional[str] = None,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    factory_id = str(current_user.factory_id)
+    
+    # Try to parse string ID containing prefix
+    try:
+        actual_id = int(entry_id)
+    except ValueError:
+        parts = entry_id.split("-")
+        if len(parts) == 2:
+            type = parts[0]
+            try:
+                actual_id = int(parts[1])
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid entry_id format")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid entry_id format")
+
+    if not type:
+        type = "final"
+        
+    type_lower = type.lower()
+    
+    try:
+        if type_lower in ("final", "final product", "cups", "final-product"):
+            entry = db.query(FinalProductStock).filter(FinalProductStock.id == actual_id, FinalProductStock.factory_id == factory_id).first()
+            if entry:
+                product_size_ml = entry.product_size_ml
+                variety = entry.variety
+                packaging_size_name = entry.packaging_size_name
+                
+                db.delete(entry)
+                db.flush()
+                
+                # Recalculate dynamic live stock balance and sync caches
+                from routers.inventory import recalculate_and_sync_sku_stock
+                recalculate_and_sync_sku_stock(
+                    db=db,
+                    factory_id=factory_id,
+                    product_size_ml=product_size_ml,
+                    variety=variety,
+                    packaging_size_name=packaging_size_name,
+                )
+                db.commit()
+                return None
+        elif type_lower in ("blank", "blankstock"):
+            entry = db.query(BlankStock).filter(BlankStock.id == actual_id, BlankStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+                return None
+        elif type_lower in ("bottom", "bottomstock"):
+            entry = db.query(BottomStock).filter(BottomStock.id == actual_id, BottomStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+                return None
+        elif type_lower in ("box", "boxstock", "carton box", "carton"):
+            entry = db.query(BoxStock).filter(BoxStock.id == actual_id, BoxStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+                return None
+        elif type_lower in ("plastic", "plasticstock", "polybag"):
+            entry = db.query(PlasticStock).filter(PlasticStock.id == actual_id, PlasticStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+                return None
+        elif type_lower in ("polybag", "polybagstock"):
+            entry = db.query(PolybagStock).filter(PolybagStock.id == actual_id, PolybagStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+                return None
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete entry: {exc}"
+        )
+        
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Onboarding entry of type '{type}' with ID {actual_id} not found")
+
