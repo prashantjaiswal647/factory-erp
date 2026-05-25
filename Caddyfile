@@ -1,12 +1,13 @@
 munshiai.co.in, www.munshiai.co.in {
-    # Route API requests to the FastAPI backend
-    @backend_routes {
-        path /api/*
+    # Forward all API paths directly to FastAPI container port 8000
+    handle /api/* {
+        reverse_proxy api:8000
     }
-    reverse_proxy @backend_routes api:8000
-
-    # Serve the static web files for everything else
-    reverse_proxy web:80
+    
+    # Forward everything else to static web container build files
+    handle {
+        reverse_proxy web:80
+    }
 }
 
 api.munshiai.co.in {
@@ -18,9 +19,5 @@ n8n.munshiai.co.in {
 }
 
 db.munshiai.co.in {
-    basic_auth {
-        admin $2a$14$dU.IHlaKBRe1i3WZe6NkJecPFEQ8wH0s0zm7GPLg16En2Sp2zrNdK
-    }
-
     reverse_proxy adminer:8080
 }

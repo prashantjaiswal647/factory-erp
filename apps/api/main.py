@@ -82,9 +82,9 @@ from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
 from routers import machine_templates
-from routers.ai_invoice import CalculateDraftRequest, InvoiceDraftItem, calculate_draft
-from routers.ai_invoice import router as ai_invoice_router
-from routers.internal_automation import router as internal_automation_router
+#from routers.ai_invoice import CalculateDraftRequest, InvoiceDraftItem, calculate_draft
+#from routers.ai_invoice import router as ai_invoice_router
+#from routers.internal_automation import router as internal_automation_router
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 
@@ -178,8 +178,8 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(integrations.router)
     application.include_router(machine_onboarding.router)
     application.include_router(machine_templates.router)
-    application.include_router(ai_invoice_router)
-    application.include_router(internal_automation_router)
+    #application.include_router(ai_invoice_router)
+    #application.include_router(internal_automation_router)
 
 register_application_routers(app)
 
