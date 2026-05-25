@@ -1,0 +1,200 @@
+{
+  "id": "MunshiPdfInvoiceAgent001",
+  "name": "Munshi AI - PDF Invoice Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-invoice-pdf",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0b7df2e3-9313-4a2e-8c5f-36556ed02bc2",
+      "name": "Webhook - Generate Invoice",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        0
+      ],
+      "webhookId": "munshi-ai-generate-invoice-pdf"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\nconst invoice = body.invoice || {};\nconst items = Array.isArray(body.items) ? body.items : [];\n\nconst factoryId = String(body.factory_id || invoice.factory_id || 'factory');\nconst invoiceId = invoice.invoice_id || invoice.id || (Array.isArray(invoice.sale_ids) ? invoice.sale_ids[0] : undefined) || body.invoice_id || Date.now();\nconst invoiceDate = invoice.invoice_date || body.invoice_date || new Date().toISOString().slice(0, 10);\nconst customerName = invoice.customer_name || body.customer_name || '';\nconst customerPhone = invoice.customer_phone || body.customer_phone || '';\nconst paymentMethod = invoice.payment_method || body.payment_method || 'Cash';\nconst billTotal = Number(invoice.bill_total ?? body.bill_total ?? 0);\nconst amountPaid = Number(invoice.amount_paid ?? body.amount_paid ?? 0);\nconst customerTotalDue = Number(invoice.customer_total_due ?? body.customer_total_due ?? Math.max(billTotal - amountPaid, 0));\nconst pdfFilename = `invoice_${factoryId}_${invoiceId}.pdf`.replace(/[^a-zA-Z0-9_.-]/g, '_');\n\nreturn [{\n  json: {\n    factory_id: factoryId,\n    invoice_id: String(invoiceId),\n    invoice_date: invoiceDate,\n    customer_name: customerName,\n    customer_phone: customerPhone,\n    payment_method: paymentMethod,\n    bill_total: billTotal,\n    amount_paid: amountPaid,\n    customer_total_due: customerTotalDue,\n    items,\n    pdf_filename: pdfFilename,\n    pdf_path: `/files/invoices/${pdfFilename}`\n  }\n}];"
+      },
+      "id": "de95ad96-b406-4e58-b1aa-377a1bbd4905",
+      "name": "Normalize Invoice Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const escapeHtml = (value) => String(value ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#039;');\n\nconst money = (value) => `Rs ${Number(value || 0).toFixed(2)}`;\nconst itemRows = ($json.items || []).map((item, index) => {\n  const name = item.product_name || item.name || `${item.product_size_ml || ''}${item.product_size_ml ? ' ml' : ''} ${item.variety || ''}`.trim() || `Item ${index + 1}`;\n  const packaging = item.packaging_size_name || item.packaging || item.unit || '';\n  const quantity = item.quantity ?? item.boxes_sold ?? item.loose_packets_sold ?? 0;\n  const rate = item.rate ?? item.rate_per_box ?? item.unit_price ?? 0;\n  const total = item.line_total ?? item.total ?? (Number(quantity || 0) * Number(rate || 0));\n  return `<tr>\n    <td>${index + 1}</td>\n    <td>${escapeHtml(name)}</td>\n    <td>${escapeHtml(packaging)}</td>\n    <td class=\"num\">${escapeHtml(quantity)}</td>\n    <td class=\"num\">${money(rate)}</td>\n    <td class=\"num\">${money(total)}</td>\n  </tr>`;\n}).join('') || '<tr><td colspan=\"6\" class=\"empty\">No line items received</td></tr>';\n\nconst html = `<!doctype html>\n<html>\n<head>\n  <meta charset=\"utf-8\" />\n  <title>Invoice ${escapeHtml($json.invoice_id)}</title>\n  <style>\n    * { box-sizing: border-box; }\n    body { margin: 0; padding: 32px; color: #111827; font-family: Arial, Helvetica, sans-serif; font-size: 13px; }\n    .header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #111827; padding-bottom: 18px; margin-bottom: 24px; }\n    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }\n    .muted { color: #4b5563; }\n    .meta { text-align: right; line-height: 1.7; }\n    .section { margin-top: 20px; }\n    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }\n    .box { border: 1px solid #d1d5db; padding: 14px; }\n    .label { display: block; color: #4b5563; font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }\n    table { width: 100%; border-collapse: collapse; margin-top: 18px; }\n    th { background: #f3f4f6; text-align: left; font-size: 12px; border: 1px solid #d1d5db; padding: 9px; }\n    td { border: 1px solid #d1d5db; padding: 9px; vertical-align: top; }\n    .num { text-align: right; white-space: nowrap; }\n    .empty { text-align: center; color: #6b7280; }\n    .summary { margin-top: 22px; margin-left: auto; width: 320px; border: 1px solid #d1d5db; }\n    .summary-row { display: flex; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid #e5e7eb; }\n    .summary-row:last-child { border-bottom: 0; }\n    .total { font-weight: 700; font-size: 15px; background: #f9fafb; }\n  </style>\n</head>\n<body>\n  <div class=\"header\">\n    <div>\n      <h1>Invoice</h1>\n      <div class=\"muted\">Generated by Munshi AI</div>\n    </div>\n    <div class=\"meta\">\n      <div><strong>Invoice No:</strong> ${escapeHtml($json.invoice_id)}</div>\n      <div><strong>Date:</strong> ${escapeHtml($json.invoice_date)}</div>\n      <div><strong>Factory ID:</strong> ${escapeHtml($json.factory_id)}</div>\n    </div>\n  </div>\n\n  <div class=\"grid section\">\n    <div class=\"box\">\n      <span class=\"label\">Customer</span>\n      <strong>${escapeHtml($json.customer_name || '-')}</strong><br />\n      <span class=\"muted\">${escapeHtml($json.customer_phone || '-')}</span>\n    </div>\n    <div class=\"box\">\n      <span class=\"label\">Payment Method</span>\n      <strong>${escapeHtml($json.payment_method || '-')}</strong>\n    </div>\n  </div>\n\n  <div class=\"section\">\n    <table>\n      <thead>\n        <tr><th>#</th><th>Item</th><th>Packaging</th><th class=\"num\">Qty</th><th class=\"num\">Rate</th><th class=\"num\">Amount</th></tr>\n      </thead>\n      <tbody>${itemRows}</tbody>\n    </table>\n  </div>\n\n  <div class=\"summary\">\n    <div class=\"summary-row\"><span>Bill Total</span><strong>${money($json.bill_total)}</strong></div>\n    <div class=\"summary-row\"><span>Paid Amount</span><strong>${money($json.amount_paid)}</strong></div>\n    <div class=\"summary-row total\"><span>Total Due</span><span>${money($json.customer_total_due)}</span></div>\n  </div>\n</body>\n</html>`;\n\nreturn [{ json: { ...$json, invoice_html: html } }];"
+      },
+      "id": "a607f6fd-7bfa-4832-b9b5-9a6a42ae6629",
+      "name": "Build Invoice HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.invoice_html || '<html><body>Missing invoice HTML</body></html>';\nconst binary = await this.helpers.prepareBinaryData(Buffer.from(html, 'utf8'), 'index.html', 'text/html');\nreturn [{ json: $json, binary: { data: binary } }];"
+      },
+      "id": "2749c81b-7767-40a8-b19b-c98805b31b1a",
+      "name": "Create HTML Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gotenberg:3000/forms/chromium/convert/html",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "b1d0119f-63ee-4f11-b0ec-3ecce9262d89",
+      "name": "Gotenberg - HTML to PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fileName": "=/files/invoices/{{$json.pdf_filename}}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "545565e9-70f4-403a-b69f-659d69091060",
+      "name": "Write PDF to Host Volume",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'Invoice PDF generated successfully', factory_id: $json.factory_id, invoice_id: $json.invoice_id, pdf_filename: $json.pdf_filename, pdf_path: `/files/invoices/${$json.pdf_filename}` } }}",
+        "options": {}
+      },
+      "id": "de406d0c-63c4-4afd-9212-919c6cab4108",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        420,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Generate Invoice": {
+      "main": [
+        [
+          {
+            "node": "Normalize Invoice Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Invoice Payload": {
+      "main": [
+        [
+          {
+            "node": "Build Invoice HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Invoice HTML": {
+      "main": [
+        [
+          {
+            "node": "Create HTML Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create HTML Binary": {
+      "main": [
+        [
+          {
+            "node": "Gotenberg - HTML to PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gotenberg - HTML to PDF": {
+      "main": [
+        [
+          {
+            "node": "Write PDF to Host Volume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write PDF to Host Volume": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "versionId": "pdf-invoice-agent"
+}

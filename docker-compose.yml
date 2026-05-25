@@ -54,6 +54,7 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
       - N8N_PROXY_HOPS=${N8N_PROXY_HOPS:-1}
+      - N8N_RESTRICT_FILE_ACCESS_TO=${N8N_RESTRICT_FILE_ACCESS_TO:-/files/invoices}
       - N8N_USER_MANAGEMENT_DISABLED=false
       - N8N_SECURE_COOKIE=true
       - WEBHOOK_URL=${WEBHOOK_URL:-https://n8n.munshiai.co.in/}
