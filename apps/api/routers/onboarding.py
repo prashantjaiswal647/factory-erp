@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
@@ -55,6 +55,7 @@ from schemas import (
     WorkerPayload,
     WorkerResponse,
 )
+from services.n8n_sync import sync_data_to_n8n_bg
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 
@@ -210,6 +211,7 @@ def onboarding_overview(
 @router.post("/final-stock", response_model=FinalProductOpeningStockResponse)
 def save_final_product_opening_stock(
     payload: FinalProductOpeningStockRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -347,6 +349,14 @@ def save_final_product_opening_stock(
         )
         db.refresh(stock)
         
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(current_user.factory_id),
+            sync_type="onboarding",
+            action="insert",
+            data=payload,
+        )
+
         # Enforce string representation for factory_id in return payload
         return FinalProductOpeningStockResponse(
             id=stock.id,
@@ -450,6 +460,7 @@ def list_onboarding_customers(
 @router.post("/raw-material/blank", status_code=status.HTTP_201_CREATED)
 def create_blank_stock(
     payload: BlankStockCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -496,6 +507,14 @@ def create_blank_stock(
             metric.weight_per_sack_kg = payload.kg_per_sack
     db.commit()
 
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -510,6 +529,7 @@ def create_blank_stock(
 @router.post("/raw-material/bottom", status_code=status.HTTP_201_CREATED)
 def create_bottom_stock(
     payload: BottomStockCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -559,6 +579,14 @@ def create_bottom_stock(
             metric.weight_per_sack_kg = payload.bag_weight_kg
     db.commit()
 
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -574,6 +602,7 @@ def create_bottom_stock(
 @router.post("/raw-material/box", status_code=status.HTTP_201_CREATED)
 def create_box_stock(
     payload: BoxStockCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -593,6 +622,13 @@ def create_box_stock(
     stock.total_boxes = payload.quantity
     stock.price_per_box = payload.price_per_box
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -605,6 +641,7 @@ def create_box_stock(
 @router.post("/raw-material/plastic", status_code=status.HTTP_201_CREATED)
 def create_plastic_stock(
     payload: PlasticStockCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -649,6 +686,14 @@ def create_plastic_stock(
             metric.kg_per_box = payload.weight_per_bora_kg
     db.commit()
 
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -664,6 +709,7 @@ def create_plastic_stock(
 @router.delete("/worker/{worker_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_onboarding_worker(
     worker_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -683,6 +729,13 @@ def delete_onboarding_worker(
     try:
         worker.is_active = False
         db.commit()
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(current_user.factory_id),
+            sync_type="worker",
+            action="delete",
+            data={"worker_id": worker_id},
+        )
     except Exception as e:
         db.rollback()
         print(f"DELETE ERROR: {e}")
@@ -696,6 +749,7 @@ def delete_onboarding_worker(
 @router.delete("/machine/{machine_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_onboarding_machine(
     machine_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -709,12 +763,20 @@ def delete_onboarding_machine(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
     db.delete(machine)
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="onboarding",
+        action="delete",
+        data={"machine_id": machine_id},
+    )
     return None
 
 
 @router.delete("/raw-material/{raw_material_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_onboarding_raw_material(
     raw_material_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -728,12 +790,20 @@ def delete_onboarding_raw_material(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw material metric not found")
     db.delete(metric)
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="onboarding",
+        action="delete",
+        data={"raw_material_id": raw_material_id},
+    )
     return None
 
 
 @router.delete("/customer/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_onboarding_customer(
     customer_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -747,6 +817,13 @@ def delete_onboarding_customer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
     db.delete(customer)
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="onboarding",
+        action="delete",
+        data={"customer_id": customer_id},
+    )
     return None
 
 
@@ -757,6 +834,7 @@ def delete_onboarding_customer(
 @router.post("/step1", response_model=Step1Response)
 def onboarding_step1(
     payload: Step1Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -778,6 +856,13 @@ def onboarding_step1(
 
     current_user.factory_id = factory.id
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(factory.id),
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
 
     return Step1Response(
         message="Factory created successfully",
@@ -789,6 +874,7 @@ def onboarding_step1(
 @router.post("/step1/workers", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED)
 def onboarding_step1_create_worker(
     payload: WorkerCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -851,6 +937,13 @@ def onboarding_step1_create_worker(
 
     db.commit()
     db.refresh(worker)
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="worker",
+        action="insert",
+        data=payload,
+    )
     return worker
 
 
@@ -861,6 +954,7 @@ def onboarding_step1_create_worker(
 @router.post("/step2/machines", response_model=Step2Response)
 def onboarding_step2_machines(
     payload: Step2Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -895,6 +989,13 @@ def onboarding_step2_machines(
         db.add(machine)
 
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
     return Step2Response(
         message="Machines configured successfully",
         factory_id=factory_id,
@@ -909,6 +1010,7 @@ def onboarding_step2_machines(
 @router.post("/step3/materials", response_model=Step3Response)
 def onboarding_step3_materials(
     payload: Step3Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -1024,6 +1126,13 @@ def onboarding_step3_materials(
         pack_saved += 1
 
     db.commit()
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=factory_id,
+        sync_type="onboarding",
+        action="insert",
+        data=payload,
+    )
     return Step3Response(
         message="Material and packaging metrics saved successfully",
         factory_id=factory_id,
@@ -1039,6 +1148,7 @@ def onboarding_step3_materials(
 @router.post("/complete", response_model=OnboardingCompleteResponse)
 def complete_onboarding(
     payload: OnboardingCompleteRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -1068,6 +1178,13 @@ def complete_onboarding(
             upsert_customer(db, factory_id, customer_payload)
 
         db.commit()
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=factory_id,
+            sync_type="onboarding",
+            action="insert",
+            data=payload,
+        )
         return OnboardingCompleteResponse(
             message="Factory onboarding completed successfully",
             factory_id=factory_id,
@@ -1319,6 +1436,7 @@ def get_or_create_inventory(db: Session, factory_id: int, item_name: str, catego
 @router.delete("/entry/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_onboarding_entry(
     entry_id: str,
+    background_tasks: BackgroundTasks,
     type: Optional[str] = None,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
@@ -1344,6 +1462,15 @@ def delete_onboarding_entry(
         
     type_lower = type.lower()
     
+    def trigger_delete_sync():
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(factory_id),
+            sync_type="onboarding",
+            action="delete",
+            data={"entry_id": actual_id, "type": type_lower}
+        )
+    
     try:
         if type_lower in ("final", "final product", "cups", "final-product"):
             entry = db.query(FinalProductStock).filter(FinalProductStock.id == actual_id, FinalProductStock.factory_id == factory_id).first()
@@ -1365,36 +1492,42 @@ def delete_onboarding_entry(
                     packaging_size_name=packaging_size_name,
                 )
                 db.commit()
+                trigger_delete_sync()
                 return None
         elif type_lower in ("blank", "blankstock"):
             entry = db.query(BlankStock).filter(BlankStock.id == actual_id, BlankStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
                 db.commit()
+                trigger_delete_sync()
                 return None
         elif type_lower in ("bottom", "bottomstock"):
             entry = db.query(BottomStock).filter(BottomStock.id == actual_id, BottomStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
                 db.commit()
+                trigger_delete_sync()
                 return None
         elif type_lower in ("box", "boxstock", "carton box", "carton"):
             entry = db.query(BoxStock).filter(BoxStock.id == actual_id, BoxStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
                 db.commit()
+                trigger_delete_sync()
                 return None
         elif type_lower in ("plastic", "plasticstock", "polybag"):
             entry = db.query(PlasticStock).filter(PlasticStock.id == actual_id, PlasticStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
                 db.commit()
+                trigger_delete_sync()
                 return None
         elif type_lower in ("polybag", "polybagstock"):
             entry = db.query(PolybagStock).filter(PolybagStock.id == actual_id, PolybagStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
                 db.commit()
+                trigger_delete_sync()
                 return None
     except Exception as exc:
         db.rollback()

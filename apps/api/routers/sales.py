@@ -20,6 +20,7 @@ from db import get_db
 from models import BoxStock, Customer, DailySale, FinalProductStock, FinishedGoodsStock, Order, OrderItem, Payment, User
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
+from services.n8n_sync import sync_data_to_n8n_bg
 
 
 router = APIRouter()
@@ -614,6 +615,14 @@ def add_sale_invoice(
         db.commit()
 
         background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(factory_id),
+            sync_type="sales",
+            action="insert",
+            data=payload,
+        )
+
+        background_tasks.add_task(
             send_n8n_whatsapp_event,
             {
                 "event": "NEW_SALE",
@@ -726,6 +735,13 @@ def create_sales_order(
     order.payment_status = payment_status_for(total_amount, to_money(payload.amount_paid))
     db.commit()
     db.refresh(order)
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(factory_id),
+        sync_type="sales",
+        action="insert",
+        data=payload,
+    )
 
     if should_alert_owner_for_sale(current_user.role):
         owner = (
@@ -1109,6 +1125,14 @@ def approve_sales_order(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Order approval failed: {exc}") from exc
 
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="sales",
+        action="insert",
+        data={"order_id": order_id, "status": order.status},
+    )
+
     if order.customer is not None:
         message = build_confirmed_bill_message(order.customer.name, factory_display_name(current_user), to_money(order.total_amount))
         background_tasks.add_task(send_order_whatsapp_bill, customer_display_phone(order.customer), message)
@@ -1123,6 +1147,7 @@ def approve_sales_order(
 @router.post("/order/{order_id}/reject", response_model=SalesOrderActionResponse)
 def reject_sales_order(
     order_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
@@ -1144,6 +1169,13 @@ def reject_sales_order(
 
         order.status = "cancelled"
         db.commit()
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(current_user.factory_id),
+            sync_type="sales",
+            action="delete",
+            data={"order_id": order_id, "status": order.status},
+        )
         return SalesOrderActionResponse(message="Order rejected.", order_id=order.id, status=order.status)
     except HTTPException:
         db.rollback()
@@ -1225,6 +1257,7 @@ def get_pending_payment_dues(
 @router.delete("/outstanding/{order_id}", response_model=SalesOrderActionResponse)
 def clear_outstanding_order(
     order_id: int,
+    background_tasks: BackgroundTasks,
     confirm: bool = Query(default=False),
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
@@ -1253,6 +1286,15 @@ def clear_outstanding_order(
         order.customer.pending_balance = remaining_customer_balance
         order.customer.pending_dues = float(remaining_customer_balance)
     db.commit()
+
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="sales",
+        action="delete",
+        data={"order_id": order_id}
+    )
+
     return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=order.id, status=order.status)
 
 

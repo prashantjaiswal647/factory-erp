@@ -4,7 +4,7 @@ from typing import Literal, Optional
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status, BackgroundTasks
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +24,7 @@ from auth import (
 from db import get_db
 from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog, WorkerOpeningAttendance
 from schemas import OpeningAttendanceCreate, OpeningAttendanceResponse
+from services.n8n_sync import sync_data_to_n8n_bg
 
 # Existing router prefixes
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -819,6 +820,7 @@ workers_router = APIRouter(prefix="/api/workers", tags=["workers"])
 @workers_router.delete("/{worker_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_worker(
     worker_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -862,5 +864,13 @@ def delete_worker(
         db.delete(staff_user)
         
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    background_tasks.add_task(
+        sync_data_to_n8n_bg,
+        factory_id=str(current_user.factory_id),
+        sync_type="worker",
+        action="delete",
+        data={"worker_id": worker_id}
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

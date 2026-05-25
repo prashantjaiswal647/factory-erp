@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from models import (
 )
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
+from services.n8n_sync import sync_data_to_n8n_bg
 
 
 router = APIRouter(prefix="/api", tags=["operations"])
@@ -110,6 +111,7 @@ def mark_worker_present_for_production(
 @router.post("/production/entry", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
 def create_daily_production(
     payload: DailyProductionCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -403,6 +405,14 @@ def create_daily_production(
         db.commit()
         db.refresh(production)
 
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(factory_id),
+            sync_type="production",
+            action="insert",
+            data=payload,
+        )
+
         return DailyProductionResponse(
             production_id=production.id,
             product_size_ml=product_size_ml,
@@ -646,6 +656,7 @@ def create_daily_sale(
 @router.delete("/production/daily/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_daily_production(
     log_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -681,6 +692,14 @@ def delete_daily_production(
         )
         
         db.commit()
+
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(factory_id),
+            sync_type="production",
+            action="delete",
+            data={"log_id": log_id}
+        )
     except Exception as exc:
         db.rollback()
         raise HTTPException(
