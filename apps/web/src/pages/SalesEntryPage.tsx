@@ -56,19 +56,26 @@ export default function SalesEntryPage() {
   });
 
   useEffect(() => {
-    void getInventory().then((response) => {
-      const variations = response.data.filter((row) => row.stock_type === "Final Product" && row.product_id);
-      setInventoryRows(variations);
-      if (variations[0]) {
-        setForm((current) => ({ ...current, items: [itemFromVariation(variations[0], current.items[0])] }));
-      }
-    });
+    void getInventory()
+      .then((response) => {
+        const variations = response.data.filter((row) => row.stock_type === "Final Product" && row.product_id);
+        setInventoryRows(variations);
+        if (variations[0]) {
+          setForm((current) => ({ ...current, items: [itemFromVariation(variations[0], current.items[0])] }));
+        }
+      })
+      .catch((error) => setToast(apiErrorMessage(error)));
   }, []);
 
   useEffect(() => {
     const handle = window.setTimeout(async () => {
-      const response = await searchCustomers(customerQuery);
-      setCustomerResults(response.data);
+      try {
+        const response = await searchCustomers(customerQuery);
+        setCustomerResults(response.data);
+      } catch (error) {
+        setCustomerResults([]);
+        setToast(apiErrorMessage(error));
+      }
     }, 200);
     return () => window.clearTimeout(handle);
   }, [customerQuery]);
@@ -88,6 +95,14 @@ export default function SalesEntryPage() {
     if (!selectedCustomer) return;
     if (hasInsufficientStock) {
       setToast("Insufficient Stock");
+      return;
+    }
+    if (!form.items.some((item) => Number(item.boxes_sold || 0) > 0 || Number(item.loose_packets_sold || 0) > 0)) {
+      setToast("At least one product quantity is required.");
+      return;
+    }
+    if (form.items.some((item) => !item.product_id || !item.product_size_ml || !item.packaging_size_name.trim())) {
+      setToast("Please select a valid product variation before saving.");
       return;
     }
     setIsSaving(true);
