@@ -17,9 +17,10 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, FinalProductStock, FinishedGoodsStock, Order, OrderItem, Payment, User
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, Order, OrderItem, Payment, User
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
+from services.n8n_invoice import push_invoice_to_n8n_bg
 from services.n8n_sync import sync_data_to_n8n_bg
 
 
@@ -49,6 +50,21 @@ def effective_rate_per_box(item) -> Decimal:
     if rate_per_box > 0:
         return rate_per_box
     return to_money(to_money(item.rate_per_packet) * Decimal(item.packets_per_box or 0))
+
+
+def resolve_factory_google_sheet_id(db: Session, factory_id: str) -> str | None:
+    factory = db.query(Factory).filter(factory_id_filter(Factory.id, factory_id)).first()
+    if factory is not None and factory.google_sheet_id:
+        return factory.google_sheet_id
+
+    sheet = (
+        db.query(FactoryAutomationSheet)
+        .filter(factory_id_filter(FactoryAutomationSheet.factory_id, factory_id))
+        .filter(FactoryAutomationSheet.is_active.is_(True))
+        .order_by(FactoryAutomationSheet.updated_at.desc(), FactoryAutomationSheet.created_at.desc())
+        .first()
+    )
+    return sheet.google_sheet_id if sheet else None
 
 
 def payment_status_for(total_amount: Decimal, amount_paid: Decimal) -> str:
@@ -459,6 +475,7 @@ async def send_owner_sale_alert_email(
     await FastMail(mail_config).send_message(message)
 
 
+@router.post("/invoice", response_model=DailySaleResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/add", response_model=DailySaleResponse, status_code=status.HTTP_201_CREATED)
 def add_sale_invoice(
     payload: DailySaleCreate,
@@ -577,6 +594,22 @@ def add_sale_invoice(
         if customer_due_after_payment < 0:
             customer_due_after_payment = Decimal("0.00")
 
+        line_items: list[dict[str, object]] = []
+        for item in payload.items:
+            item_rate_per_box = effective_rate_per_box(item)
+            line_items.append(
+                {
+                    "product_size_ml": item.product_size_ml,
+                    "variety": item.variety.strip(),
+                    "packaging_size_name": item.packaging_size_name.strip(),
+                    "boxes_sold": item.boxes_sold,
+                    "loose_packets_sold": item.loose_packets_sold,
+                    "rate_per_box": item_rate_per_box,
+                    "rate_per_packet": to_money(item.rate_per_packet),
+                    "line_total": to_money(Decimal(item.boxes_sold) * item_rate_per_box),
+                }
+            )
+
         if sale_ids:
             first_sale = db.query(DailySale).filter(DailySale.id == sale_ids[0]).first()
             if first_sale is not None:
@@ -614,6 +647,31 @@ def add_sale_invoice(
 
         db.commit()
 
+        google_spreadsheet_id = resolve_factory_google_sheet_id(db, factory_id)
+        invoice_payload = {
+            "event": "invoice.created",
+            "factory_id": factory_id,
+            "google_spreadsheet_id": google_spreadsheet_id,
+            "target_sheet_name": f"Factory_{factory_id}_Sales",
+            "sync_type": "sales",
+            "action": "insert",
+            "invoice": {
+                "invoice_id": sale_ids[0] if sale_ids else None,
+                "sale_ids": sale_ids,
+                "invoice_date": payload.date,
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "customer_phone": normalized_customer_phone,
+                "payment_method": "Cash",
+                "bill_total": current_bill_amount,
+                "amount_paid": to_money(payload.amount_paid),
+                "previous_due": previous_remaining_balance,
+                "customer_total_due": customer_due_after_payment,
+                "status": "created",
+            },
+            "items": line_items,
+        }
+
         background_tasks.add_task(
             sync_data_to_n8n_bg,
             factory_id=str(factory_id),
@@ -621,6 +679,8 @@ def add_sale_invoice(
             action="insert",
             data=payload,
         )
+
+        background_tasks.add_task(push_invoice_to_n8n_bg, invoice_payload)
 
         background_tasks.add_task(
             send_n8n_whatsapp_event,

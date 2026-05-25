@@ -1,0 +1,306 @@
+{
+  "name": "Munshi AI - Local Generate Invoice",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-invoice",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8c2a7c9a-0c35-4a64-9bd0-5d511f7c6f11",
+      "name": "Webhook - Generate Invoice",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        0
+      ],
+      "webhookId": "munshi-local-generate-invoice"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\nconst invoice = body.invoice || {};\nconst items = body.items || [];\nconst targetSheetName = body.target_sheet_name || `Factory_${body.factory_id}_Sales`;\nconst invoiceId = invoice.invoice_id || (Array.isArray(invoice.sale_ids) ? invoice.sale_ids[0] : 'pending');\n\nreturn [{\n  json: {\n    event: body.event || 'invoice.created',\n    factory_id: String(body.factory_id || ''),\n    google_spreadsheet_id: body.google_spreadsheet_id || '',\n    target_sheet_name: targetSheetName,\n    invoice_id: invoiceId,\n    sale_ids: invoice.sale_ids || [],\n    invoice_date: invoice.invoice_date || '',\n    customer_id: invoice.customer_id || '',\n    customer_name: invoice.customer_name || '',\n    customer_phone: invoice.customer_phone || '',\n    payment_method: invoice.payment_method || 'Cash',\n    bill_total: Number(invoice.bill_total || 0),\n    amount_paid: Number(invoice.amount_paid || 0),\n    previous_due: Number(invoice.previous_due || 0),\n    customer_total_due: Number(invoice.customer_total_due || 0),\n    status: invoice.status || 'created',\n    items,\n    items_json: JSON.stringify(items),\n    received_at: new Date().toISOString(),\n    pdf_filename: `invoice_${body.factory_id || 'factory'}_${invoiceId}.pdf`\n  }\n}];"
+      },
+      "id": "51c1de2f-3533-4f02-aaee-1376d04f9de0",
+      "name": "Normalize Invoice Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.google_spreadsheet_id}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "690bb190-4d25-4f44-bd4d-43cab5744ab6",
+      "name": "Has Spreadsheet ID?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{$json.google_spreadsheet_id}}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{$json.target_sheet_name}}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "invoice_id": "={{$json.invoice_id}}",
+            "factory_id": "={{$json.factory_id}}",
+            "invoice_date": "={{$json.invoice_date}}",
+            "customer_name": "={{$json.customer_name}}",
+            "customer_phone": "={{$json.customer_phone}}",
+            "bill_total": "={{$json.bill_total}}",
+            "amount_paid": "={{$json.amount_paid}}",
+            "customer_total_due": "={{$json.customer_total_due}}",
+            "items_json": "={{$json.items_json}}",
+            "received_at": "={{$json.received_at}}"
+          }
+        },
+        "options": {}
+      },
+      "id": "d50985cf-a98c-47a9-a4db-9b65253fc727",
+      "name": "Google Sheets - Append Sales Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -40,
+        -120
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const itemRows = ($json.items || []).map((item) => `\n<tr>\n  <td>${item.product_size_ml || ''}ml</td>\n  <td>${item.variety || ''}</td>\n  <td>${item.packaging_size_name || ''}</td>\n  <td>${item.boxes_sold || 0}</td>\n  <td>${item.loose_packets_sold || 0}</td>\n  <td>Rs ${Number(item.rate_per_box || 0).toFixed(2)}</td>\n  <td>Rs ${Number(item.line_total || 0).toFixed(2)}</td>\n</tr>`).join('');\n\nconst html = `<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<style>\nbody { font-family: Arial, sans-serif; color: #111827; padding: 32px; }\n.header { border-bottom: 2px solid #111827; padding-bottom: 16px; margin-bottom: 24px; }\nh1 { margin: 0; font-size: 28px; }\n.meta { margin-top: 8px; color: #4b5563; font-size: 13px; }\ntable { width: 100%; border-collapse: collapse; margin-top: 24px; }\nth { background: #f3f4f6; text-align: left; font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\ntd { font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\n.summary { margin-top: 24px; margin-left: auto; width: 300px; border: 1px solid #d1d5db; padding: 16px; }\n.row { display: flex; justify-content: space-between; margin-bottom: 8px; }\n.total { font-weight: bold; font-size: 16px; border-top: 1px solid #d1d5db; padding-top: 8px; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>Munshi AI Sales Invoice</h1>\n  <div class=\"meta\">Invoice #${$json.invoice_id} | Factory ID: ${$json.factory_id}</div>\n  <div class=\"meta\">Date: ${$json.invoice_date}</div>\n</div>\n<p><strong>Customer:</strong> ${$json.customer_name}</p>\n<p><strong>Phone:</strong> ${$json.customer_phone || '-'}</p>\n<p><strong>Payment Method:</strong> ${$json.payment_method}</p>\n<table>\n<thead><tr><th>Size</th><th>Variety</th><th>Packaging</th><th>Boxes</th><th>Loose</th><th>Rate / Box</th><th>Total</th></tr></thead>\n<tbody>${itemRows}</tbody>\n</table>\n<div class=\"summary\">\n  <div class=\"row\"><span>Bill Total</span><span>Rs ${Number($json.bill_total || 0).toFixed(2)}</span></div>\n  <div class=\"row\"><span>Paid</span><span>Rs ${Number($json.amount_paid || 0).toFixed(2)}</span></div>\n  <div class=\"row total\"><span>Total Due</span><span>Rs ${Number($json.customer_total_due || 0).toFixed(2)}</span></div>\n</div>\n</body>\n</html>`;\n\nreturn [{ json: { ...$json, invoice_html: html } }];"
+      },
+      "id": "c15963f4-e9c9-443c-974d-8f9fb30889cf",
+      "name": "Build Invoice HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.invoice_html || '<html><body>Missing invoice HTML</body></html>';\nconst binary = await this.helpers.prepareBinaryData(Buffer.from(html, 'utf8'), 'index.html', 'text/html');\nreturn [{ json: $json, binary: { data: binary } }];"
+      },
+      "id": "6f3f61da-fb9e-40fe-8e3a-eb2f93f68a02",
+      "name": "Create HTML Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gotenberg:3000/forms/chromium/convert/html",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "f202d1b6-0772-46f3-82bf-71e04e32b1e6",
+      "name": "Gotenberg - HTML to PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        -120
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "fileName": "=/files/invoices/{{$json.pdf_filename}}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "66d903ad-66d7-4bba-9643-10f5c0a2dbdf",
+      "name": "Write PDF to Host Volume",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        860,
+        -120
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'Munshi invoice workflow accepted', factory_id: $json.factory_id, invoice_id: $json.invoice_id, target_sheet_name: $json.target_sheet_name } }}",
+        "options": {}
+      },
+      "id": "048c4544-3439-4fec-a38e-fdc0e164ec61",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1080,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, message: 'Missing google_spreadsheet_id in factory metadata. Link it from Munshi Control Room first.', factory_id: $json.factory_id } }}",
+        "options": {}
+      },
+      "id": "77fac019-f9f8-4e18-88f2-652403d045e0",
+      "name": "Respond Missing Sheet ID",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -40,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Generate Invoice": {
+      "main": [
+        [
+          {
+            "node": "Normalize Invoice Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Invoice Payload": {
+      "main": [
+        [
+          {
+            "node": "Has Spreadsheet ID?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Spreadsheet ID?": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Append Sales Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Missing Sheet ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Append Sales Row": {
+      "main": [
+        [
+          {
+            "node": "Build Invoice HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Invoice HTML": {
+      "main": [
+        [
+          {
+            "node": "Create HTML Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create HTML Binary": {
+      "main": [
+        [
+          {
+            "node": "Gotenberg - HTML to PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gotenberg - HTML to PDF": {
+      "main": [
+        [
+          {
+            "node": "Write PDF to Host Volume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write PDF to Host Volume": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-05-25T00:00:00.000Z",
+  "versionId": "local"
+}

@@ -29,6 +29,8 @@ services:
       postgres:
         condition: service_healthy
     env_file: .env
+    environment:
+      N8N_INVOICE_WEBHOOK_URL: http://n8n:5678/webhook/generate-invoice
     ports:
       - "${LOCAL_API_PORT_MAP:-127.0.0.1:8000:8000}"
     networks:
@@ -61,10 +63,18 @@ services:
       - "${LOCAL_N8N_PORT_MAP:-127.0.0.1:5678:5678}"
     volumes:
       - n8n-data:/home/node/.n8n
+      - ./storage/invoices:/files/invoices
     networks:
       - ai-erp-network
 
-  # 5. Database Admin UI
+  # 5. HTML to PDF service for n8n invoice generation
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: always
+    networks:
+      - ai-erp-network
+
+  # 6. Database Admin UI
   adminer:
     image: adminer
     restart: always
@@ -75,7 +85,7 @@ services:
     depends_on:
       - postgres
 
-  # 6. Caddy Reverse Proxy
+  # 7. Caddy Reverse Proxy
   caddy:
     image: caddy:latest
     restart: always
