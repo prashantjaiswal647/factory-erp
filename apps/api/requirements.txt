@@ -14,7 +14,8 @@ langchain-classic
 langchain-groq
 langchain-openai
 pydantic
-google-auth
+google-auth>=2.20.0
+gspread>=6.0.0
 razorpay
 httpx
 pytest

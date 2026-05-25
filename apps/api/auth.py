@@ -5,7 +5,7 @@ import re
 from typing import Callable, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models import AppUsageLog, Factory, OTPStore, User, SuperAdminAuditLog
+from services.google_sheets_provider import initialize_factory_google_sheet_task
 
 try:
     from google.auth.transport import requests as google_requests
@@ -840,7 +841,7 @@ def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 @public_router.post("/signup", status_code=status.HTTP_201_CREATED)
-def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
+def signup_json(payload: SignupRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email = payload.email.strip().lower() if payload.email else None
     phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
     full_name = payload.full_name.strip()
@@ -909,6 +910,9 @@ def signup_json(payload: SignupRequest, db: Session = Depends(get_db)):
             detail="Signup failed",
         ) from exc
 
+    # Enqueue Google Sheet initialization in background task
+    background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+
     return {
         "message": "Signup successful. Please log in.",
         "factory_id": user.factory_id,
@@ -970,7 +974,7 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/google/complete", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
-def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = Depends(get_db)):
+def complete_google_signup(payload: GoogleSignupCompleteRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     claims = verify_google_credential(payload.credential)
     email = str(claims.get("email") or "").strip().lower()
     phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
@@ -1019,6 +1023,10 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, db: Session = D
     factory.owner_phone_number = user.phone_number
     db.commit()
     db.refresh(user)
+
+    # Enqueue Google Sheet initialization in background task
+    background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+
     return build_login_response(user, db)
 
 

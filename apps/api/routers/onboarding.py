@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from typing import List, Optional
 
@@ -58,6 +59,7 @@ from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
+logger = logging.getLogger(__name__)
 
 
 class OnboardingWorkerSummary(BaseModel):
@@ -141,7 +143,7 @@ class FinalProductOpeningStockRequest(BaseModel):
 
 class FinalProductOpeningStockResponse(BaseModel):
     id: int
-    factory_id: int
+    factory_id: str
     product_size_ml: Optional[int] = None
     variety: Optional[str] = None
     packaging_size: Optional[str] = None
@@ -175,7 +177,7 @@ def onboarding_overview(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     return OnboardingOverviewResponse(
         workers=(
             db.query(Worker)
@@ -212,18 +214,70 @@ def save_final_product_opening_stock(
     db: Session = Depends(get_db),
 ):
     try:
-        packaging_size_name = (payload.packaging_size_name or payload.packaging_size or "").strip()
-        packets_per_box_limit = payload.packets_per_box_limit or payload.packets_per_box
+        # Dynamic fallback parameters injection
+        product_size_ml = payload.product_size_ml if payload.product_size_ml is not None else 210
+        packaging_size_name = (payload.packaging_size_name or payload.packaging_size or f"{product_size_ml}ml Standard Box").strip()
+        packets_per_box_limit = payload.packets_per_box_limit or payload.packets_per_box or 1000
+        
         quantity = payload.current_quantity
         if quantity is None:
             quantity = payload.total_boxes
         if quantity is None:
             quantity = payload.initial_quantity
+        if quantity is None:
+            quantity = 0
+
+        # Database transactional safety: Ensure raw dependency records exist dynamically in background
+        profile = db.query(PackagingProfile).filter(
+            PackagingProfile.factory_id == str(current_user.factory_id),
+            PackagingProfile.cup_size_ml == product_size_ml,
+            sql_func.lower(PackagingProfile.profile_name) == packaging_size_name.lower(),
+        ).first()
+
+        if not profile:
+            logger.info(f"Injecting dynamic default PackagingProfile '{packaging_size_name}' for size {product_size_ml}ml.")
+            poly_inventory = get_or_create_inventory(db, str(current_user.factory_id), f"{product_size_ml}ml Polybag", "Packaging", "pieces")
+            box_inventory = get_or_create_inventory(db, str(current_user.factory_id), packaging_size_name, "Packaging", "pieces")
+            cups_per_poly = payload.pieces_per_packet if payload.pieces_per_packet and payload.pieces_per_packet > 0 else 1
+            profile = PackagingProfile(
+                factory_id=str(current_user.factory_id),
+                profile_name=packaging_size_name,
+                product_name=f"{product_size_ml}ml Paper Cup",
+                product_name_ml=product_size_ml,
+                cup_size_ml=product_size_ml,
+                polybag_capacity=cups_per_poly,
+                box_capacity=cups_per_poly * packets_per_box_limit,
+                box_size_name=packaging_size_name,
+                cups_per_poly=cups_per_poly,
+                cups_per_polybag=cups_per_poly,
+                polys_per_box=packets_per_box_limit,
+                polybags_per_box=packets_per_box_limit,
+                box_inventory_id=box_inventory.id,
+                poly_inventory_id=poly_inventory.id
+            )
+            db.add(profile)
+            db.flush()
+
+        stock_fg = db.query(FinishedGoodsStock).filter(
+            FinishedGoodsStock.factory_id == str(current_user.factory_id),
+            FinishedGoodsStock.packaging_profile_id == profile.id
+        ).first()
+
+        if not stock_fg:
+            logger.info(f"Injecting dynamic default FinishedGoodsStock for size {product_size_ml}ml.")
+            stock_fg = FinishedGoodsStock(
+                factory_id=str(current_user.factory_id),
+                cup_size_ml=product_size_ml,
+                packaging_profile_id=profile.id,
+                boxes_available=0
+            )
+            db.add(stock_fg)
+            db.flush()
 
         if payload.product_id:
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == current_user.factory_id)
+                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
                 .filter(FinalProductStock.id == payload.product_id)
                 .with_for_update()
                 .first()
@@ -231,16 +285,10 @@ def save_final_product_opening_stock(
             if stock is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock item not found")
         else:
-            if payload.product_size_ml is None:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="product_size_ml is required")
-            if not packaging_size_name:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packaging_size or packaging_size_name is required")
-            if packets_per_box_limit is None:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packets_per_box or packets_per_box_limit is required")
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == current_user.factory_id)
-                .filter(FinalProductStock.product_size_ml == payload.product_size_ml)
+                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
+                .filter(FinalProductStock.product_size_ml == product_size_ml)
                 .filter(FinalProductStock.variety == payload.variety)
                 .filter(FinalProductStock.packaging_size_name == packaging_size_name)
                 .with_for_update()
@@ -248,29 +296,61 @@ def save_final_product_opening_stock(
             )
             if stock is None:
                 stock = FinalProductStock(
-                    factory_id=current_user.factory_id,
-                    product_size_ml=payload.product_size_ml,
+                    factory_id=str(current_user.factory_id),
+                    product_size_ml=product_size_ml,
                     variety=payload.variety,
                     packaging_size_name=packaging_size_name,
-                    pieces_per_packet=payload.pieces_per_packet,
+                    pieces_per_packet=payload.pieces_per_packet if payload.pieces_per_packet else 1,
                     packets_per_box_limit=packets_per_box_limit,
                 )
                 db.add(stock)
 
-        if packaging_size_name:
-            stock.packaging_size_name = packaging_size_name
-        if packets_per_box_limit is not None:
-            stock.packets_per_box_limit = packets_per_box_limit
+        stock.packaging_size_name = packaging_size_name
+        stock.packets_per_box_limit = packets_per_box_limit
         stock.variety = payload.variety
-        stock.pieces_per_packet = payload.pieces_per_packet
+        stock.pieces_per_packet = payload.pieces_per_packet if payload.pieces_per_packet else 1
         stock.current_quantity = quantity
         stock.total_boxes = quantity
-        stock.loose_packets = payload.loose_packets
+        stock.loose_packets = payload.loose_packets if payload.loose_packets is not None else 0
+        
         db.commit()
+
+        # Synchronize PackagingMetrics for Dashboard mapping
+        metric = (
+            db.query(PackagingMetrics)
+            .filter(PackagingMetrics.factory_id == str(current_user.factory_id))
+            .filter(PackagingMetrics.cup_size_ml == product_size_ml)
+            .first()
+        )
+        if metric is None:
+            metric = PackagingMetrics(
+                factory_id=str(current_user.factory_id),
+                cup_size_ml=product_size_ml,
+                kg_per_box=Decimal("10.000"),
+                cups_per_box=packets_per_box_limit,
+            )
+            db.add(metric)
+        else:
+            metric.cups_per_box = packets_per_box_limit
+        db.commit()
+
         db.refresh(stock)
+        
+        # Synchronize caches to opening balance immediately
+        from routers.inventory import recalculate_and_sync_sku_stock
+        recalculate_and_sync_sku_stock(
+            db=db,
+            factory_id=str(current_user.factory_id),
+            product_size_ml=product_size_ml,
+            variety=payload.variety,
+            packaging_size_name=packaging_size_name,
+        )
+        db.refresh(stock)
+        
+        # Enforce string representation for factory_id in return payload
         return FinalProductOpeningStockResponse(
             id=stock.id,
-            factory_id=stock.factory_id,
+            factory_id=str(stock.factory_id),
             product_size_ml=stock.product_size_ml,
             variety=stock.variety or "Standard/White",
             packaging_size=stock.packaging_size_name,
@@ -297,7 +377,7 @@ def list_onboarding_workers(
 ):
     return (
         db.query(Worker)
-        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(Worker.factory_id == str(current_user.factory_id))
         .filter(Worker.is_active.is_(True))
         .order_by(Worker.name.asc())
         .all()
@@ -311,7 +391,7 @@ def list_onboarding_machines(
 ):
     return (
         db.query(Machine)
-        .filter(Machine.factory_id == current_user.factory_id)
+        .filter(Machine.factory_id == str(current_user.factory_id))
         .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
         .all()
     )
@@ -322,7 +402,7 @@ def get_machine_limits(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    usage = get_machine_limit_usage(db, current_user.factory_id)
+    usage = get_machine_limit_usage(db, str(current_user.factory_id))
     return MachineLimitResponse(
         used=usage.used,
         limit=usage.limit,
@@ -337,7 +417,7 @@ def list_onboarding_materials(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     return {
         "raw_material_metrics": (
             db.query(RawMaterialMetrics)
@@ -361,7 +441,7 @@ def list_onboarding_customers(
 ):
     return (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(Customer.factory_id == str(current_user.factory_id))
         .order_by(Customer.name.asc())
         .all()
     )
@@ -373,7 +453,7 @@ def create_blank_stock(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     total_weight_kg = payload.kg_per_sack * payload.total_sacks
     stock = (
         db.query(BlankStock)
@@ -393,6 +473,29 @@ def create_blank_stock(
     stock.total_boras = payload.total_sacks
     stock.total_qty_kg = total_weight_kg
     db.commit()
+
+    # Synchronize RawMaterialMetrics for Dashboard mapping
+    metric = (
+        db.query(RawMaterialMetrics)
+        .filter(RawMaterialMetrics.factory_id == factory_id)
+        .filter(RawMaterialMetrics.material_type == "Blank")
+        .filter(RawMaterialMetrics.size_ml_or_mm == payload.size_ml)
+        .first()
+    )
+    if metric is None:
+        metric = RawMaterialMetrics(
+            factory_id=factory_id,
+            material_type="Blank",
+            size_ml_or_mm=payload.size_ml,
+            weight_per_sack_kg=payload.kg_per_sack if payload.kg_per_sack > 0 else Decimal("20.000"),
+            pieces_per_sack=1000,
+        )
+        db.add(metric)
+    else:
+        if payload.kg_per_sack > 0:
+            metric.weight_per_sack_kg = payload.kg_per_sack
+    db.commit()
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -410,7 +513,7 @@ def create_bottom_stock(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     calculated_rolls = (payload.rolls_per_bag or 0) * (payload.total_bags or 0)
     calculated_weight_kg = (payload.bag_weight_kg or Decimal("0.000")) * Decimal(payload.total_bags or 0)
     total_rolls = payload.total_rolls if payload.total_rolls is not None else calculated_rolls
@@ -433,6 +536,29 @@ def create_bottom_stock(
     stock.total_qty_kg = total_weight_kg
 
     db.commit()
+
+    # Synchronize RawMaterialMetrics for Dashboard mapping
+    metric = (
+        db.query(RawMaterialMetrics)
+        .filter(RawMaterialMetrics.factory_id == factory_id)
+        .filter(RawMaterialMetrics.material_type == "Bottom")
+        .filter(RawMaterialMetrics.size_ml_or_mm == payload.bottom_size_mm)
+        .first()
+    )
+    if metric is None:
+        metric = RawMaterialMetrics(
+            factory_id=factory_id,
+            material_type="Bottom",
+            size_ml_or_mm=payload.bottom_size_mm,
+            weight_per_sack_kg=payload.bag_weight_kg if (payload.bag_weight_kg and payload.bag_weight_kg > 0) else Decimal("10.000"),
+            pieces_per_sack=1,
+        )
+        db.add(metric)
+    else:
+        if payload.bag_weight_kg and payload.bag_weight_kg > 0:
+            metric.weight_per_sack_kg = payload.bag_weight_kg
+    db.commit()
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -451,7 +577,7 @@ def create_box_stock(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     stock = (
         db.query(BoxStock)
         .filter(BoxStock.factory_id == factory_id)
@@ -482,7 +608,7 @@ def create_plastic_stock(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     stock = (
         db.query(PlasticStock)
         .filter(PlasticStock.factory_id == factory_id)
@@ -502,6 +628,27 @@ def create_plastic_stock(
     stock.weight_per_bora_kg = payload.weight_per_bora_kg
     stock.price_per_kg = payload.price_per_kg
     db.commit()
+
+    # Synchronize PackagingMetrics for Dashboard mapping
+    metric = (
+        db.query(PackagingMetrics)
+        .filter(PackagingMetrics.factory_id == factory_id)
+        .filter(PackagingMetrics.cup_size_ml == payload.cup_size_ml)
+        .first()
+    )
+    if metric is None:
+        metric = PackagingMetrics(
+            factory_id=factory_id,
+            cup_size_ml=payload.cup_size_ml,
+            kg_per_box=Decimal(str(payload.weight_per_bora_kg or 0)) if payload.weight_per_bora_kg > 0 else Decimal("10.000"),
+            cups_per_box=1000,
+        )
+        db.add(metric)
+    else:
+        if payload.weight_per_bora_kg > 0:
+            metric.kg_per_box = payload.weight_per_bora_kg
+    db.commit()
+
     db.refresh(stock)
     return {
         "id": stock.id,
@@ -529,7 +676,7 @@ def delete_onboarding_worker(
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
-    if worker.factory_id != current_user.factory_id:
+    if str(worker.factory_id) != str(current_user.factory_id):
         if not (worker.factory_id is None and can_cleanup_null_factory):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
@@ -554,7 +701,7 @@ def delete_onboarding_machine(
 ):
     machine = (
         db.query(Machine)
-        .filter(Machine.factory_id == current_user.factory_id)
+        .filter(Machine.factory_id == str(current_user.factory_id))
         .filter(Machine.id == machine_id)
         .first()
     )
@@ -573,7 +720,7 @@ def delete_onboarding_raw_material(
 ):
     metric = (
         db.query(RawMaterialMetrics)
-        .filter(RawMaterialMetrics.factory_id == current_user.factory_id)
+        .filter(RawMaterialMetrics.factory_id == str(current_user.factory_id))
         .filter(RawMaterialMetrics.id == raw_material_id)
         .first()
     )
@@ -592,7 +739,7 @@ def delete_onboarding_customer(
 ):
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(Customer.factory_id == str(current_user.factory_id))
         .filter(Customer.id == customer_id)
         .first()
     )
@@ -647,12 +794,12 @@ def onboarding_step1_create_worker(
 ):
     worker = (
         db.query(Worker)
-        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(Worker.factory_id == str(current_user.factory_id))
         .filter(sql_func.lower(Worker.name) == payload.name.strip().lower())
         .first()
     )
     if worker is None:
-        worker = Worker(factory_id=current_user.factory_id, name=payload.name.strip())
+        worker = Worker(factory_id=str(current_user.factory_id), name=payload.name.strip())
         db.add(worker)
         db.flush()
 
@@ -669,7 +816,7 @@ def onboarding_step1_create_worker(
     if payload.opening_attendance is not None:
         existing_oa = (
             db.query(WorkerOpeningAttendance)
-            .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+            .filter(WorkerOpeningAttendance.factory_id == str(current_user.factory_id))
             .filter(WorkerOpeningAttendance.worker_id == worker.id)
             .first()
         )
@@ -686,7 +833,7 @@ def onboarding_step1_create_worker(
             existing_oa.notes = payload.opening_attendance.notes
         else:
             opening_att = WorkerOpeningAttendance(
-                factory_id=current_user.factory_id,
+                factory_id=str(current_user.factory_id),
                 worker_id=worker.id,
                 period_start=payload.opening_attendance.period_start,
                 period_end=payload.opening_attendance.period_end,
@@ -717,7 +864,7 @@ def onboarding_step2_machines(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     check_machine_limit(factory_id, db, requested_count=len(payload.machines))
 
     for item in payload.machines:
@@ -765,7 +912,7 @@ def onboarding_step3_materials(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
 
     raw_saved = 0
     for item in payload.raw_material_metrics:
@@ -895,7 +1042,7 @@ def complete_onboarding(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
 
     try:
         for machine_payload in payload.machines:

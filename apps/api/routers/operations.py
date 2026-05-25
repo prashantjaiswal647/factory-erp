@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func as sql_func
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from dependencies import PRODUCTION_ROLES, SALES_ROLES, check_permissions
 from db import get_db
 from models import (
+    AttendanceLog,
     BlankStock,
     BottomStock,
     BoxStock,
@@ -46,11 +47,63 @@ def to_lower(value: str) -> str:
 
 
 def require_non_empty_work(payload_boxes: int, payload_loose: int) -> None:
-    if payload_boxes == 0 and payload_loose == 0:
+    if (payload_boxes or 0) == 0 and (payload_loose or 0) == 0:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one box or loose packet must be entered",
         )
+
+
+def average_bottom_weight_per_roll(bottom_stock: BottomStock) -> Decimal:
+    total_rolls = int(bottom_stock.total_rolls or 0)
+    if total_rolls <= 0:
+        return Decimal("0.000")
+
+    total_weight = to_qty(bottom_stock.total_qty_kg)
+    if total_weight <= 0:
+        total_weight = to_qty(bottom_stock.total_weight_kg)
+    if total_weight <= 0:
+        return Decimal("0.000")
+
+    return to_qty(total_weight / Decimal(total_rolls))
+
+
+def mark_worker_present_for_production(
+    db: Session,
+    *,
+    factory_id: str,
+    worker: Worker,
+    production_date,
+    production_qty: int,
+) -> Optional[AttendanceLog]:
+    existing_log = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.factory_id == factory_id)
+        .filter(AttendanceLog.worker_id == worker.id)
+        .filter(AttendanceLog.date == production_date)
+        .first()
+    )
+    if existing_log is not None:
+        print("Automatic attendance skipped; existing attendance log found:", existing_log.id)
+        return None
+
+    duty_hours = float(worker.duty_hours or worker.shift_hours or 8.0)
+    if duty_hours <= 0:
+        duty_hours = 8.0
+
+    attendance_log = AttendanceLog(
+        factory_id=factory_id,
+        date=production_date,
+        worker_id=worker.id,
+        status="Present",
+        is_present=True,
+        duty_hours=duty_hours,
+        production_qty=Decimal(production_qty or 0),
+    )
+    db.add(attendance_log)
+    db.flush()
+    print("Automatic attendance marked Present for production worker:", attendance_log.id)
+    return attendance_log
 
 
 @router.post("/production/daily", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
@@ -60,7 +113,20 @@ def create_daily_production(
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    print("Incoming Payload Details: ", payload.dict())
+    factory_id = str(current_user.factory_id)
+    if payload.factory_id and str(payload.factory_id) != factory_id:
+        print("Incoming payload factory_id ignored in favor of authenticated user factory_id:", payload.factory_id, factory_id)
+    if payload.worker_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="worker_id/operator_id is required for daily production entry",
+        )
+    if payload.machine_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="machine_id is required for daily production entry",
+        )
     require_non_empty_work(payload.total_boxes_made, payload.loose_packets_made)
 
     try:
@@ -166,12 +232,10 @@ def create_daily_production(
         bottom_used_rolls = payload.bottom_used_rolls or 0
         bottom_weight_per_roll = Decimal("0.000")
         if bottom_used_rolls > 0:
-            if not bottom_stock.bag_weight_kg or not bottom_stock.rolls_per_bag:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Bottom stock bag_weight_kg and rolls_per_bag are required before deducting rolls",
-                )
-            bottom_weight_per_roll = to_qty(Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag))
+            if bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
+                bottom_weight_per_roll = to_qty(Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag))
+            else:
+                bottom_weight_per_roll = average_bottom_weight_per_roll(bottom_stock)
         bottom_used_kg = to_qty(Decimal(bottom_used_rolls) * bottom_weight_per_roll)
 
         # Calculate total pieces produced for BOM fallback
@@ -286,12 +350,11 @@ def create_daily_production(
         bottom_stock.total_qty_kg = bottom_after
         bottom_stock.total_weight_kg = bottom_after
         bottom_stock.total_rolls = bottom_rolls_after
-        final_stock.total_boxes = final_total_boxes
-        final_stock.current_quantity = final_total_boxes
+        
+        # Preserve original onboarding inputs, updating only dynamic descriptors
         final_stock.variety = variety
         final_stock.packaging_size_name = packaging_size_name.strip()
         final_stock.pieces_per_packet = payload.pieces_per_packet
-        final_stock.loose_packets = final_loose_packets
         final_stock.packets_per_box_limit = payload.packets_per_box_limit
         box_stock.total_boxes = box_stock_after
 
@@ -318,6 +381,25 @@ def create_daily_production(
             production_cost=production_cost,
         )
         db.add(production)
+        db.flush()
+        attendance_log = mark_worker_present_for_production(
+            db,
+            factory_id=factory_id,
+            worker=worker,
+            production_date=payload.date,
+            production_qty=payload.total_boxes_made + payload.loose_packets_made,
+        )
+
+        # Recalculate dynamic live stock balance and sync caches
+        from routers.inventory import recalculate_and_sync_sku_stock
+        live_boxes, live_loose = recalculate_and_sync_sku_stock(
+            db=db,
+            factory_id=str(factory_id),
+            product_size_ml=product_size_ml,
+            variety=variety,
+            packaging_size_name=packaging_size_name,
+        )
+
         db.commit()
         db.refresh(production)
 
@@ -327,14 +409,16 @@ def create_daily_production(
             total_boxes_before=total_boxes_before,
             loose_packets_before=loose_before,
             boxes_from_loose=boxes_from_loose,
-            total_boxes_after=final_total_boxes,
-            loose_packets_after=final_loose_packets,
+            total_boxes_after=live_boxes,
+            loose_packets_after=live_loose,
             blank_stock_after_kg=blank_after,
             bottom_stock_after_kg=bottom_after,
             box_stock_after=box_stock_after,
             wastage_status=wastage_status,
             total_raw_material_kg=total_raw_material_kg,
             production_cost=production_cost,
+            attendance_auto_marked=attendance_log is not None,
+            attendance_log_id=attendance_log.id if attendance_log is not None else None,
         )
     except HTTPException:
         db.rollback()
@@ -443,7 +527,19 @@ def create_daily_sale(
                 db.add(stock)
                 db.flush()
 
-            available_packets = (stock.total_boxes or 0) * stock.packets_per_box_limit + (stock.loose_packets or 0)
+            # Resolve exact live dynamic stock balance
+            from routers.inventory import calculate_live_sku_stock
+            live_boxes, live_loose = calculate_live_sku_stock(
+                db=db,
+                factory_id=str(factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+                onboarding_boxes=stock.total_boxes or 0,
+                onboarding_loose=stock.loose_packets or 0,
+                packets_per_box_limit=stock.packets_per_box_limit or 1000
+            )
+            available_packets = live_boxes * stock.packets_per_box_limit + live_loose
             sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
             if available_packets < sold_packets:
                 raise HTTPException(
@@ -451,10 +547,7 @@ def create_daily_sale(
                     detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
                 )
 
-            remaining_packets = available_packets - sold_packets
-            stock.total_boxes = remaining_packets // stock.packets_per_box_limit
-            stock.current_quantity = stock.total_boxes
-            stock.loose_packets = remaining_packets % stock.packets_per_box_limit
+            # Preserve onboarding totals in stock.total_boxes. Dynamic sync helper recalculates current_quantity.
 
             line_total = to_money(
                 Decimal(item.boxes_sold) * to_money(item.rate_per_box)
@@ -510,6 +603,17 @@ def create_daily_sale(
         customer.balance_amount = new_total_due
         customer.pending_balance = new_total_due
         customer.pending_dues = float(new_total_due)
+
+        # Recalculate dynamic live stock balance and sync caches for all sold SKUs
+        from routers.inventory import recalculate_and_sync_sku_stock
+        for item in payload.items:
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+            )
 
         db.commit()
         send_n8n_whatsapp_event(

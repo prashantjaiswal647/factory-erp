@@ -1,11 +1,22 @@
 import { AlertTriangle, Check, Factory } from "lucide-react";
+import axios from "axios";
 import { useEffect, useState } from "react";
 
 import { createDailyProduction, getDashboardMachines, getDashboardWorkers, getFinalStockOptions } from "../lib/api";
 import type { DailyProductionCreate, DashboardMachine, DashboardWorker, FinalStockOption } from "../lib/api";
 
+const todayDate = () => new Date().toISOString().slice(0, 10);
+const numberOrDefault = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const dateOnly = (value: unknown) => {
+  const raw = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : todayDate();
+};
+
 const initialForm: DailyProductionCreate = {
-  date: new Date().toISOString().slice(0, 10),
+  date: todayDate(),
   worker_id: 0,
   machine_id: 0,
   product_id: null,
@@ -84,8 +95,37 @@ export default function ProductionPage() {
     setIsSaving(true);
     setError("");
     try {
-      await createDailyProduction(form);
-      setToast("Production saved");
+      const normalizedDate = dateOnly(form.date);
+      const workerId = numberOrDefault(form.worker_id);
+      const machineId = numberOrDefault(form.machine_id);
+      const payload: DailyProductionCreate = {
+        factory_id: String(localStorage.getItem("factory_id") || ""),
+        date: normalizedDate,
+        operator_id: workerId > 0 ? workerId : null,
+        worker_id: workerId,
+        machine_id: machineId,
+        product_id: numberOrDefault(form.product_id) > 0 ? numberOrDefault(form.product_id) : null,
+        product_size_ml: numberOrDefault(form.product_size_ml) > 0 ? numberOrDefault(form.product_size_ml) : null,
+        variety: String(form.variety || "Standard/White").trim(),
+        packaging_size: form.packaging_size ? String(form.packaging_size).trim() : null,
+        packaging_size_name: String(form.packaging_size_name || form.packaging_size || "").trim(),
+        pieces_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
+        packets_per_box_limit: numberOrDefault(form.packets_per_box_limit, 1) || 1,
+        shift: form.shift === "Night" ? "Night" : "Day",
+        total_boxes_made: numberOrDefault(form.total_boxes_made),
+        loose_packets_made: numberOrDefault(form.loose_packets_made),
+        blank_used_bori: numberOrDefault(form.blank_used_bori),
+        bottom_used_rolls: numberOrDefault(form.bottom_used_rolls),
+        wastage_kg: numberOrDefault(form.wastage_kg),
+        remarks: null
+      };
+      console.log("daily production payload", payload);
+      const response = await createDailyProduction(payload);
+      setToast("Daily Production Saved Successfully! Attendance automatically marked as 'Present' for the worker.");
+      window.dispatchEvent(new CustomEvent("production:daily-saved", { detail: response.data }));
+      window.dispatchEvent(new CustomEvent("attendance:updated", { detail: response.data }));
+      window.dispatchEvent(new CustomEvent("inventory:updated", { detail: response.data }));
+      void loadOptions();
       setForm({
         ...initialForm,
         worker_id: workers[0]?.id || 0,
@@ -99,7 +139,19 @@ export default function ProductionPage() {
         packets_per_box_limit: finalStockOptions[0]?.packets_per_box || finalStockOptions[0]?.packets_per_box_limit || initialForm.packets_per_box_limit
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Production save failed");
+      if (axios.isAxiosError(caught)) {
+        console.error("daily production error response", caught.response?.data || caught.message);
+        const detail = caught.response?.data?.detail;
+        const message = Array.isArray(detail)
+          ? detail.map((item) => `${item.loc?.join(".") || "field"}: ${item.msg}`).join("; ")
+          : typeof detail === "string"
+            ? detail
+            : caught.message;
+        setError(`Production save failed: ${message}`);
+      } else {
+        console.error("daily production unexpected error", caught);
+        setError(caught instanceof Error ? caught.message : "Production save failed");
+      }
     } finally {
       setIsSaving(false);
     }

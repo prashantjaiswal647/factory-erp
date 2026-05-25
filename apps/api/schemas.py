@@ -459,28 +459,114 @@ class CustomerResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class DailyProductionCreate(BaseModel):
+    factory_id: Optional[str] = Field(default=None, max_length=100)
     date: date
-    worker_id: int = Field(..., gt=0)
-    machine_id: int = Field(..., gt=0)
+    operator_id: Optional[int] = Field(default=None, ge=0)
+    worker_id: int = Field(default=0, ge=0)
+    machine_id: int = Field(default=0, ge=0)
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: Optional[int] = Field(default=None, gt=0)
     variety: str = Field(default="Standard/White", min_length=1, max_length=100)
     packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    packaging_size_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     pieces_per_packet: int = Field(default=1, gt=0)
-    packets_per_box_limit: int = Field(..., gt=0)
+    packets_per_box_limit: int = Field(default=1, gt=0)
     shift: str = Field(default="Day", pattern="^(Day|Night)$")
-    total_boxes_made: int = Field(..., ge=0)
-    loose_packets_made: int = Field(..., ge=0)
+    total_boxes_made: int = Field(default=0, ge=0)
+    loose_packets_made: int = Field(default=0, ge=0)
     blank_used_bori: Decimal = Field(default=Decimal("0.000"), ge=0)
     bottom_used_rolls: int = Field(default=0, ge=0)
     blank_used_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
     bottom_used_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
     wastage_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
+    remarks: Optional[str] = Field(default=None, max_length=1000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_blank_form_values(cls, values):
+        if not isinstance(values, dict):
+            return values
+
+        cleaned = dict(values)
+        alias_map = {
+            "production_date": "date",
+            "workerId": "worker_id",
+            "operator_id": "worker_id",
+            "operatorId": "worker_id",
+            "machineId": "machine_id",
+            "productId": "product_id",
+            "productSizeMl": "product_size_ml",
+            "packagingSize": "packaging_size",
+            "packagingSizeName": "packaging_size_name",
+            "piecesPerPacket": "pieces_per_packet",
+            "packetsPerBoxLimit": "packets_per_box_limit",
+            "boxes_produced": "total_boxes_made",
+            "boxesProduced": "total_boxes_made",
+            "totalBoxesMade": "total_boxes_made",
+            "production_quantity": "total_boxes_made",
+            "productionQuantity": "total_boxes_made",
+            "loosePacketsMade": "loose_packets_made",
+            "loose_packets": "loose_packets_made",
+            "loosePackets": "loose_packets_made",
+            "blank_used": "blank_used_bori",
+            "blankUsedBori": "blank_used_bori",
+            "blankUsed": "blank_used_bori",
+            "rolls_used": "bottom_used_rolls",
+            "rollsUsed": "bottom_used_rolls",
+            "bottom_used": "bottom_used_rolls",
+            "bottomUsed": "bottom_used_rolls",
+            "bottomRollsUsed": "bottom_used_rolls",
+            "bottomUsedRolls": "bottom_used_rolls",
+            "wastage": "wastage_kg",
+            "wastageKg": "wastage_kg",
+        }
+        for source_field, target_field in alias_map.items():
+            if source_field in cleaned and target_field not in cleaned:
+                cleaned[target_field] = cleaned[source_field]
+
+        none_if_blank_fields = {"product_id", "product_size_ml", "packaging_size", "packaging_size_name"}
+        zero_if_blank_fields = {
+            "worker_id",
+            "machine_id",
+            "total_boxes_made",
+            "loose_packets_made",
+            "blank_used_bori",
+            "bottom_used_rolls",
+            "blank_used_kg",
+            "bottom_used_kg",
+            "wastage_kg",
+        }
+        one_if_blank_fields = {"pieces_per_packet", "packets_per_box_limit"}
+
+        if cleaned.get("factory_id") not in (None, ""):
+            cleaned["factory_id"] = str(cleaned["factory_id"]).strip()
+        if cleaned.get("date") in ("", None):
+            cleaned["date"] = date.today().isoformat()
+        if cleaned.get("operator_id") in ("", None):
+            cleaned["operator_id"] = None
+        for field_name in none_if_blank_fields:
+            if cleaned.get(field_name) == "":
+                cleaned[field_name] = None
+        for field_name in ("product_id", "product_size_ml"):
+            if cleaned.get(field_name) in (0, "0"):
+                cleaned[field_name] = None
+        for field_name in zero_if_blank_fields:
+            if cleaned.get(field_name) in ("", None):
+                cleaned[field_name] = 0
+        for field_name in one_if_blank_fields:
+            if cleaned.get(field_name) in ("", None):
+                cleaned[field_name] = 1
+        if cleaned.get("variety") in ("", None):
+            cleaned["variety"] = "Standard/White"
+        if cleaned.get("shift") in ("", None):
+            cleaned["shift"] = "Day"
+        return cleaned
 
 
 class DailyProductionResponse(BaseModel):
     production_id: int
+    attendance_auto_marked: bool = False
+    attendance_log_id: Optional[int] = None
     product_size_ml: int
     total_boxes_before: int
     loose_packets_before: int
@@ -551,7 +637,3 @@ class UserSubscriptionResponse(BaseModel):
     effective_plan: Optional[str] = None
     effective_status: Optional[str] = None
     effective_expires_at: Optional[datetime] = None
-
-
-
-

@@ -74,9 +74,26 @@ class Factory(Base):
     usage_limit = Column(Integer, nullable=True)
     token_limit = Column(Integer, nullable=True)
     admin_note = Column(Text, nullable=True)
+    google_sheet_id = Column(String(255), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
+
+
+class FactoryAutomationSheet(Base):
+    __tablename__ = "factory_automation_sheets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id", ondelete="CASCADE"), nullable=False, index=True)
+    sheet_name = Column(String(255), nullable=False)
+    sheet_type = Column(String(50), nullable=False, default="cron_automation", index=True)
+    google_sheet_url = Column(String(500), nullable=True)
+    google_sheet_id = Column(String(255), nullable=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now(), index=True)
+
+    factory = relationship("Factory", backref="automation_sheets")
 
 
 class CustomPlanEnquiry(Base):
@@ -763,6 +780,7 @@ class AttendanceLog(TenantMixin, Base):
     worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True, index=True)
     status = Column(String(20), nullable=False, default="Absent", server_default="Absent", index=True)
     production_qty = Column(Numeric(14, 3), nullable=True)
+    duty_hours = Column(Float, nullable=False, default=8.0, server_default="8.0")
     is_settled = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     is_present = Column(Boolean, nullable=False, default=False)
     overtime_hours = Column(Float, nullable=False, default=0)
@@ -773,6 +791,7 @@ class AttendanceLog(TenantMixin, Base):
         UniqueConstraint("factory_id", "date", "employee_id", name="uq_attendance_logs_factory_date_employee"),
         UniqueConstraint("factory_id", "date", "worker_id", name="uq_attendance_logs_factory_date_worker"),
         CheckConstraint("status IN ('Present', 'Absent', 'Half-day')", name="ck_attendance_logs_status"),
+        CheckConstraint("duty_hours > 0", name="ck_attendance_logs_duty_hours_positive"),
         CheckConstraint("overtime_hours >= 0", name="ck_attendance_logs_overtime_non_negative"),
     )
 

@@ -144,7 +144,7 @@ def ai_insights(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = str(current_user.factory_id)
     today = date.today()
     week_start = today - timedelta(days=6)
 

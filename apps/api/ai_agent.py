@@ -72,6 +72,57 @@ def initialize_groq_llm():
         return None
 
 
+INVOICE_AGENT_MASTER_PROMPT = """
+You are the Dedicated Invoice Agent validation node for Munshi AI ERP.
+
+Your job is parsing and validation only. You must never perform invoice math in the LLM.
+
+When the newest user message asks to draft, generate, calculate, or preview an invoice:
+1. Extract customer identity:
+   - customer_name
+   - factory_id must come from the authenticated tool context; never invent it.
+2. Extract each invoice item:
+   - product_name
+   - volume_ml
+   - packaging_dimension
+   - box_quantity
+   - pieces_per_box
+   - unit_price_per_packet
+3. If any required value is missing, ask one short follow-up question and do not call the invoice tool.
+4. If all values are present, return intent_type="invoice_draft" and tool_name="calculate_invoice_draft".
+5. Put the parsed payload in invoice_data using this exact shape:
+   {
+     "customer_name": "...",
+     "items": [
+       {
+         "product_name": "...",
+         "volume_ml": 65,
+         "packaging_dimension": "...",
+         "box_quantity": 10,
+         "pieces_per_box": 100,
+         "unit_price_per_packet": 1.25
+       }
+     ]
+   }
+
+Critical math rule:
+- DO NOT calculate total packets, subtotal, GST, grand total, or line totals yourself.
+- The backend must call POST /api/ai-invoice/calculate-draft for every invoice preview.
+- Only display totals returned by that deterministic Python tool.
+
+Chat output rule after the tool returns:
+- Show the tool result as a clean Markdown table:
+  | Product | Volume | Packaging | Boxes | Pieces/Box | Total Packets | Rate | Taxable | GST | Line Total |
+- Then show:
+  - Subtotal
+  - GST rate
+  - GST amount
+  - Grand total
+- End with exactly this confirmation instruction:
+  Type CONFIRM to finalize stock deduction and save this invoice in the ledger.
+"""
+
+
 def build_factory_supervisor_prompt(parser: PydanticOutputParser) -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
@@ -95,12 +146,15 @@ def build_factory_supervisor_prompt(parser: PydanticOutputParser) -> ChatPromptT
             '  2. Aap stock check kar sakte hain: "210ml ka kitna stock bacha hai?"\n'
             '  3. Aap sale record kar sakte hain: "Ram ko 10 box 65ml bech do".\n'
             "- Keep fallback answers short, useful, and guiding. Do not expose parser, schema, or system details.\n\n"
-            "Classify the newest message as exactly one of: production_entry, sales_entry, expense_entry, "
+            "Invoice Agent Integration:\n"
+            f"{INVOICE_AGENT_MASTER_PROMPT}\n\n"
+            "Classify the newest message as exactly one of: production_entry, sales_entry, invoice_draft, expense_entry, "
             "employee_entry, general_qa.\n"
             "You can request one of these backend tools by setting tool_name and tool_args:\n"
             "- check_inventory(product_name): answer current stock.\n"
             "- record_sale(customer_name, product, quantity): deduct stock and create a sales entry.\n"
             "- log_production(product, quantity): add production to stock.\n"
+            "- calculate_invoice_draft(invoice_data): validate invoice fields and calculate totals through /api/ai-invoice/calculate-draft.\n"
             "Use the Product List below to match fuzzy product names before choosing a tool.\n\n"
             "Real-time database tool context for this factory:\n{tool_context}\n\n"
             "Production logging uses loose form filling. Quantity/boxes produced is the most important field. "
@@ -484,7 +538,7 @@ def get_factory_machines(db: Any, factory_id: int) -> Dict[str, Any]:
 def build_ai_tool_context(db: Any, factory_id: int, customer_name: str = "") -> str:
     context = {
         "factory_id": factory_id,
-        "bound_tools": ["get_inventory", "get_customers", "get_factory_machines"],
+        "bound_tools": ["get_inventory", "get_customers", "get_factory_machines", "calculate_invoice_draft"],
         "inventory_status": get_inventory(db, factory_id),
         "customer_ledger": get_customers(db, factory_id, customer_name),
         "factory_config": get_factory_config(db, factory_id),

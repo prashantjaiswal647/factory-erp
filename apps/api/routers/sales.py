@@ -11,7 +11,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import or_, func as sql_func
+from sqlalchemy import String, cast, or_, func as sql_func
 from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import UploadFile
 
@@ -28,6 +28,14 @@ MONEY_QUANT = Decimal("0.01")
 
 def to_money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def factory_id_text(factory_id) -> str:
+    return str(factory_id).strip()
+
+
+def factory_id_filter(column, factory_id):
+    return cast(column, String) == factory_id_text(factory_id)
 
 
 def require_sold_quantity(boxes_sold: int, loose_packets_sold: int) -> None:
@@ -52,8 +60,8 @@ def payment_status_for(total_amount: Decimal, amount_paid: Decimal) -> str:
     return "Half-Paid"
 
 
-def find_final_stock_for_sale(db: Session, factory_id: int, item, *, lock: bool = False) -> FinalProductStock | None:
-    query = db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id)
+def find_final_stock_for_sale(db: Session, factory_id, item, *, lock: bool = False) -> FinalProductStock | None:
+    query = db.query(FinalProductStock).filter(factory_id_filter(FinalProductStock.factory_id, factory_id))
     product_id = getattr(item, "product_id", None)
     if product_id:
         query = query.filter(FinalProductStock.id == product_id)
@@ -77,7 +85,6 @@ def ensure_variation_stock_available(stock: FinalProductStock, boxes_sold: int, 
     if available_packets < requested_packets:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot complete sale. Variation stock is insufficient.")
     return packets_per_box, available_packets, requested_packets
-
 
 class CustomerBalanceResponse(BaseModel):
     customer_id: int
@@ -213,8 +220,8 @@ def pending_payment_dues(db: Session, factory_id: int) -> list[PendingDueRespons
     rows = (
         db.query(Order, Customer)
         .join(Customer, Order.customer_id == Customer.id)
-        .filter(Order.factory_id == factory_id)
-        .filter(Customer.factory_id == factory_id)
+        .filter(factory_id_filter(Order.factory_id, factory_id))
+        .filter(factory_id_filter(Customer.factory_id, factory_id))
         .filter(Order.payment_status.in_(["Unpaid", "Half-Paid"]))
         .filter(Order.pending_amount > 0)
         .order_by(Order.order_date.asc(), Order.id.asc())
@@ -458,12 +465,12 @@ def add_sale_invoice(
     current_user: User = Depends(check_permissions(SALES_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = factory_id_text(current_user.factory_id)
 
     try:
         customer = (
             db.query(Customer)
-            .filter(Customer.factory_id == factory_id)
+            .filter(factory_id_filter(Customer.factory_id, factory_id))
             .filter(Customer.id == payload.customer_id)
             .with_for_update()
             .first()
@@ -480,7 +487,7 @@ def add_sale_invoice(
             require_sold_quantity(item.boxes_sold, item.loose_packets_sold)
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == factory_id)
+                .filter(factory_id_filter(FinalProductStock.factory_id, factory_id))
                 .filter(FinalProductStock.product_size_ml == item.product_size_ml)
                 .filter(sql_func.lower(FinalProductStock.variety) == item.variety.lower())
                 .filter(sql_func.lower(FinalProductStock.packaging_size_name) == item.packaging_size_name.lower())
@@ -490,7 +497,7 @@ def add_sale_invoice(
             if stock is None:
                 box_stock = (
                     db.query(BoxStock)
-                    .filter(BoxStock.factory_id == factory_id)
+                    .filter(factory_id_filter(BoxStock.factory_id, factory_id))
                     .filter(sql_func.lower(BoxStock.packaging_size_name) == item.packaging_size_name.lower())
                     .with_for_update()
                     .first()
@@ -517,17 +524,27 @@ def add_sale_invoice(
                 db.add(stock)
                 db.flush()
 
-            available_packets = (stock.total_boxes or 0) * stock.packets_per_box_limit + (stock.loose_packets or 0)
+            # Resolve exact live dynamic stock balance
+            from routers.inventory import calculate_live_sku_stock
+            live_boxes, live_loose = calculate_live_sku_stock(
+                db=db,
+                factory_id=str(factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+                onboarding_boxes=stock.total_boxes or 0,
+                onboarding_loose=stock.loose_packets or 0,
+                packets_per_box_limit=stock.packets_per_box_limit or 1000
+            )
+            available_packets = live_boxes * stock.packets_per_box_limit + live_loose
             sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
             if available_packets < sold_packets:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
                 )
-            remaining_packets = available_packets - sold_packets
-            stock.total_boxes = remaining_packets // stock.packets_per_box_limit
-            stock.current_quantity = stock.total_boxes
-            stock.loose_packets = remaining_packets % stock.packets_per_box_limit
+
+            # Preserve onboarding totals in stock.total_boxes. Dynamic sync helper recalculates current_quantity.
 
             item_rate_per_box = effective_rate_per_box(item)
             line_total = to_money(Decimal(item.boxes_sold) * item_rate_per_box)
@@ -583,6 +600,17 @@ def add_sale_invoice(
         customer.pending_balance = customer_due_after_payment
         customer.pending_dues = float(customer_due_after_payment)
 
+        # Recalculate dynamic live stock balance and sync caches for all sold SKUs
+        from routers.inventory import recalculate_and_sync_sku_stock
+        for item in payload.items:
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+            )
+
         db.commit()
 
         background_tasks.add_task(
@@ -622,10 +650,10 @@ def create_sales_order(
     current_user: User = Depends(check_permissions(SALES_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
+    factory_id = factory_id_text(current_user.factory_id)
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == factory_id)
+        .filter(factory_id_filter(Customer.factory_id, factory_id))
         .filter(Customer.id == payload.customer_id)
         .first()
     )
@@ -702,7 +730,7 @@ def create_sales_order(
     if should_alert_owner_for_sale(current_user.role):
         owner = (
             db.query(User)
-            .filter(User.factory_id == factory_id)
+            .filter(factory_id_filter(User.factory_id, factory_id))
             .filter(User.role == "Owner")
             .order_by(User.id.asc())
             .first()
@@ -764,7 +792,7 @@ def create_sales_customer(
     phone_number = payload.phone_number.strip()
     existing = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.phone_number == phone_number)
         .first()
     )
@@ -772,7 +800,7 @@ def create_sales_customer(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer phone number already exists")
 
     customer = Customer(
-        factory_id=current_user.factory_id,
+        factory_id=factory_id_text(current_user.factory_id),
         name=payload.name.strip(),
         phone_number=phone_number,
         place=payload.place.strip(),
@@ -799,7 +827,7 @@ def search_customers(
     db: Session = Depends(get_db),
 ):
     query_text = q.strip().lower()
-    query = db.query(Customer).filter(Customer.factory_id == current_user.factory_id)
+    query = db.query(Customer).filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
     if query_text:
         like_text = f"%{query_text}%"
         query = query.filter(
@@ -830,7 +858,7 @@ def list_bill_customers(
 ):
     customers = (
         db.query(Customer.id, Customer.name, Customer.phone_number, Customer.phone, Customer.contact_number, Customer.place, Customer.address, Customer.telegram_id)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .order_by(Customer.name.asc())
         .limit(100)
         .all()
@@ -855,7 +883,7 @@ def list_customer_orders(
 ):
     customer_exists = (
         db.query(Customer.id)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.id == customer_id)
         .first()
     )
@@ -864,7 +892,7 @@ def list_customer_orders(
 
     orders = (
         db.query(Order.id, Order.order_date, Order.status, Order.total_amount, Order.payment_method)
-        .filter(Order.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
         .filter(Order.customer_id == customer_id)
         .order_by(Order.order_date.desc(), Order.id.desc())
         .limit(25)
@@ -890,7 +918,7 @@ async def send_bill_notification(
 ):
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.id == payload.customer_id)
         .first()
     )
@@ -904,7 +932,7 @@ async def send_bill_notification(
             .joinedload(OrderItem.product)
             .joinedload(FinishedGoodsStock.packaging_profile)
         )
-        .filter(Order.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
         .filter(Order.id == payload.order_id)
         .filter(Order.customer_id == customer.id)
         .first()
@@ -943,7 +971,7 @@ def list_pending_sales(
         orders = (
             db.query(Order)
             .options(joinedload(Order.customer), joinedload(Order.items))
-            .filter(Order.factory_id == current_user.factory_id)
+            .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
             .filter(Order.status == "pending_owner")
             .order_by(Order.order_date.desc(), Order.id.desc())
             .all()
@@ -988,7 +1016,7 @@ def approve_sales_order(
         order = (
             db.query(Order)
             .options(joinedload(Order.customer), joinedload(Order.items))
-            .filter(Order.factory_id == current_user.factory_id)
+            .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
             .filter(Order.id == order_id)
             .with_for_update(of=Order)
             .first()
@@ -1015,20 +1043,32 @@ def approve_sales_order(
                     ),
                 )
 
-            packets_per_box, available_packets, requested_packets = ensure_variation_stock_available(
-                stock,
-                item.boxes_sold or 0,
-                item.loose_packets_sold or 0,
+            # Resolve exact live dynamic stock balance
+            from routers.inventory import calculate_live_sku_stock
+            packets_per_box = stock.packets_per_box_limit or 1000
+            live_boxes, live_loose = calculate_live_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+                onboarding_boxes=stock.total_boxes or 0,
+                onboarding_loose=stock.loose_packets or 0,
+                packets_per_box_limit=packets_per_box
             )
+            available_packets = live_boxes * packets_per_box + live_loose
+            requested_packets = (item.boxes_sold or 0) * packets_per_box + (item.loose_packets_sold or 0)
+            if available_packets < requested_packets:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
+                )
 
-            remaining_packets = available_packets - requested_packets
-            stock.total_boxes = remaining_packets // packets_per_box
-            stock.current_quantity = stock.total_boxes
-            stock.loose_packets = remaining_packets % packets_per_box
+            # Preserve onboarding totals in stock.total_boxes. Dynamic sync helper recalculates current_quantity.
 
             box_stock = (
                 db.query(BoxStock)
-                .filter(BoxStock.factory_id == current_user.factory_id)
+                .filter(factory_id_filter(BoxStock.factory_id, current_user.factory_id))
                 .filter(sql_func.lower(BoxStock.packaging_size_name) == item.packaging_size_name.lower())
                 .with_for_update()
                 .first()
@@ -1048,6 +1088,17 @@ def approve_sales_order(
             order.customer.balance_amount = new_balance
             order.customer.pending_balance = new_balance
             order.customer.pending_dues = float(new_balance)
+
+        # Recalculate dynamic live stock balance and sync caches for all sold SKUs
+        from routers.inventory import recalculate_and_sync_sku_stock
+        for item in order.items:
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+            )
 
         db.commit()
     except HTTPException:
@@ -1078,7 +1129,7 @@ def reject_sales_order(
     try:
         order = (
             db.query(Order)
-            .filter(Order.factory_id == current_user.factory_id)
+            .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
             .filter(Order.id == order_id)
             .with_for_update()
             .first()
@@ -1111,7 +1162,7 @@ def get_sales_outstanding(
     orders = (
         db.query(Order)
         .options(joinedload(Order.customer))
-        .filter(Order.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
         .filter(Order.balance_amount > 0)
         .filter(Order.status.notin_(["cancelled", "adjusted_closed", "Rejected"]))
         .order_by(Order.customer_id.asc(), Order.order_date.asc(), Order.id.asc())
@@ -1184,7 +1235,7 @@ def clear_outstanding_order(
     order = (
         db.query(Order)
         .options(joinedload(Order.customer))
-        .filter(Order.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
         .filter(Order.id == order_id)
         .with_for_update()
         .first()
@@ -1213,7 +1264,7 @@ def get_customer_balance(
 ):
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.id == customer_id)
         .first()
     )

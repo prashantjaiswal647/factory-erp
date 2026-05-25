@@ -33,6 +33,7 @@ type StoredUser = {
 };
 
 const actionableIntents = new Set(["production_entry", "sales_entry", "expense_entry"]);
+const invoiceDraftAction = "invoice_draft";
 const chatMessagesStorageKey = "ai-erp-chat-messages";
 const welcomeMessage: ChatMessage = {
   id: "welcome",
@@ -180,21 +181,22 @@ export default function AiChatPage() {
       });
 
       const aiResponse = response.data;
+      const normalizedResponse = normalizeAskAIResponse(aiResponse);
       setMessages((currentMessages) => [
         ...currentMessages,
         {
           id: createId(),
-          role: aiResponse.status === "validation_error" ? "error" : "assistant",
-          text: aiResponse.ai_reply,
-          status: aiResponse.status,
-          actionTaken: aiResponse.action_taken
+          role: normalizedResponse.status === "validation_error" ? "error" : "assistant",
+          text: normalizedResponse.ai_reply,
+          status: normalizedResponse.status,
+          actionTaken: normalizedResponse.action_taken
         }
       ]);
-      if (aiResponse.status !== "success" && aiResponse.error) {
-        setToast({ type: "error", message: aiResponse.error });
+      if (normalizedResponse.status !== "success" && normalizedResponse.error) {
+        setToast({ type: "error", message: normalizedResponse.error });
       }
 
-      if (aiResponse.status === "success" && actionableIntents.has(aiResponse.action_taken)) {
+      if (normalizedResponse.status === "success" && actionableIntents.has(normalizedResponse.action_taken)) {
         setToast({ type: "success", message: "ERP updated" });
         triggerDataRefresh();
       }
@@ -378,9 +380,19 @@ function toChatHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
     }));
 }
 
+function normalizeAskAIResponse(response: AskAIResponse): AskAIResponse {
+  return {
+    ai_reply: response.ai_reply || "",
+    action_taken: response.action_taken || "general_qa",
+    status: response.status || "success",
+    error: response.error ?? null
+  };
+}
+
 function ChatBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
+  const invoiceDraft = getInvoiceDraft(message);
 
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
@@ -405,8 +417,10 @@ function ChatBubble({ message }: { message: ChatMessage }) {
                 : "border border-zinc-200 bg-white text-zinc-700"
           ].join(" ")}
         >
-          {message.text}
+          <div className="whitespace-pre-wrap">{message.text}</div>
         </div>
+
+        {invoiceDraft ? <InvoiceActions invoice={invoiceDraft} /> : null}
 
         {message.status === "success" && message.actionTaken && actionableIntents.has(message.actionTaken) ? (
           <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
@@ -423,6 +437,211 @@ function ChatBubble({ message }: { message: ChatMessage }) {
       ) : null}
     </div>
   );
+}
+
+type InvoiceTableRow = {
+  product: string;
+  volume: string;
+  packaging: string;
+  boxes: string;
+  piecesPerBox: string;
+  totalPackets: string;
+  rate: string;
+  taxable: string;
+  gst: string;
+  lineTotal: string;
+};
+
+type ParsedInvoiceDraft = {
+  title: string;
+  rows: InvoiceTableRow[];
+  subtotal: string;
+  gst: string;
+  grandTotal: string;
+  rawText: string;
+};
+
+function getInvoiceDraft(message: ChatMessage): ParsedInvoiceDraft | null {
+  if (message.role !== "assistant") {
+    return null;
+  }
+  const isInvoiceDraft =
+    message.actionTaken === invoiceDraftAction ||
+    (message.status === "needs_confirmation" &&
+      message.text.includes("Invoice Draft") &&
+      message.text.includes("Type CONFIRM"));
+
+  if (!isInvoiceDraft) {
+    return null;
+  }
+  return parseInvoiceDraftMarkdown(message.text);
+}
+
+function parseInvoiceDraftMarkdown(text: string): ParsedInvoiceDraft {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const title = lines.find((line) => line.startsWith("### "))?.replace(/^###\s+/, "") || "Invoice Draft";
+  const tableRows = lines
+    .filter((line) => line.startsWith("|") && !line.includes("---") && !line.includes("Product | Volume"))
+    .map((line) => line.split("|").map((cell) => cell.trim()).filter(Boolean))
+    .filter((cells) => cells.length >= 10)
+    .map((cells) => ({
+      product: cells[0],
+      volume: cells[1],
+      packaging: cells[2],
+      boxes: cells[3],
+      piecesPerBox: cells[4],
+      totalPackets: cells[5],
+      rate: cells[6],
+      taxable: cells[7],
+      gst: cells[8],
+      lineTotal: cells[9]
+    }));
+
+  return {
+    title,
+    rows: tableRows,
+    subtotal: extractSummaryValue(text, "Subtotal"),
+    gst: extractSummaryValue(text, "GST"),
+    grandTotal: extractSummaryValue(text, "Grand Total"),
+    rawText: text
+  };
+}
+
+function extractSummaryValue(text: string, label: string) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`\\*\\*${escapedLabel}(?: \\([^)]*\\))?:\\*\\*\\s*([^\\n]+)`, "i"));
+  return match?.[1]?.trim() || "-";
+}
+
+function InvoiceActions({ invoice }: { invoice: ParsedInvoiceDraft }) {
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      <button
+        className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50"
+        type="button"
+        onClick={() => openInvoicePrintWindow(invoice, "print")}
+      >
+        🖨️ Direct Print Invoice
+      </button>
+      <button
+        className="inline-flex h-9 items-center justify-center rounded-md border border-brand-200 bg-brand-50 px-3 text-xs font-semibold text-brand-800 shadow-sm hover:bg-brand-100"
+        type="button"
+        onClick={() => openInvoicePrintWindow(invoice, "pdf")}
+      >
+        📥 Download Invoice PDF
+      </button>
+    </div>
+  );
+}
+
+function openInvoicePrintWindow(invoice: ParsedInvoiceDraft, mode: "print" | "pdf") {
+  const printWindow = window.open("", "_blank", "width=960,height=720");
+  if (!printWindow) {
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(buildInvoicePrintHtml(invoice, mode));
+  printWindow.document.close();
+  printWindow.focus();
+  window.setTimeout(() => {
+    printWindow.print();
+  }, 250);
+}
+
+function buildInvoicePrintHtml(invoice: ParsedInvoiceDraft, mode: "print" | "pdf") {
+  const rows = invoice.rows.length
+    ? invoice.rows
+        .map(
+          (row, index) => `
+            <tr>
+              <td>${index + 1}</td>
+              <td>${escapeHtml(row.product)}</td>
+              <td>${escapeHtml(row.volume)}</td>
+              <td>${escapeHtml(row.packaging)}</td>
+              <td class="num">${escapeHtml(row.boxes)}</td>
+              <td class="num">${escapeHtml(row.piecesPerBox)}</td>
+              <td class="num">${escapeHtml(row.totalPackets)}</td>
+              <td class="num">${escapeHtml(row.rate)}</td>
+              <td class="num">${escapeHtml(row.taxable)}</td>
+              <td class="num">${escapeHtml(row.gst)}</td>
+              <td class="num">${escapeHtml(row.lineTotal)}</td>
+            </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="11"><pre>${escapeHtml(invoice.rawText)}</pre></td></tr>`;
+
+  return `<!doctype html>
+    <html>
+      <head>
+        <title>${escapeHtml(invoice.title)}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; padding: 32px; color: #111827; font-family: Arial, sans-serif; }
+          .invoice { max-width: 960px; margin: 0 auto; }
+          .header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #111827; padding-bottom: 18px; margin-bottom: 24px; }
+          h1 { margin: 0; font-size: 24px; }
+          .muted { color: #6B7280; font-size: 12px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }
+          th, td { border: 1px solid #D1D5DB; padding: 8px; text-align: left; vertical-align: top; }
+          th { background: #F3F4F6; font-weight: 700; }
+          .num { text-align: right; white-space: nowrap; }
+          .summary { margin-left: auto; margin-top: 20px; width: 320px; border: 1px solid #D1D5DB; }
+          .summary-row { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #E5E7EB; }
+          .summary-row:last-child { border-bottom: 0; font-weight: 700; background: #F9FAFB; }
+          .pdf-note { margin-top: 16px; color: #6B7280; font-size: 12px; }
+          pre { white-space: pre-wrap; font-family: Arial, sans-serif; }
+          @media print {
+            body { padding: 18px; }
+            .pdf-note { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <main class="invoice">
+          <section class="header">
+            <div>
+              <h1>Munshi AI Invoice</h1>
+              <div class="muted">${escapeHtml(invoice.title)}</div>
+            </div>
+            <div class="muted">Generated from AI Supervisor<br />${new Date().toLocaleString()}</div>
+          </section>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Product</th>
+                <th>Volume</th>
+                <th>Packaging</th>
+                <th>Boxes</th>
+                <th>Pieces/Box</th>
+                <th>Total Packets</th>
+                <th>Rate</th>
+                <th>Taxable</th>
+                <th>GST</th>
+                <th>Line Total</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <section class="summary">
+            <div class="summary-row"><span>Subtotal</span><span>${escapeHtml(invoice.subtotal)}</span></div>
+            <div class="summary-row"><span>GST</span><span>${escapeHtml(invoice.gst)}</span></div>
+            <div class="summary-row"><span>Grand Total</span><span>${escapeHtml(invoice.grandTotal)}</span></div>
+          </section>
+          ${mode === "pdf" ? '<p class="pdf-note">Print dialog me destination "Save as PDF" select karke invoice download karein.</p>' : ""}
+        </main>
+      </body>
+    </html>`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function ThinkingIndicator() {

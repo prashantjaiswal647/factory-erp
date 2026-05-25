@@ -53,7 +53,18 @@ export default function OnboardingPage() {
   const [machineUsage, setMachineUsage] = useState<MachineLimitUsage | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const { showToast, showUpgradeModal } = useUpgrade();
-  const { updateUser } = useAuth();
+  const { updateUser, user } = useAuth();
+
+  // Dynamic & Custom Final Product opening stock metrics states
+  const [isCustomMode, setIsCustomMode] = useState(false);
+  const [isCustomSizeOverride, setIsCustomSizeOverride] = useState(false);
+  const [customSize, setCustomSize] = useState("");
+  const [selectedSize, setSelectedSize] = useState("");
+  const [customVariety, setCustomVariety] = useState("Standard/White");
+  const [customPackagingName, setCustomPackagingName] = useState("");
+  const [customPiecesPerPacket, setCustomPiecesPerPacket] = useState(100);
+  const [customPacketsPerBox, setCustomPacketsPerBox] = useState(10);
+  const [initialQuantity, setInitialQuantity] = useState(0);
 
   useEffect(() => {
     void loadFinalProducts();
@@ -284,12 +295,59 @@ export default function OnboardingPage() {
   }
 
   async function addFinalProductStock() {
-    if (!finalProductStock.product_id) return;
     setIsSaving(true);
     try {
-      await saveFinalProductOpeningStock(finalProductStock);
+      let payload: any;
+      if (isCustomMode) {
+        const productSize = isCustomSizeOverride ? Number(customSize) : Number(selectedSize);
+        if (!productSize || isNaN(productSize)) {
+          setToast("Please select or enter a valid Product Size (ML).");
+          setIsSaving(false);
+          return;
+        }
+
+        payload = {
+          factory_id: String(user?.factory_id || localStorage.getItem("factory_id") || ""),
+          product_size_ml: productSize,
+          variety: String(customVariety || "Standard/White"),
+          packaging_size: String(customPackagingName || `${productSize}ml Standard Box`),
+          packaging_size_name: String(customPackagingName || `${productSize}ml Standard Box`),
+          pieces_per_packet: Number(customPiecesPerPacket) || 100,
+          packets_per_box_limit: Number(customPacketsPerBox) || 1000,
+          initial_quantity: Number(initialQuantity) || 0,
+          current_quantity: Number(initialQuantity) || 0,
+          total_boxes: Number(initialQuantity) || 0,
+          loose_packets: 0
+        };
+      } else {
+        if (!finalProductStock.product_id) {
+          setToast("Please select a product.");
+          setIsSaving(false);
+          return;
+        }
+
+        payload = {
+          factory_id: String(user?.factory_id || localStorage.getItem("factory_id") || ""),
+          product_id: Number(finalProductStock.product_id),
+          initial_quantity: Number(finalProductStock.initial_quantity),
+          current_quantity: Number(finalProductStock.initial_quantity),
+          total_boxes: Number(finalProductStock.initial_quantity)
+        };
+      }
+
+      await saveFinalProductOpeningStock(payload);
       setToast("Final product opening stock saved");
+      
+      // Reset custom inputs on success
+      setCustomSize("");
+      setSelectedSize("");
+      setCustomVariety("Standard/White");
+      setCustomPackagingName("");
+      setCustomPiecesPerPacket(100);
+      setCustomPacketsPerBox(10);
+      setInitialQuantity(0);
       setFinalProductStock(finalProductStockDraft);
+      
       await loadFinalProducts();
     } catch (caught) {
       console.error("Failed to save final product opening stock during onboarding:", caught);
@@ -648,22 +706,162 @@ export default function OnboardingPage() {
 
       {step === 3 ? (
         <Panel icon={PackageCheck} title="Final Product Stock">
-          <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
-            <SelectInput
-              label="Product"
-              value={String(finalProductStock.product_id)}
-              options={finalProducts.map((product) => ({
-                label: `${product.product_size_ml}ml ${product.variety} / ${product.packaging_size_name} - current ${product.current_quantity ?? product.total_boxes} boxes`,
-                value: String(product.id)
-              }))}
-              onChange={(product_id) => setFinalProductStock({ ...finalProductStock, product_id: Number(product_id) })}
-            />
-            <NumberInput label="Initial Quantity (Boxes)" value={finalProductStock.initial_quantity} onChange={(initial_quantity) => setFinalProductStock({ ...finalProductStock, initial_quantity })} />
+          {/* Mode Selector Tab Group */}
+          <div className="flex rounded-lg bg-zinc-100 p-1 mb-5 max-w-md">
+            <button
+              type="button"
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                !isCustomMode
+                  ? "bg-white text-zinc-900 shadow-sm"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+              onClick={() => setIsCustomMode(false)}
+            >
+              Select Existing Product
+            </button>
+            <button
+              type="button"
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                isCustomMode
+                  ? "bg-white text-zinc-900 shadow-sm"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+              onClick={() => setIsCustomMode(true)}
+            >
+              Create Custom Entry
+            </button>
           </div>
-          {finalProducts.length === 0 ? (
-            <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">Add product packaging metrics first so finished goods products are available here.</p>
-          ) : null}
-          <SaveButton label="Save Opening Stock" isSaving={isSaving} disabled={finalProducts.length === 0} onClick={addFinalProductStock} />
+
+          {!isCustomMode ? (
+            /* Mode 1: Select Existing Product */
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
+                <SelectInput
+                  label="Product"
+                  value={String(finalProductStock.product_id)}
+                  options={finalProducts.map((product) => ({
+                    label: `${product.product_size_ml}ml ${product.variety} / ${product.packaging_size_name} - current ${product.current_quantity ?? product.total_boxes} boxes`,
+                    value: String(product.id)
+                  }))}
+                  onChange={(product_id) => setFinalProductStock({ ...finalProductStock, product_id: Number(product_id) })}
+                />
+                <NumberInput
+                  label="Initial Quantity (Boxes)"
+                  value={finalProductStock.initial_quantity}
+                  onChange={(initial_quantity) => setFinalProductStock({ ...finalProductStock, initial_quantity })}
+                />
+              </div>
+              {finalProducts.length === 0 ? (
+                <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+                  No existing finished goods products found in the database. Please use the "Create Custom Entry" tab to enter stock directly, or add product packaging metrics in the previous step.
+                </p>
+              ) : null}
+              <SaveButton
+                label="Save Opening Stock"
+                isSaving={isSaving}
+                disabled={finalProducts.length === 0}
+                onClick={addFinalProductStock}
+              />
+            </div>
+          ) : (
+            /* Mode 2: Create Custom Entry (Hybrid Combo-box Component) */
+            <div className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2 bg-zinc-50/50 p-5 rounded-xl border border-zinc-200 shadow-sm">
+                {/* Hybrid Combo-box Product Size (ML) block */}
+                <div>
+                  <label className="block text-sm font-semibold text-zinc-700">
+                    Product Size (ML)
+                  </label>
+                  <div className="mt-1 relative">
+                    {!isCustomSizeOverride ? (
+                      <select
+                        className="h-10 w-full rounded-md border border-zinc-200 px-3 outline-none bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-100 text-sm font-medium text-zinc-800"
+                        value={selectedSize}
+                        onChange={(e) => setSelectedSize(e.target.value)}
+                      >
+                        <option value="">-- Choose processed size --</option>
+                        {Array.from(new Set([
+                          ...machines.map(m => Number(m.mould_size_ml)),
+                          ...finalProducts.map(p => Number(p.product_size_ml)).filter(Boolean)
+                        ])).sort((a, b) => a - b).map((size) => (
+                          <option key={size} value={size}>
+                            {size} ml
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="Type custom size (e.g. 120)"
+                        className="h-10 w-full rounded-md border border-zinc-200 px-3 outline-none bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-100 text-sm font-medium text-zinc-800"
+                        value={customSize}
+                        onChange={(e) => setCustomSize(e.target.value.replace(/\D/g, ""))}
+                      />
+                    )}
+                  </div>
+                  <label className="flex items-center gap-1.5 mt-2 cursor-pointer select-none text-xs text-brand-600 font-semibold hover:text-brand-700">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
+                      checked={isCustomSizeOverride}
+                      onChange={(e) => {
+                        setIsCustomSizeOverride(e.target.checked);
+                        if (!e.target.checked) {
+                          setCustomSize("");
+                        }
+                      }}
+                    />
+                    <span>Enter custom size manually (e.g., 120ml override)</span>
+                  </label>
+                </div>
+
+                <div>
+                  <TextInput
+                    label="Variety / Design"
+                    value={customVariety}
+                    onChange={(val) => setCustomVariety(val)}
+                  />
+                  <p className="mt-1 text-[11px] text-zinc-400">e.g., Standard/White, Printed, Brown Kraft</p>
+                </div>
+
+                <div>
+                  <TextInput
+                    label="Packaging Size Name (Optional)"
+                    value={customPackagingName}
+                    onChange={(val) => setCustomPackagingName(val)}
+                  />
+                  <p className="mt-1 text-[11px] text-zinc-400">e.g., Big Box, Small Box. (Auto-generates if empty)</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberInput
+                    label="Pcs / Packet"
+                    value={customPiecesPerPacket}
+                    onChange={(val) => setCustomPiecesPerPacket(val)}
+                  />
+                  <NumberInput
+                    label="Packets / Box"
+                    value={customPacketsPerBox}
+                    onChange={(val) => setCustomPacketsPerBox(val)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <NumberInput
+                  label="Initial Quantity (Boxes)"
+                  value={initialQuantity}
+                  onChange={(val) => setInitialQuantity(val)}
+                />
+              </div>
+
+              <SaveButton
+                label="Save Custom Opening Stock"
+                isSaving={isSaving}
+                onClick={addFinalProductStock}
+              />
+            </div>
+          )}
         </Panel>
       ) : null}
     </div>

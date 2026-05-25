@@ -3,11 +3,25 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, FinalProductStock, Inventory, User
+from models import (
+    BlankStock,
+    BottomStock,
+    BoxStock,
+    FinalProductStock,
+    Inventory,
+    User,
+    DailyProduction,
+    DailySale,
+    FinishedGoodsStock,
+    PackagingProfile,
+    PlasticStock,
+    PolybagStock,
+)
 
 
 router = APIRouter()
@@ -19,6 +33,131 @@ def decimal_or_zero(value) -> Decimal:
 
 def int_or_zero(value) -> int:
     return int(value or 0)
+
+
+def calculate_live_sku_stock(
+    db: Session,
+    factory_id: str,
+    product_size_ml: int,
+    variety: str,
+    packaging_size_name: str,
+    onboarding_boxes: int,
+    onboarding_loose: int,
+    packets_per_box_limit: int,
+) -> tuple[int, int]:
+    # Sum production made
+    prod_boxes = (
+        db.query(func.coalesce(func.sum(DailyProduction.total_boxes_made), 0))
+        .filter(DailyProduction.factory_id == str(factory_id))
+        .filter(DailyProduction.product_size_ml == product_size_ml)
+        .filter(func.lower(DailyProduction.variety) == variety.strip().lower())
+        .filter(func.lower(DailyProduction.packaging_size_name) == packaging_size_name.strip().lower())
+        .scalar()
+    ) or 0
+
+    prod_loose = (
+        db.query(func.coalesce(func.sum(DailyProduction.loose_packets_made), 0))
+        .filter(DailyProduction.factory_id == str(factory_id))
+        .filter(DailyProduction.product_size_ml == product_size_ml)
+        .filter(func.lower(DailyProduction.variety) == variety.strip().lower())
+        .filter(func.lower(DailyProduction.packaging_size_name) == packaging_size_name.strip().lower())
+        .scalar()
+    ) or 0
+
+    # Sum sales sold
+    sales_boxes = (
+        db.query(func.coalesce(func.sum(DailySale.boxes_sold), 0))
+        .filter(DailySale.factory_id == str(factory_id))
+        .filter(DailySale.product_size_ml == product_size_ml)
+        .filter(func.lower(DailySale.variety) == variety.strip().lower())
+        .filter(func.lower(DailySale.packaging_size_name) == packaging_size_name.strip().lower())
+        .scalar()
+    ) or 0
+
+    sales_loose = (
+        db.query(func.coalesce(func.sum(DailySale.loose_packets_sold), 0))
+        .filter(DailySale.factory_id == str(factory_id))
+        .filter(DailySale.product_size_ml == product_size_ml)
+        .filter(func.lower(DailySale.variety) == variety.strip().lower())
+        .filter(func.lower(DailySale.packaging_size_name) == packaging_size_name.strip().lower())
+        .scalar()
+    ) or 0
+
+    limit = packets_per_box_limit if packets_per_box_limit > 0 else 1000
+    total_packets = (
+        (onboarding_boxes * limit + onboarding_loose)
+        + (prod_boxes * limit + prod_loose)
+        - (sales_boxes * limit + sales_loose)
+    )
+
+    live_boxes = total_packets // limit
+    live_loose = total_packets % limit
+    return int(live_boxes), int(live_loose)
+
+
+def recalculate_and_sync_sku_stock(
+    db: Session,
+    factory_id: str,
+    product_size_ml: int,
+    variety: str,
+    packaging_size_name: str,
+) -> tuple[int, int]:
+    stock = (
+        db.query(FinalProductStock)
+        .filter(
+            FinalProductStock.factory_id == str(factory_id),
+            FinalProductStock.product_size_ml == product_size_ml,
+            func.lower(FinalProductStock.variety) == variety.strip().lower(),
+            func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.strip().lower(),
+        )
+        .first()
+    )
+
+    if not stock:
+        return 0, 0
+
+    onboarding_boxes = stock.total_boxes or 0
+    onboarding_loose = stock.loose_packets or 0
+
+    live_boxes, live_loose = calculate_live_sku_stock(
+        db=db,
+        factory_id=str(factory_id),
+        product_size_ml=product_size_ml,
+        variety=variety,
+        packaging_size_name=packaging_size_name,
+        onboarding_boxes=onboarding_boxes,
+        onboarding_loose=onboarding_loose,
+        packets_per_box_limit=stock.packets_per_box_limit or 1000,
+    )
+
+    stock.current_quantity = max(live_boxes, 0)
+    db.add(stock)
+
+    profile = (
+        db.query(PackagingProfile)
+        .filter(
+            PackagingProfile.factory_id == str(factory_id),
+            PackagingProfile.cup_size_ml == product_size_ml,
+            func.lower(PackagingProfile.profile_name) == packaging_size_name.strip().lower(),
+        )
+        .first()
+    )
+
+    if profile:
+        fg_stock = (
+            db.query(FinishedGoodsStock)
+            .filter(
+                FinishedGoodsStock.factory_id == str(factory_id),
+                FinishedGoodsStock.packaging_profile_id == profile.id,
+            )
+            .first()
+        )
+        if fg_stock:
+            fg_stock.boxes_available = max(live_boxes, 0)
+            db.add(fg_stock)
+
+    db.flush()
+    return live_boxes, live_loose
 
 
 class LiveStockRow(BaseModel):
@@ -72,14 +211,16 @@ def list_live_stock(
     db: Session = Depends(get_db),
 ):
     try:
+        factory_id = str(current_user.factory_id)
+        processed_inventory = []
+
+        # 1. Fetch standard Inventory items
         inventory_items = (
             db.query(Inventory)
-            .filter(Inventory.factory_id == current_user.factory_id)
+            .filter(Inventory.factory_id == factory_id)
             .order_by(Inventory.item_name.asc().nullslast(), Inventory.id.asc())
             .all()
         )
-
-        processed_inventory = []
         for item in inventory_items:
             quantity = item.quantity if item.quantity is not None else 0
             processed_inventory.append(
@@ -100,14 +241,156 @@ def list_live_stock(
                 }
             )
 
+        # 2. Fetch BlankStock items (Raw Material Tab)
+        blank_items = (
+            db.query(BlankStock)
+            .filter(BlankStock.factory_id == factory_id)
+            .order_by(BlankStock.blank_size_ml.asc())
+            .all()
+        )
+        for item in blank_items:
+            qty = float(item.total_qty_kg or 0)
+            processed_inventory.append(
+                {
+                    "id": f"blank-{item.id}",
+                    "factory_id": item.factory_id,
+                    "product_id": None,
+                    "item_name": f"{item.blank_size_ml}ml Blank - {item.variety or 'Plain White'}",
+                    "stock_type": "Blank",
+                    "current_quantity": qty,
+                    "quantity": qty,
+                    "unit": "kg",
+                    "price_per_unit": 0.0,
+                    "packaging_size": "Standard",
+                    "category": "Blank",
+                }
+            )
+
+        # 3. Fetch BottomStock items (Raw Material Tab)
+        bottom_items = (
+            db.query(BottomStock)
+            .filter(BottomStock.factory_id == factory_id)
+            .order_by(BottomStock.bottom_size_mm.asc())
+            .all()
+        )
+        for item in bottom_items:
+            qty = float(item.total_qty_kg or 0)
+            processed_inventory.append(
+                {
+                    "id": f"bottom-{item.id}",
+                    "factory_id": item.factory_id,
+                    "product_id": None,
+                    "item_name": f"{item.bottom_size_mm}mm Bottom Roll - {item.variety or 'Plain White'}",
+                    "stock_type": "Bottom",
+                    "current_quantity": qty,
+                    "quantity": qty,
+                    "unit": "kg",
+                    "price_per_unit": 0.0,
+                    "packaging_size": "Standard",
+                    "category": "Bottom",
+                    "size_mm": item.bottom_size_mm,
+                    "total_weight_kg": qty,
+                    "total_rolls": item.total_rolls or 0,
+                }
+            )
+
+        # 4. Fetch BoxStock items (Packaging Tab)
+        box_items = (
+            db.query(BoxStock)
+            .filter(BoxStock.factory_id == factory_id)
+            .order_by(BoxStock.packaging_size_name.asc())
+            .all()
+        )
+        for item in box_items:
+            qty = float(item.quantity or 0)
+            processed_inventory.append(
+                {
+                    "id": f"box-{item.id}",
+                    "factory_id": item.factory_id,
+                    "product_id": None,
+                    "item_name": f"{item.packaging_size_name} Carton Box",
+                    "stock_type": "Carton Box",
+                    "current_quantity": qty,
+                    "quantity": qty,
+                    "unit": "pcs",
+                    "price_per_unit": float(item.price_per_box or 0),
+                    "packaging_size": item.packaging_size_name,
+                    "category": "Carton Box",
+                }
+            )
+
+        # 5. Fetch PlasticStock items (Packaging Tab)
+        plastic_items = (
+            db.query(PlasticStock)
+            .filter(PlasticStock.factory_id == factory_id)
+            .order_by(PlasticStock.plastic_size_name.asc(), PlasticStock.cup_size_ml.asc())
+            .all()
+        )
+        for item in plastic_items:
+            qty_kg = float((item.total_boras or 0) * (item.weight_per_bora_kg or 0.0))
+            processed_inventory.append(
+                {
+                    "id": f"plastic-{item.id}",
+                    "factory_id": item.factory_id,
+                    "product_id": None,
+                    "item_name": f"{item.plastic_size_name} ({item.cup_size_ml}ml) Plastic",
+                    "stock_type": "Polybag",
+                    "current_quantity": qty_kg,
+                    "quantity": qty_kg,
+                    "unit": "kg",
+                    "price_per_unit": float(item.price_per_kg or 0),
+                    "packaging_size": item.plastic_size_name,
+                    "category": "Polybag",
+                }
+            )
+
+        # 6. Fetch PolybagStock items
+        polybag_items = (
+            db.query(PolybagStock)
+            .filter(PolybagStock.factory_id == factory_id)
+            .order_by(PolybagStock.packaging_size_name.asc())
+            .all()
+        )
+        for item in polybag_items:
+            qty = float(item.total_packets or 0)
+            processed_inventory.append(
+                {
+                    "id": f"polybag-{item.id}",
+                    "factory_id": item.factory_id,
+                    "product_id": None,
+                    "item_name": f"{item.packaging_size_name} Polybag",
+                    "stock_type": "Polybag",
+                    "current_quantity": qty,
+                    "quantity": qty,
+                    "unit": "packets",
+                    "price_per_unit": 0.0,
+                    "packaging_size": item.packaging_size_name,
+                    "category": "Polybag",
+                }
+            )
+
+        # 7. Fetch Final Product Stocks
         final_stock_items = (
             db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == current_user.factory_id)
+            .filter(FinalProductStock.factory_id == factory_id)
             .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.packaging_size_name.asc())
             .all()
         )
         for item in final_stock_items:
-            current_quantity = item.current_quantity if item.current_quantity is not None else item.total_boxes
+            live_boxes, live_loose = calculate_live_sku_stock(
+                db=db,
+                factory_id=factory_id,
+                product_size_ml=item.product_size_ml,
+                variety=item.variety,
+                packaging_size_name=item.packaging_size_name,
+                onboarding_boxes=item.total_boxes or 0,
+                onboarding_loose=item.loose_packets or 0,
+                packets_per_box_limit=item.packets_per_box_limit or 1000,
+            )
+            # Sync to cache
+            item.current_quantity = live_boxes
+            db.add(item)
+
             packaging_size = item.packaging_size_name or "Standard"
             processed_inventory.append(
                 {
@@ -118,8 +401,8 @@ def list_live_stock(
                     "variety": item.variety or "Standard/White",
                     "item_name": f"{item.product_size_ml or 0}ml {item.variety or 'Standard/White'} - {packaging_size}",
                     "stock_type": "Final Product",
-                    "current_quantity": int(current_quantity or 0),
-                    "quantity": int(current_quantity or 0),
+                    "current_quantity": int(live_boxes),
+                    "quantity": int(live_boxes),
                     "unit": "boxes",
                     "price_per_unit": 0,
                     "packaging_size": packaging_size,
@@ -131,6 +414,7 @@ def list_live_stock(
                 }
             )
 
+        db.commit()
         return processed_inventory
     except Exception as e:
         import traceback
@@ -161,7 +445,7 @@ def save_final_stock(
         if payload.product_id:
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == current_user.factory_id)
+                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
                 .filter(FinalProductStock.id == payload.product_id)
                 .with_for_update()
                 .first()
@@ -175,7 +459,7 @@ def save_final_stock(
                 raise HTTPException(status_code=422, detail="product_size_ml is required")
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == current_user.factory_id)
+                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
                 .filter(FinalProductStock.product_size_ml == payload.product_size_ml)
                 .filter(FinalProductStock.variety == payload.variety)
                 .filter(FinalProductStock.packaging_size_name == packaging_size_name)
@@ -184,7 +468,7 @@ def save_final_stock(
             )
             if stock is None:
                 stock = FinalProductStock(
-                    factory_id=current_user.factory_id,
+                    factory_id=str(current_user.factory_id),
                     product_size_ml=payload.product_size_ml,
                     variety=payload.variety,
                     packaging_size_name=packaging_size_name,
@@ -233,26 +517,43 @@ def list_final_stock(
     try:
         rows = (
             db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == current_user.factory_id)
+            .filter(FinalProductStock.factory_id == str(current_user.factory_id))
             .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.variety.asc())
             .all()
         )
-        return [
-            FinalStockRow(
-                id=row.id,
+        processed_rows = []
+        for row in rows:
+            live_boxes, live_loose = calculate_live_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
                 product_size_ml=row.product_size_ml,
-                variety=row.variety or "Standard/White",
-                packaging_size=row.packaging_size_name,
+                variety=row.variety,
                 packaging_size_name=row.packaging_size_name,
-                pieces_per_packet=row.pieces_per_packet,
-                packets_per_box=row.packets_per_box_limit,
-                current_quantity=row.current_quantity if row.current_quantity is not None else row.total_boxes or 0,
-                total_boxes=row.total_boxes or 0,
-                loose_packets=row.loose_packets or 0,
-                packets_per_box_limit=row.packets_per_box_limit,
+                onboarding_boxes=row.total_boxes or 0,
+                onboarding_loose=row.loose_packets or 0,
+                packets_per_box_limit=row.packets_per_box_limit or 1000,
             )
-            for row in rows
-        ]
+            # Sync cache
+            row.current_quantity = live_boxes
+            db.add(row)
+            
+            processed_rows.append(
+                FinalStockRow(
+                    id=row.id,
+                    product_size_ml=row.product_size_ml,
+                    variety=row.variety or "Standard/White",
+                    packaging_size=row.packaging_size_name,
+                    packaging_size_name=row.packaging_size_name,
+                    pieces_per_packet=row.pieces_per_packet,
+                    packets_per_box=row.packets_per_box_limit,
+                    current_quantity=int(live_boxes),
+                    total_boxes=row.total_boxes or 0,
+                    loose_packets=row.loose_packets or 0,
+                    packets_per_box_limit=row.packets_per_box_limit,
+                )
+            )
+        db.commit()
+        return processed_rows
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -10,7 +10,7 @@ const getBaseURL = () => {
 
   const { hostname, origin, protocol } = window.location;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return `${protocol}//${hostname}:8000`;
+    return `${protocol}//127.0.0.1:8000`;
   }
 
   return origin;
@@ -166,7 +166,9 @@ export type Step3MaterialsCreate = {
 };
 
 export type DailyProductionCreate = {
+  factory_id?: string | null;
   date: string;
+  operator_id?: number | null;
   worker_id: number;
   machine_id: number;
   product_id?: number | null;
@@ -182,6 +184,7 @@ export type DailyProductionCreate = {
   blank_used_bori: number;
   bottom_used_rolls: number;
   wastage_kg: number;
+  remarks?: string | null;
 };
 
 export type ProductionAlertsResponse = {
@@ -402,8 +405,20 @@ export type FinalStockOption = {
 };
 
 export type FinalProductOpeningStockCreate = {
-  product_id: number;
-  initial_quantity: number;
+  product_id?: number | null;
+  product_size_ml?: number | null;
+  variety?: string;
+  packaging_size?: string | null;
+  packaging_size_name?: string | null;
+  initial_quantity?: number;
+  current_quantity?: number | null;
+  total_boxes?: number | null;
+  loose_packets?: number;
+  pieces_per_packet?: number;
+  packets_per_box?: number | null;
+  packets_per_box_limit?: number | null;
+  category?: string | null;
+  factory_id?: string;
 };
 
 export type LiveStockRow = {
