@@ -1,0 +1,22 @@
+{
+  "factory_id": "factory1",
+  "invoice": {
+    "invoice_id": "test001",
+    "invoice_date": "2026-05-25",
+    "customer_name": "Test Customer",
+    "customer_phone": "9999999999",
+    "payment_method": "Cash",
+    "bill_total": 1200,
+    "amount_paid": 1000,
+    "customer_total_due": 200
+  },
+  "items": [
+    {
+      "product_name": "Milk",
+      "packaging_size_name": "500ml pouch",
+      "quantity": 10,
+      "rate": 60,
+      "line_total": 600
+    }
+  ]
+}
