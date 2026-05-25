@@ -62,6 +62,15 @@ type DashboardStats = {
   recent_payments: Array<Record<string, unknown>>;
 };
 
+type FactorySheetOverview = {
+  factory_id: number;
+  factory_name: string;
+  registered_owner_email?: string | null;
+  phone_number?: string | null;
+  google_spreadsheet_id?: string | null;
+  created_at?: string | null;
+};
+
 type UsageSummary = {
   total_app_events: number;
   total_token_usage: number;
@@ -300,6 +309,23 @@ export function SuperAdminDashboardPage() {
     recent_signups: [],
     recent_payments: [],
   });
+  const sheetOverview = useAdminData<FactorySheetOverview[]>("/api/admin/overview", []);
+  const [selectedFactoryId, setSelectedFactoryId] = useState("");
+  const activeSheetFactories = useMemo(
+    () => sheetOverview.data.filter((factory) => Boolean(factory.google_spreadsheet_id)),
+    [sheetOverview.data],
+  );
+  useEffect(() => {
+    if (selectedFactoryId || activeSheetFactories.length === 0) return;
+    setSelectedFactoryId(String(activeSheetFactories[0].factory_id));
+  }, [activeSheetFactories, selectedFactoryId]);
+  const selectedFactory = useMemo(
+    () => sheetOverview.data.find((factory) => String(factory.factory_id) === selectedFactoryId) || null,
+    [sheetOverview.data, selectedFactoryId],
+  );
+  const spreadsheetSrc = selectedFactory?.google_spreadsheet_id
+    ? `https://docs.google.com/spreadsheets/d/${selectedFactory.google_spreadsheet_id}/edit?usp=sharing`
+    : "";
   const cards = [
     ["Total factories", data.total_factories],
     ["Factory owners", data.total_factory_owners],
@@ -324,6 +350,75 @@ export function SuperAdminDashboardPage() {
       <Panel title="Recent Signups">
         <OwnerTable owners={data.recent_signups || []} />
       </Panel>
+      <Panel
+        title="Live Spreadsheet Audit Room"
+        action={
+          <select
+            className="h-10 min-w-[220px] rounded-md border border-zinc-300 bg-white px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-600"
+            value={selectedFactoryId}
+            onChange={(event) => setSelectedFactoryId(event.target.value)}
+          >
+            <option value="">Select Factory ID</option>
+            {sheetOverview.data.map((factory) => (
+              <option key={factory.factory_id} value={factory.factory_id}>
+                #{factory.factory_id} - {factory.factory_name}
+              </option>
+            ))}
+          </select>
+        }
+      >
+        <ErrorNote message={sheetOverview.error} />
+        {sheetOverview.isLoading ? <p>Loading factory sheets...</p> : (
+          <div className="space-y-4">
+            <FactorySheetOverviewTable factories={sheetOverview.data} selectedFactoryId={selectedFactoryId} onSelect={setSelectedFactoryId} />
+            <div className="bg-white p-4 rounded-xl">
+              {spreadsheetSrc ? (
+                <iframe
+                  key={spreadsheetSrc}
+                  title={`Live Google Sheet for ${selectedFactory?.factory_name || selectedFactoryId}`}
+                  src={spreadsheetSrc}
+                  className="w-full h-[650px] border border-gray-200 rounded-lg shadow-md relative block"
+                />
+              ) : (
+                <EmptyState>{selectedFactory ? "Selected factory does not have a Google Spreadsheet ID yet." : "Select a Factory ID to inspect its live Google Sheet."}</EmptyState>
+              )}
+            </div>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function FactorySheetOverviewTable({ factories, selectedFactoryId, onSelect }: { factories: FactorySheetOverview[]; selectedFactoryId: string; onSelect: (factoryId: string) => void }) {
+  if (factories.length === 0) return <EmptyState>No active factory spreadsheet metadata found.</EmptyState>;
+  return (
+    <div className="w-full overflow-x-auto block">
+      <table className="min-w-full divide-y divide-zinc-200 text-sm">
+        <thead className="bg-zinc-50">
+          <tr>{["Factory ID", "Factory", "Owner Email", "Phone", "Google Spreadsheet ID", "Created", "Action"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100">
+          {factories.map((factory) => {
+            const selected = String(factory.factory_id) === selectedFactoryId;
+            return (
+              <tr key={factory.factory_id} className={selected ? "bg-indigo-50" : ""}>
+                <td className="px-3 py-2 font-black">#{factory.factory_id}</td>
+                <td className="px-3 py-2 font-semibold">{factory.factory_name}</td>
+                <td className="px-3 py-2">{factory.registered_owner_email || "-"}</td>
+                <td className="px-3 py-2">{factory.phone_number || "-"}</td>
+                <td className="px-3 py-2 font-mono text-xs">{factory.google_spreadsheet_id || "-"}</td>
+                <td className="px-3 py-2">{formatDate(factory.created_at)}</td>
+                <td className="px-3 py-2">
+                  <button className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-bold hover:bg-zinc-50 disabled:opacity-50" type="button" disabled={selected} onClick={() => onSelect(String(factory.factory_id))}>
+                    {selected ? "Selected" : "Open"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

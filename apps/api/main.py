@@ -175,6 +175,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(staff.security_v1_router)
     application.include_router(staff.workers_router)
     application.include_router(super_admin.router)
+    application.include_router(super_admin.admin_router)
     application.include_router(expenses.router)
     application.include_router(integrations.router)
     application.include_router(machine_onboarding.router)

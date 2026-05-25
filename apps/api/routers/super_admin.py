@@ -31,6 +31,7 @@ from models import (
     Employee,
     ExpenseLog,
     Factory,
+    FactoryAutomationSheet,
     FactoryExpense,
     FactoryInventory,
     FactorySettings,
@@ -62,6 +63,7 @@ from models import (
 
 
 router = APIRouter(prefix="/api/super-admin", tags=["super-admin"])
+admin_router = APIRouter(prefix="/api/admin", tags=["super-admin"])
 bearer = HTTPBearer(auto_error=False)
 SUPER_ADMIN_TOKEN_EXPIRE_MINUTES = int(os.getenv("SUPER_ADMIN_TOKEN_EXPIRE_MINUTES") or "720")
 BULK_DELETE_CONFIRMATION = "DELETE SELECTED FACTORIES"
@@ -83,6 +85,15 @@ class SuperAdminLoginResponse(BaseModel):
 class SuperAdminMeResponse(BaseModel):
     email: str
     role: str = "super_admin"
+
+
+class FactorySheetOverviewResponse(BaseModel):
+    factory_id: int
+    factory_name: str
+    registered_owner_email: Optional[str] = None
+    phone_number: Optional[str] = None
+    google_spreadsheet_id: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class FactoryCreateRequest(BaseModel):
@@ -404,6 +415,39 @@ def factory_summary(db: Session, factory: Factory) -> dict:
     }
 
 
+def resolve_factory_owner(db: Session, factory: Factory) -> Optional[User]:
+    if factory.owner_id:
+        owner = db.query(User).filter(User.id == factory.owner_id).first()
+        if owner is not None:
+            return owner
+    return db.query(User).filter(User.factory_id == factory.id, func.lower(User.role) == "owner").first()
+
+
+def resolve_factory_google_sheet_id(db: Session, factory: Factory) -> Optional[str]:
+    if factory.google_sheet_id:
+        return factory.google_sheet_id
+    sheet = (
+        db.query(FactoryAutomationSheet)
+        .filter(FactoryAutomationSheet.factory_id == factory.id)
+        .filter(FactoryAutomationSheet.is_active.is_(True))
+        .order_by(FactoryAutomationSheet.updated_at.desc(), FactoryAutomationSheet.created_at.desc())
+        .first()
+    )
+    return sheet.google_sheet_id if sheet else None
+
+
+def factory_sheet_overview(db: Session, factory: Factory) -> FactorySheetOverviewResponse:
+    owner = resolve_factory_owner(db, factory)
+    return FactorySheetOverviewResponse(
+        factory_id=factory.id,
+        factory_name=factory.factory_name or factory.name,
+        registered_owner_email=owner.email if owner else None,
+        phone_number=(owner.phone_number if owner else None) or factory.owner_phone_number,
+        google_spreadsheet_id=resolve_factory_google_sheet_id(db, factory),
+        created_at=factory.created_at,
+    )
+
+
 def factory_counts(db: Session, factory_id: int) -> dict:
     return {
         "production_records_count": db.query(DailyProduction).filter(DailyProduction.factory_id == factory_id).count(),
@@ -658,6 +702,20 @@ def dashboard(response: Response, db: Session = Depends(get_db), admin_email: st
             for p in db.query(SubscriptionPayment).order_by(SubscriptionPayment.created_at.desc()).limit(10).all()
         ],
     }
+
+
+@router.get("/overview", response_model=list[FactorySheetOverviewResponse])
+@admin_router.get("/overview", response_model=list[FactorySheetOverviewResponse])
+def admin_overview(response: Response, db: Session = Depends(get_db), admin_email: str = Depends(require_super_admin)):
+    no_store(response)
+    factories = (
+        db.query(Factory)
+        .filter(Factory.is_active.is_(True))
+        .order_by(Factory.id.asc())
+        .limit(1000)
+        .all()
+    )
+    return [factory_sheet_overview(db, factory) for factory in factories]
 
 
 @router.get("/owners")
