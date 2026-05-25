@@ -11,6 +11,7 @@ import CalculatorPage from "./pages/CalculatorPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import FactoryExpensesPage from "./pages/FactoryExpensesPage";
+import FactorySheetViewer from "./pages/FactorySheetViewer";
 import InventoryPage from "./pages/InventoryPage";
 import Integrations from "./pages/Integrations";
 import LandingPage from "./pages/LandingPage";
@@ -63,6 +64,7 @@ export default function App() {
       <Route path="munshi-control-room" element={<SuperAdminLoginPage />} />
       <Route path="munshi-control-room" element={<SuperAdminRoute />}>
         <Route path="dashboard" element={<SuperAdminDashboardPage />} />
+        <Route path="factory/:factoryId" element={<FactorySheetViewer />} />
         <Route path="owners" element={<SuperAdminOwnersPage />} />
         <Route path="factories" element={<SuperAdminFactoriesPage />} />
         <Route path="factories/:factoryId" element={<SuperAdminFactoryDetailPage />} />

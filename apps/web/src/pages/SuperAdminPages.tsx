@@ -391,12 +391,13 @@ export function SuperAdminDashboardPage() {
 }
 
 function FactorySheetOverviewTable({ factories, selectedFactoryId, onSelect }: { factories: FactorySheetOverview[]; selectedFactoryId: string; onSelect: (factoryId: string) => void }) {
+  const navigate = useNavigate();
   if (factories.length === 0) return <EmptyState>No active factory spreadsheet metadata found.</EmptyState>;
   return (
     <div className="w-full overflow-x-auto block">
       <table className="min-w-full divide-y divide-zinc-200 text-sm">
         <thead className="bg-zinc-50">
-          <tr>{["Factory ID", "Factory", "Owner Email", "Phone", "Google Spreadsheet ID", "Created", "Action"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr>
+          <tr>{["Factory ID", "Factory", "Owner Email", "Phone", "Google Spreadsheet ID", "Created", "Actions"].map((head) => <th key={head} className="px-3 py-2 text-left font-bold text-zinc-600">{head}</th>)}</tr>
         </thead>
         <tbody className="divide-y divide-zinc-100">
           {factories.map((factory) => {
@@ -404,15 +405,24 @@ function FactorySheetOverviewTable({ factories, selectedFactoryId, onSelect }: {
             return (
               <tr key={factory.factory_id} className={selected ? "bg-indigo-50" : ""}>
                 <td className="px-3 py-2 font-black">#{factory.factory_id}</td>
-                <td className="px-3 py-2 font-semibold">{factory.factory_name}</td>
+                <td className="px-3 py-2 font-semibold">
+                  <button className="text-left font-bold text-[#6D28D9] hover:underline" type="button" onClick={() => navigate(`/munshi-control-room/factory/${factory.factory_id}`)}>
+                    {factory.factory_name}
+                  </button>
+                </td>
                 <td className="px-3 py-2">{factory.registered_owner_email || "-"}</td>
                 <td className="px-3 py-2">{factory.phone_number || "-"}</td>
                 <td className="px-3 py-2 font-mono text-xs">{factory.google_spreadsheet_id || "-"}</td>
                 <td className="px-3 py-2">{formatDate(factory.created_at)}</td>
                 <td className="px-3 py-2">
-                  <button className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-bold hover:bg-zinc-50 disabled:opacity-50" type="button" disabled={selected} onClick={() => onSelect(String(factory.factory_id))}>
-                    {selected ? "Selected" : "Open"}
-                  </button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-bold hover:bg-zinc-50 disabled:opacity-50" type="button" disabled={selected} onClick={() => onSelect(String(factory.factory_id))}>
+                      {selected ? "Selected" : "Preview"}
+                    </button>
+                    <button className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-700" type="button" onClick={() => navigate(`/munshi-control-room/factory/${factory.factory_id}`)}>
+                      Open Google Sheet Grid
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
