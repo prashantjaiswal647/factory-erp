@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body || $json;\nconst invoice = body.invoice || {};\nconst items = body.items || [];\nconst targetSheetName = body.target_sheet_name || `Factory_${body.factory_id}_Sales`;\nconst invoiceId = invoice.invoice_id || (Array.isArray(invoice.sale_ids) ? invoice.sale_ids[0] : 'pending');\n\nreturn [{\n  json: {\n    event: body.event || 'invoice.created',\n    factory_id: String(body.factory_id || ''),\n    google_spreadsheet_id: body.google_spreadsheet_id || '',\n    target_sheet_name: targetSheetName,\n    invoice_id: invoiceId,\n    sale_ids: invoice.sale_ids || [],\n    invoice_date: invoice.invoice_date || '',\n    customer_id: invoice.customer_id || '',\n    customer_name: invoice.customer_name || '',\n    customer_phone: invoice.customer_phone || '',\n    payment_method: invoice.payment_method || 'Cash',\n    bill_total: Number(invoice.bill_total || 0),\n    amount_paid: Number(invoice.amount_paid || 0),\n    previous_due: Number(invoice.previous_due || 0),\n    customer_total_due: Number(invoice.customer_total_due || 0),\n    status: invoice.status || 'created',\n    items,\n    items_json: JSON.stringify(items),\n    received_at: new Date().toISOString(),\n    pdf_filename: `invoice_${body.factory_id || 'factory'}_${invoiceId}.pdf`\n  }\n}];"
+        "jsCode": "const body = $json.body || $json;\nconst invoice = body.invoice || {};\nconst items = body.items || [];\nconst policy = body.document_policy || {};\nconst targetSheetName = body.target_sheet_name || `Factory_${body.factory_id}_Sales`;\nconst invoiceId = invoice.invoice_id || (Array.isArray(invoice.sale_ids) ? invoice.sale_ids[0] : 'pending');\nconst legalInvoiceType = policy.legal_invoice_type || 'bill_of_supply';\nconst legalInvoiceNumber = policy.legal_invoice_number || String(invoiceId);\nconst roughBillEnabled = policy.rough_bill_enabled !== false;\nconst roughBillNumber = policy.rough_bill_number || `RB-${invoiceId}`;\n\nreturn [{\n  json: {\n    event: body.event || 'invoice.created',\n    factory_id: String(body.factory_id || ''),\n    google_spreadsheet_id: body.google_spreadsheet_id || '',\n    target_sheet_name: targetSheetName,\n    invoice_id: invoiceId,\n    sale_ids: invoice.sale_ids || [],\n    invoice_date: invoice.invoice_date || '',\n    customer_id: invoice.customer_id || '',\n    customer_name: invoice.customer_name || '',\n    customer_phone: invoice.customer_phone || '',\n    payment_method: invoice.payment_method || 'Cash',\n    bill_total: Number(invoice.bill_total || 0),\n    amount_paid: Number(invoice.amount_paid || 0),\n    previous_due: Number(invoice.previous_due || 0),\n    customer_total_due: Number(invoice.customer_total_due || 0),\n    status: invoice.status || 'created',\n    legal_invoice_type: legalInvoiceType,\n    legal_invoice_title: legalInvoiceType === 'tax_invoice' ? 'Tax Invoice' : 'Bill of Supply',\n    legal_invoice_number: legalInvoiceNumber,\n    rough_bill_enabled: roughBillEnabled,\n    rough_bill_number: roughBillNumber,\n    rough_bill_label: policy.rough_bill_label || 'Customer Understanding Bill',\n    rough_bill_disclaimer: policy.rough_bill_disclaimer || 'Internal customer understanding and rate settlement document. Not a government tax invoice.',\n    items,\n    items_json: JSON.stringify(items),\n    received_at: new Date().toISOString(),\n    pdf_filename: `invoice_${body.factory_id || 'factory'}_${invoiceId}.pdf`\n  }\n}];"
       },
       "id": "51c1de2f-3533-4f02-aaee-1376d04f9de0",
       "name": "Normalize Invoice Payload",
@@ -93,10 +93,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const itemRows = ($json.items || []).map((item) => `\n<tr>\n  <td>${item.product_size_ml || ''}ml</td>\n  <td>${item.variety || ''}</td>\n  <td>${item.packaging_size_name || ''}</td>\n  <td>${item.boxes_sold || 0}</td>\n  <td>${item.loose_packets_sold || 0}</td>\n  <td>Rs ${Number(item.rate_per_box || 0).toFixed(2)}</td>\n  <td>Rs ${Number(item.line_total || 0).toFixed(2)}</td>\n</tr>`).join('');\n\nconst html = `<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<style>\nbody { font-family: Arial, sans-serif; color: #111827; padding: 32px; }\n.header { border-bottom: 2px solid #111827; padding-bottom: 16px; margin-bottom: 24px; }\nh1 { margin: 0; font-size: 28px; }\n.meta { margin-top: 8px; color: #4b5563; font-size: 13px; }\ntable { width: 100%; border-collapse: collapse; margin-top: 24px; }\nth { background: #f3f4f6; text-align: left; font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\ntd { font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\n.summary { margin-top: 24px; margin-left: auto; width: 300px; border: 1px solid #d1d5db; padding: 16px; }\n.row { display: flex; justify-content: space-between; margin-bottom: 8px; }\n.total { font-weight: bold; font-size: 16px; border-top: 1px solid #d1d5db; padding-top: 8px; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>Munshi AI Sales Invoice</h1>\n  <div class=\"meta\">Invoice #${$json.invoice_id} | Factory ID: ${$json.factory_id}</div>\n  <div class=\"meta\">Date: ${$json.invoice_date}</div>\n</div>\n<p><strong>Customer:</strong> ${$json.customer_name}</p>\n<p><strong>Phone:</strong> ${$json.customer_phone || '-'}</p>\n<p><strong>Payment Method:</strong> ${$json.payment_method}</p>\n<table>\n<thead><tr><th>Size</th><th>Variety</th><th>Packaging</th><th>Boxes</th><th>Loose</th><th>Rate / Box</th><th>Total</th></tr></thead>\n<tbody>${itemRows}</tbody>\n</table>\n<div class=\"summary\">\n  <div class=\"row\"><span>Bill Total</span><span>Rs ${Number($json.bill_total || 0).toFixed(2)}</span></div>\n  <div class=\"row\"><span>Paid</span><span>Rs ${Number($json.amount_paid || 0).toFixed(2)}</span></div>\n  <div class=\"row total\"><span>Total Due</span><span>Rs ${Number($json.customer_total_due || 0).toFixed(2)}</span></div>\n</div>\n</body>\n</html>`;\n\nreturn [{ json: { ...$json, invoice_html: html } }];"
+        "jsCode": "const itemRows = ($json.items || []).map((item) => `\n<tr>\n  <td>${item.product_size_ml || ''}ml</td>\n  <td>${item.variety || ''}</td>\n  <td>${item.packaging_size_name || ''}</td>\n  <td>${item.boxes_sold || 0}</td>\n  <td>${item.loose_packets_sold || 0}</td>\n  <td>Rs ${Number(item.rate_per_box || 0).toFixed(2)}</td>\n  <td>Rs ${Number(item.line_total || 0).toFixed(2)}</td>\n</tr>`).join('');\n\nconst legalSpecific = $json.legal_invoice_type === 'tax_invoice'\n  ? '<p><strong>Tax treatment:</strong> Tax Invoice branch selected. Add GSTIN, HSN/SAC, CGST/SGST/IGST fields here when factory tax setup is finalized.</p>'\n  : '<p><strong>Tax treatment:</strong> Bill of Supply branch selected. No tax breakup is printed in this template.</p>';\n\nconst legalDocument = `\n<section class=\"document\">\n  <div class=\"header\">\n    <h1>Munshi AI ${$json.legal_invoice_title}</h1>\n    <div class=\"meta\">Invoice No: ${$json.legal_invoice_number} | Factory ID: ${$json.factory_id}</div>\n    <div class=\"meta\">Date: ${$json.invoice_date}</div>\n  </div>\n  <p><strong>Customer:</strong> ${$json.customer_name}</p>\n  <p><strong>Phone:</strong> ${$json.customer_phone || '-'}</p>\n  <p><strong>Payment Method:</strong> ${$json.payment_method}</p>\n  ${legalSpecific}\n  <table>\n    <thead><tr><th>Size</th><th>Variety</th><th>Packaging</th><th>Boxes</th><th>Loose</th><th>Rate / Box</th><th>Total</th></tr></thead>\n    <tbody>${itemRows}</tbody>\n  </table>\n  <div class=\"summary\">\n    <div class=\"row\"><span>Bill Total</span><span>Rs ${Number($json.bill_total || 0).toFixed(2)}</span></div>\n    <div class=\"row\"><span>Paid</span><span>Rs ${Number($json.amount_paid || 0).toFixed(2)}</span></div>\n    <div class=\"row total\"><span>Total Due</span><span>Rs ${Number($json.customer_total_due || 0).toFixed(2)}</span></div>\n  </div>\n</section>`;\n\nconst roughDocument = $json.rough_bill_enabled ? `\n<section class=\"document page-break rough\">\n  <div class=\"header rough-header\">\n    <h1>${$json.rough_bill_label}</h1>\n    <div class=\"meta\">Rough Bill No: ${$json.rough_bill_number} | Linked Invoice: ${$json.legal_invoice_number}</div>\n    <div class=\"meta\">Factory ID: ${$json.factory_id} | Date: ${$json.invoice_date}</div>\n  </div>\n  <p class=\"notice\">${$json.rough_bill_disclaimer}</p>\n  <p><strong>Customer:</strong> ${$json.customer_name}</p>\n  <table>\n    <thead><tr><th>Actual Product</th><th>Customer Understanding</th><th>Boxes</th><th>Loose</th><th>Rate</th><th>Amount</th></tr></thead>\n    <tbody>${($json.items || []).map((item) => `<tr><td>${item.product_size_ml || ''}ml ${item.variety || ''}</td><td>${item.packaging_size_name || ''}</td><td>${item.boxes_sold || 0}</td><td>${item.loose_packets_sold || 0}</td><td>Rs ${Number(item.rate_per_box || 0).toFixed(2)}</td><td>Rs ${Number(item.line_total || 0).toFixed(2)}</td></tr>`).join('')}</tbody>\n  </table>\n  <div class=\"summary\"><div class=\"row total\"><span>Customer Rate Total</span><span>Rs ${Number($json.bill_total || 0).toFixed(2)}</span></div></div>\n</section>` : '';\n\nconst html = `<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<style>\nbody { font-family: Arial, sans-serif; color: #111827; padding: 0; margin: 0; }\n.document { padding: 32px; }\n.header { border-bottom: 2px solid #111827; padding-bottom: 16px; margin-bottom: 24px; }\n.rough-header { border-color: #475569; }\nh1 { margin: 0; font-size: 28px; }\n.meta { margin-top: 8px; color: #4b5563; font-size: 13px; }\n.notice { border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; padding: 10px; font-size: 12px; }\ntable { width: 100%; border-collapse: collapse; margin-top: 24px; }\nth { background: #f3f4f6; text-align: left; font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\ntd { font-size: 12px; padding: 10px; border: 1px solid #d1d5db; }\n.summary { margin-top: 24px; margin-left: auto; width: 300px; border: 1px solid #d1d5db; padding: 16px; }\n.row { display: flex; justify-content: space-between; margin-bottom: 8px; }\n.total { font-weight: bold; font-size: 16px; border-top: 1px solid #d1d5db; padding-top: 8px; }\n.page-break { page-break-before: always; }\n.rough { color: #1f2937; }\n</style>\n</head>\n<body>${legalDocument}${roughDocument}</body>\n</html>`;\n\nreturn [{ json: { ...$json, invoice_html: html } }];"
       },
       "id": "c15963f4-e9c9-443c-974d-8f9fb30889cf",
-      "name": "Build Invoice HTML",
+      "name": "Build Legal + Rough Bill HTML",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -242,18 +242,7 @@
       "main": [
         [
           {
-            "node": "Build Invoice HTML",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Invoice HTML": {
-      "main": [
-        [
-          {
-            "node": "Create HTML Binary",
+            "node": "Build Legal + Rough Bill HTML",
             "type": "main",
             "index": 0
           }
@@ -287,6 +276,17 @@
         [
           {
             "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Legal + Rough Bill HTML": {
+      "main": [
+        [
+          {
+            "node": "Create HTML Binary",
             "type": "main",
             "index": 0
           }

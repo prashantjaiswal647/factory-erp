@@ -367,6 +367,10 @@ export type DailySaleCreate = {
   date: string;
   customer_id: number;
   amount_paid: number;
+  legal_invoice_type: "tax_invoice" | "bill_of_supply";
+  legal_invoice_number?: string | null;
+  rough_bill_enabled: boolean;
+  rough_bill_number?: string | null;
   items: Array<{
     product_id?: number | null;
     product_size_ml: number;
@@ -734,7 +738,7 @@ export function getAiDashboardInsights() {
 }
 
 export function createDailySale(payload: DailySaleCreate) {
-  return api.post<DailySaleResponse>("/api/sales/order", payload);
+  return api.post<DailySaleResponse>("/api/sales/invoice", payload);
 }
 
 export function createSalesCustomer(payload: CustomerCreate) {

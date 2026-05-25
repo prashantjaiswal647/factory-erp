@@ -48,6 +48,10 @@ export default function SalesEntryPage() {
     date: new Date().toISOString().slice(0, 10),
     customer_id: 0,
     amount_paid: 0,
+    legal_invoice_type: "bill_of_supply",
+    legal_invoice_number: "",
+    rough_bill_enabled: true,
+    rough_bill_number: "",
     items: [{ ...emptyItem }]
   });
 
@@ -92,6 +96,10 @@ export default function SalesEntryPage() {
         ...form,
         customer_id: Number(selectedCustomer.id),
         amount_paid: Number(form.amount_paid || 0),
+        legal_invoice_type: form.legal_invoice_type,
+        legal_invoice_number: form.legal_invoice_number?.trim() || null,
+        rough_bill_enabled: Boolean(form.rough_bill_enabled),
+        rough_bill_number: form.rough_bill_number?.trim() || null,
         items: form.items.map((item) => normalizeItem({
           ...item,
           product_size_ml: Number(item.product_size_ml || 0),
@@ -115,6 +123,10 @@ export default function SalesEntryPage() {
         date: new Date().toISOString().slice(0, 10),
         customer_id: 0,
         amount_paid: 0,
+        legal_invoice_type: form.legal_invoice_type,
+        legal_invoice_number: "",
+        rough_bill_enabled: form.rough_bill_enabled,
+        rough_bill_number: "",
         items: inventoryRows[0] ? [itemFromVariation(inventoryRows[0], emptyItem)] : [{ ...emptyItem }]
       });
       window.setTimeout(() => customerSearchRef.current?.focus(), 0);
@@ -152,6 +164,16 @@ export default function SalesEntryPage() {
           <CustomerCombobox inputRef={customerSearchRef} query={customerQuery} results={customerResults} onQueryChange={setCustomerQuery} onSelect={selectCustomer} />
           <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
           <NumberField label="Amount paid" value={form.amount_paid} onChange={(amount_paid) => setForm({ ...form, amount_paid })} />
+        </div>
+
+        <div className="mt-5 grid gap-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 md:grid-cols-4">
+          <InvoiceModeField value={form.legal_invoice_type} onChange={(legal_invoice_type) => setForm({ ...form, legal_invoice_type })} />
+          <Field label="Legal invoice number" value={form.legal_invoice_number || ""} onChange={(legal_invoice_number) => setForm({ ...form, legal_invoice_number })} />
+          <Field label="Rough bill number" value={form.rough_bill_number || ""} onChange={(rough_bill_number) => setForm({ ...form, rough_bill_number })} />
+          <label className="flex items-end gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
+            <input className="h-4 w-4 accent-brand-600" type="checkbox" checked={form.rough_bill_enabled} onChange={(event) => setForm({ ...form, rough_bill_enabled: event.target.checked })} />
+            Generate parallel rough bill
+          </label>
         </div>
 
         <div className="mt-5 space-y-3">
@@ -300,6 +322,18 @@ function Field({ label, value, type = "text", onChange }: { label: string; value
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
       <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function InvoiceModeField({ value, onChange }: { value: DailySaleCreate["legal_invoice_type"]; onChange: (value: DailySaleCreate["legal_invoice_type"]) => void }) {
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">Legal invoice mode</span>
+      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value as DailySaleCreate["legal_invoice_type"])}>
+        <option value="bill_of_supply">Bill of Supply</option>
+        <option value="tax_invoice">Tax Invoice</option>
+      </select>
     </label>
   );
 }

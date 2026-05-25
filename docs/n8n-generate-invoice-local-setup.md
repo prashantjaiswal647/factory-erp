@@ -33,3 +33,44 @@ React sales invoice submission should call:
 `POST /api/sales/invoice`
 
 The existing `/api/sales/add` endpoint remains available and now shares the same async invoice workflow dispatch.
+
+## Owner invoice mode configuration
+
+On the owner Sales Entry page, the owner now chooses one legal invoice mode before saving:
+
+- `Bill of Supply`
+- `Tax Invoice`
+
+Only the selected legal branch is printed in the legal invoice section. The same sale can also generate a parallel rough bill for customer-to-customer rate understanding. This rough bill is not a government tax document.
+
+Optional owner inputs:
+
+- `Legal invoice number`: use this when the factory wants to start from a specific invoice number.
+- `Rough bill number`: use this when the factory wants a separate informal sequence.
+- `Generate parallel rough bill`: keep enabled when the customer-understanding bill should be included.
+
+If invoice numbers are left blank, FastAPI sends the first created sale row ID as the legal invoice number and `RB-<sale_id>` as the rough bill number.
+
+## n8n document branch behavior
+
+The imported workflow reads:
+
+`{{$json.document_policy.legal_invoice_type}}`
+
+FastAPI sends this as:
+
+- `tax_invoice`
+- `bill_of_supply`
+
+n8n then creates a PDF with:
+
+1. The selected legal document template.
+2. The rough bill template on a separate page when `rough_bill_enabled` is true.
+
+Manual customization point:
+
+Open the node `Build Legal + Rough Bill HTML` and edit:
+
+- Tax Invoice-specific fields such as GSTIN, HSN/SAC, CGST, SGST, IGST.
+- Bill of Supply-specific wording.
+- Rough bill disclaimer and customer-understanding layout.

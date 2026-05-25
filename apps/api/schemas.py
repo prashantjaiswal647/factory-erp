@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -601,6 +601,10 @@ class DailySaleCreate(BaseModel):
     date: date
     customer_id: int = Field(..., gt=0)
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0)
+    legal_invoice_type: Literal["tax_invoice", "bill_of_supply"] = "bill_of_supply"
+    legal_invoice_number: Optional[str] = Field(default=None, max_length=50)
+    rough_bill_enabled: bool = True
+    rough_bill_number: Optional[str] = Field(default=None, max_length=50)
     items: List[DailySaleItemCreate] = Field(..., min_length=1)
 
 

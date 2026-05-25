@@ -655,6 +655,14 @@ def add_sale_invoice(
             "target_sheet_name": f"Factory_{factory_id}_Sales",
             "sync_type": "sales",
             "action": "insert",
+            "document_policy": {
+                "legal_invoice_type": payload.legal_invoice_type,
+                "legal_invoice_number": payload.legal_invoice_number or str(sale_ids[0] if sale_ids else ""),
+                "rough_bill_enabled": payload.rough_bill_enabled,
+                "rough_bill_number": payload.rough_bill_number or f"RB-{sale_ids[0] if sale_ids else 'pending'}",
+                "rough_bill_label": "Customer Understanding Bill",
+                "rough_bill_disclaimer": "Internal customer understanding and rate settlement document. Not a government tax invoice.",
+            },
             "invoice": {
                 "invoice_id": sale_ids[0] if sale_ids else None,
                 "sale_ids": sale_ids,
