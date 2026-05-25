@@ -96,6 +96,10 @@ class FactorySheetOverviewResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class FactorySheetUpdateRequest(BaseModel):
+    google_spreadsheet_id: str = Field(..., min_length=1, max_length=500)
+
+
 class FactoryCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     factory_name: Optional[str] = None
@@ -436,6 +440,18 @@ def resolve_factory_google_sheet_id(db: Session, factory: Factory) -> Optional[s
     return sheet.google_sheet_id if sheet else None
 
 
+def parse_google_spreadsheet_id(value: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        raise HTTPException(status_code=422, detail="google_spreadsheet_id is required")
+    if "/spreadsheets/d/" in candidate:
+        candidate = candidate.split("/spreadsheets/d/", 1)[1].split("/", 1)[0]
+    candidate = candidate.split("?", 1)[0].split("#", 1)[0].strip()
+    if not candidate:
+        raise HTTPException(status_code=422, detail="Valid Google Spreadsheet ID is required")
+    return candidate
+
+
 def factory_sheet_overview(db: Session, factory: Factory) -> FactorySheetOverviewResponse:
     owner = resolve_factory_owner(db, factory)
     return FactorySheetOverviewResponse(
@@ -716,6 +732,25 @@ def admin_overview(response: Response, db: Session = Depends(get_db), admin_emai
         .all()
     )
     return [factory_sheet_overview(db, factory) for factory in factories]
+
+
+@admin_router.post("/factory/{factory_id}/update-sheet", response_model=FactorySheetOverviewResponse)
+def update_factory_google_sheet(
+    factory_id: int,
+    payload: FactorySheetUpdateRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    admin_email: str = Depends(require_super_admin),
+):
+    no_store(response)
+    factory = db.query(Factory).filter(Factory.id == factory_id).first()
+    if factory is None:
+        raise HTTPException(status_code=404, detail="Factory not found")
+
+    factory.google_sheet_id = parse_google_spreadsheet_id(payload.google_spreadsheet_id)
+    db.commit()
+    db.refresh(factory)
+    return factory_sheet_overview(db, factory)
 
 
 @router.get("/owners")
