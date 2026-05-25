@@ -198,7 +198,7 @@ export default function DashboardPage() {
             `${machine.speed_per_minute || "-"} / min`
           ])}
           headers={["Machine", "Type", "Cup Size", "Speed"]}
-          to="/machine-setup"
+          to="/machines"
         />
       </section>
     </div>

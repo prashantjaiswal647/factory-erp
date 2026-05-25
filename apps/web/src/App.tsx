@@ -182,6 +182,22 @@ export default function App() {
           }
         />
         <Route
+          path="machines"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <MachineOnboardingPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="machine-setup"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <MachineOnboardingPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
           path="calculator"
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>

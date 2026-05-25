@@ -24,6 +24,7 @@ import {
   createStaffMember,
   updateStaffMember,
   deleteStaffMember,
+  deleteWorker,
   changePassword,
   requestFactoryId,
   verifyFactoryId,
@@ -102,6 +103,27 @@ export default function StaffManagement() {
       setError("Staff list load failed.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleRemoveWorker(member: StaffMember) {
+    if (!member.worker_id) {
+      setError("Worker ID not found.");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Are you sure you want to remove this worker? This will not delete their production metrics history."
+    );
+    if (!confirmed) return;
+
+    setError("");
+    setToast("");
+    try {
+      await deleteWorker(member.worker_id);
+      setToast("Worker removed successfully.");
+      void loadStaff();
+    } catch (caught) {
+      setError("Failed to remove worker.");
     }
   }
 
@@ -730,6 +752,18 @@ export default function StaffManagement() {
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
+                          {member.role === "Operator" && member.worker_id && (
+                            <button
+                              className="inline-flex h-9 items-center gap-1.5 px-3 rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 transition font-semibold text-xs"
+                              type="button"
+                              title="Remove Worker"
+                              onClick={() => handleRemoveWorker(member)}
+                              data-testid="remove-worker-button"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Remove
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

@@ -777,7 +777,7 @@ class AttendanceLog(TenantMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
-    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String(20), nullable=False, default="Absent", server_default="Absent", index=True)
     production_qty = Column(Numeric(14, 3), nullable=True)
     duty_hours = Column(Float, nullable=False, default=8.0, server_default="8.0")
@@ -802,7 +802,7 @@ class AdvancePayment(TenantMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
-    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
     amount = Column(Float, nullable=False, default=0)
     is_settled = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
 

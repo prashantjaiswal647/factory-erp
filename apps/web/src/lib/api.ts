@@ -329,6 +329,7 @@ export type StaffMember = {
   factory_id?: number | null;
   last_login_at?: string | null;
   opening_attendance?: OpeningAttendanceResponse | null;
+  worker_id?: number | null;
 };
 
 export type FactoryExpenseCreate = {
@@ -1075,6 +1076,10 @@ export function updateStaffMember(id: number, payload: {
 
 export function deleteStaffMember(id: number) {
   return api.delete(`/api/v1/staff/${id}/delete`);
+}
+
+export function deleteWorker(id: number) {
+  return api.delete(`/api/workers/${id}`);
 }
 
 export function getStaffOpeningAttendance(staffId: number) {

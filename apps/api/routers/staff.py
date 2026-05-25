@@ -66,6 +66,7 @@ class SecureStaffResponse(BaseModel):
     role: str
     last_login_at: datetime | None = None
     opening_attendance: Optional[OpeningAttendanceResponse] = None
+    worker_id: Optional[int] = None
 
 
 class SecureStaffCreateRequest(BaseModel):
@@ -300,10 +301,12 @@ def secure_list_staff(
             
             for u in res:
                 u.opening_attendance = None
+                u.worker_id = None
                 if u.role == "Operator":
                     worker = worker_by_name_phone.get((u.full_name.lower(), u.phone_number))
                     if worker:
                         u.opening_attendance = opening_att_map.get(worker.id)
+                        u.worker_id = worker.id
         return res if res else []
     except Exception:
         return []
@@ -315,7 +318,18 @@ def secure_create_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    return core_create_staff(payload, current_user, db)
+    staff_user = core_create_staff(payload, current_user, db)
+    staff_user.worker_id = None
+    if staff_user.role == "Operator":
+        worker = (
+            db.query(Worker)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter((sql_func.lower(Worker.name) == staff_user.full_name.lower()) | (Worker.phone == staff_user.phone_number))
+            .first()
+        )
+        if worker:
+            staff_user.worker_id = worker.id
+    return staff_user
 
 
 @staff_v1_router.put("/{staff_id}/update", response_model=SecureStaffResponse)
@@ -325,7 +339,18 @@ def secure_update_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    return core_update_staff(staff_id, payload, current_user, db)
+    staff_user = core_update_staff(staff_id, payload, current_user, db)
+    staff_user.worker_id = None
+    if staff_user.role == "Operator":
+        worker = (
+            db.query(Worker)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter((sql_func.lower(Worker.name) == staff_user.full_name.lower()) | (Worker.phone == staff_user.phone_number))
+            .first()
+        )
+        if worker:
+            staff_user.worker_id = worker.id
+    return staff_user
 
 
 @staff_v1_router.delete("/{staff_id}/delete", status_code=status.HTTP_204_NO_CONTENT)
@@ -784,5 +809,58 @@ def delete_staff_opening_attendance(
     if oa is not None:
         db.delete(oa)
         db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# Explicit Workers Router (Principal Security Specs)
+# ---------------------------------------------------------------------------
+workers_router = APIRouter(prefix="/api/workers", tags=["workers"])
+
+@workers_router.delete("/{worker_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_worker(
+    worker_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    from models import Worker, User, DailyProduction, AttendanceLog, AdvancePayment, HisabSettlement, WorkerOpeningAttendance, AppUsageLog, TokenUsageLog
+    
+    # Enforce factory_id constraint rules
+    worker = (
+        db.query(Worker)
+        .filter(Worker.id == worker_id)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+        
+    # Programmatically delete opening attendance/hisab records first to cleanly bypass non-nullable FK errors
+    db.query(WorkerOpeningAttendance).filter(WorkerOpeningAttendance.worker_id == worker.id).delete()
+    db.query(HisabSettlement).filter(HisabSettlement.worker_id == worker.id).delete()
+    
+    # Programmatically nullify reference pointers in attendance, advance, and production logs to guarantee integrity
+    db.query(AttendanceLog).filter(AttendanceLog.worker_id == worker.id).update({AttendanceLog.worker_id: None})
+    db.query(AdvancePayment).filter(AdvancePayment.worker_id == worker.id).update({AdvancePayment.worker_id: None})
+    db.query(DailyProduction).filter(DailyProduction.worker_id == worker.id).update({DailyProduction.worker_id: None})
+    
+    # Also find corresponding User if they have the role "Operator"
+    staff_user = (
+        db.query(User)
+        .filter(User.factory_id == current_user.factory_id)
+        .filter(User.role == "Operator")
+        .filter((sql_func.lower(User.full_name) == worker.name.lower()) | (User.phone_number == worker.phone))
+        .first()
+    )
+    
+    # Delete the worker
+    db.delete(worker)
+    
+    if staff_user is not None:
+        # Nullify user references in logs to prevent foreign key constraint violations upon hard-delete
+        db.query(AppUsageLog).filter(AppUsageLog.user_id == staff_user.id).update({AppUsageLog.user_id: None})
+        db.query(TokenUsageLog).filter(TokenUsageLog.user_id == staff_user.id).update({TokenUsageLog.user_id: None})
+        db.delete(staff_user)
+        
+    db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
