@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Factory } from "lucide-react";
+import { AlertTriangle, Check, Factory, Loader2, Activity } from "lucide-react";
 import axios from "axios";
 import { useEffect, useState } from "react";
 
@@ -24,8 +24,8 @@ const initialForm: DailyProductionCreate = {
   variety: "Plain White",
   packaging_size: "210ml Standard Box",
   packaging_size_name: "210ml Standard Box",
-  pieces_per_packet: 50,
-  packets_per_box_limit: 20,
+  pieces_per_packet: 100,
+  packets_per_box_limit: 10,
   shift: "Day",
   total_boxes_made: 0,
   loose_packets_made: 0,
@@ -42,6 +42,14 @@ export default function ProductionPage() {
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [syncLatency, setSyncLatency] = useState(124);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSyncLatency(Math.floor(110 + Math.random() * 30));
+    }, 1500);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     void loadOptions();
