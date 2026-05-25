@@ -1,11 +1,11 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Boxes, CalendarDays, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench } from "lucide-react";
+import { AlertTriangle, Boxes, CalendarDays, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench, Trash2 } from "lucide-react";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
-import { getDashboardMachines, getDashboardWorkers, getInventory, getProductionAlerts } from "../lib/api";
+import { getDashboardMachines, getDashboardWorkers, getInventory, getProductionAlerts, deleteOnboardingEntry } from "../lib/api";
 import type { DashboardMachine, DashboardWorker, LiveStockRow, ProductionAlertsResponse } from "../lib/api";
 
 type StockStatus = "In Stock" | "Low Stock" | "Out of Stock";
@@ -22,6 +22,7 @@ type StockDisplayRow = {
   totalPieces: string;
   location: string;
   status: StockStatus;
+  source: LiveStockRow;
 };
 
 const todayFormatter = new Intl.DateTimeFormat("en-IN", {
@@ -84,6 +85,22 @@ export default function DashboardPage() {
       setError("Dashboard request failed. Please refresh once.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleDelete(row: StockDisplayRow) {
+    if (!window.confirm("Are you sure you want to remove this entry?")) {
+      return;
+    }
+    try {
+      const entryId = row.source.id;
+      const type = row.source.stock_type;
+      
+      await deleteOnboardingEntry(String(entryId), type);
+      await load();
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
+      alert(message);
     }
   }
 
@@ -151,7 +168,7 @@ export default function DashboardPage() {
           {stockRows.length === 0 ? (
             <EmptyState message="No inventory rows found yet. Add onboarding stock to see finished cups, bottom, blank, and packing material." />
           ) : (
-            stockRows.map((row) => <StockListRow key={row.key} row={row} />)
+            stockRows.map((row) => <StockListRow key={row.key} row={row} onDelete={handleDelete} />)
           )}
         </div>
       </section>
@@ -210,14 +227,15 @@ function buildDashboardStockRows(rows: LiveStockRow[]): StockDisplayRow[] {
         perBox: piecesPerBox > 0 ? `${formatNumber(piecesPerBox)} pcs` : perBoxFallback(row, type),
         totalPieces: piecesPerBox > 0 ? `${formatNumber(quantity * piecesPerBox)} pcs` : "-",
         location: type === "Carton Box" || type === "Polybag" ? "Store Room" : "Main Warehouse",
-        status
+        status,
+        source: row
       };
     });
 }
 
-function StockListRow({ row }: { row: StockDisplayRow }) {
+function StockListRow({ row, onDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void }) {
   return (
-    <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition hover:border-brand-200 hover:bg-brand-50/30 md:grid-cols-[minmax(180px,1.3fr)_repeat(5,minmax(110px,1fr))_auto] md:items-center">
+    <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition hover:border-brand-200 hover:bg-brand-50/30 md:grid-cols-[minmax(180px,1.3fr)_repeat(5,minmax(110px,1fr))_120px_auto] md:items-center">
       <div className="flex min-w-0 items-center gap-3">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-zinc-100 text-xl">{row.marker}</span>
         <div className="min-w-0">
@@ -233,6 +251,16 @@ function StockListRow({ row }: { row: StockDisplayRow }) {
       <div>
         <p className="mb-1 text-xs text-zinc-500 md:hidden">Status</p>
         <StatusBadge status={row.status} />
+      </div>
+      <div className="flex justify-end">
+        <button
+          className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 transition"
+          title="Delete item"
+          type="button"
+          onClick={() => onDelete(row)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );

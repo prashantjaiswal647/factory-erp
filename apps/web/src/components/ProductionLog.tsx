@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { api } from "../lib/api";
+import { api, deleteDailyProductionLog } from "../lib/api";
 import { formatCurrency, formatDate, formatNumber } from "../lib/format";
 import EmptyState from "./EmptyState";
 import LoadingState from "./LoadingState";
@@ -27,23 +28,35 @@ export default function ProductionLog() {
   const [error, setError] = useState<string | null>(null);
   const { refreshVersion } = useDataRefresh();
 
-  useEffect(() => {
-    async function loadProductionLog() {
-      setIsLoading(true);
-      setError(null);
+  async function loadProductionLog() {
+    setIsLoading(true);
+    setError(null);
 
-      try {
-        const response = await api.get<ProductionLogRow[]>("/report/production-log");
-        setRows(Array.isArray(response.data) ? response.data : []);
-      } catch {
-        setError("Unable to load production log.");
-      } finally {
-        setIsLoading(false);
-      }
+    try {
+      const response = await api.get<ProductionLogRow[]>("/report/production-log");
+      setRows(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      setError("Unable to load production log.");
+    } finally {
+      setIsLoading(false);
     }
+  }
 
+  useEffect(() => {
     void loadProductionLog();
   }, [refreshVersion]);
+
+  async function handleDelete(logId: number) {
+    if (!window.confirm("Are you sure you want to remove this entry?")) {
+      return;
+    }
+    try {
+      await deleteDailyProductionLog(logId);
+      await loadProductionLog();
+    } catch (caught) {
+      alert("Failed to delete production entry.");
+    }
+  }
 
   if (isLoading) {
     return <LoadingState label="Loading production records..." />;
@@ -72,6 +85,7 @@ export default function ProductionLog() {
             <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Bottom Waste</th>
             <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Waste %</th>
             <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Cost</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-zinc-500 w-[100px]">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100 bg-white">
@@ -98,6 +112,16 @@ export default function ProductionLog() {
               </td>
               <td className="whitespace-nowrap px-5 py-4 text-right text-sm tabular-nums text-zinc-700">
                 {formatCurrency(row.total_production_cost)}
+              </td>
+              <td className="whitespace-nowrap px-5 py-4 text-right text-sm">
+                <button
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 transition"
+                  title="Remove Production Log"
+                  type="button"
+                  onClick={() => handleDelete(row.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </td>
             </tr>
           ))}

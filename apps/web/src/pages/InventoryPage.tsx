@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getInventory } from "../lib/api";
+import { getInventory, deleteOnboardingEntry } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
 type InventoryFilter = "all" | "raw" | "wip" | "finished" | "packing" | "low";
@@ -65,6 +65,23 @@ export default function InventoryPage() {
     }
   }
 
+  async function handleDelete(row: InventoryDisplayRow) {
+    if (!window.confirm("Are you sure you want to remove this entry?")) {
+      return;
+    }
+    try {
+      const entryId = row.source.id;
+      const type = row.source.stock_type;
+      
+      await deleteOnboardingEntry(String(entryId), type);
+      await load();
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
+      alert(message);
+    }
+  }
+
+
   const categories = useMemo(() => buildInventoryCategories(rows, activeFilter), [rows, activeFilter]);
   const totalVariants = categories.reduce((sum, category) => sum + category.rows.length, 0);
   const lowStockCount = categories.flatMap((category) => category.rows).filter((row) => row.status !== "In Stock").length;
@@ -124,6 +141,7 @@ export default function InventoryPage() {
               category={category}
               isCollapsed={Boolean(collapsed[category.key])}
               onToggle={() => setCollapsed((current) => ({ ...current, [category.key]: !current[category.key] }))}
+              onDelete={handleDelete}
             />
           ))}
         </section>
@@ -137,7 +155,7 @@ export default function InventoryPage() {
   );
 }
 
-function CategoryCard({ category, isCollapsed, onToggle }: { category: InventoryCategory; isCollapsed: boolean; onToggle: () => void }) {
+function CategoryCard({ category, isCollapsed, onToggle, onDelete }: { category: InventoryCategory; isCollapsed: boolean; onToggle: () => void; onDelete: (row: InventoryDisplayRow) => void }) {
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
       <header className="flex items-center justify-between gap-3">
@@ -151,7 +169,7 @@ function CategoryCard({ category, isCollapsed, onToggle }: { category: Inventory
           <ChevronDown className={`h-4 w-4 transition ${isCollapsed ? "-rotate-90" : ""}`} />
         </button>
       </header>
-
+ 
       {isCollapsed ? null : category.rows.length === 0 ? (
         <div className="mt-4 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-500">No {category.title.toLowerCase()} rows found.</div>
       ) : (
@@ -182,13 +200,13 @@ function CategoryCard({ category, isCollapsed, onToggle }: { category: Inventory
                     <Td>{row.totalPieces}</Td>
                     <Td>{row.location}</Td>
                     <Td><StatusBadge status={row.status} /></Td>
-                    <Td><ActionButtons /></Td>
+                    <Td><ActionButtons row={row} onDelete={onDelete} /></Td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-
+ 
           <div className="grid gap-3 p-4 md:hidden">
             {category.rows.map((row) => (
               <div key={row.key} className="rounded-lg border border-zinc-200 p-4">
@@ -207,7 +225,7 @@ function CategoryCard({ category, isCollapsed, onToggle }: { category: Inventory
                   <MobileMetric label="Location" value={row.location} />
                 </div>
                 <div className="mt-4">
-                  <ActionButtons />
+                  <ActionButtons row={row} onDelete={onDelete} />
                 </div>
               </div>
             ))}
@@ -336,13 +354,18 @@ function locationFor(type: string) {
   return "Main Warehouse";
 }
 
-function ActionButtons() {
+function ActionButtons({ row, onDelete }: { row: InventoryDisplayRow; onDelete: (row: InventoryDisplayRow) => void }) {
   return (
     <div className="flex items-center gap-1.5">
       <Link className="grid h-8 w-8 place-items-center rounded-lg text-brand-700 hover:bg-brand-50" title="Edit item" to="/onboarding">
         <Edit3 className="h-4 w-4" />
       </Link>
-      <button className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60" title="Delete item" type="button" disabled>
+      <button
+        className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        title="Delete item"
+        type="button"
+        onClick={() => onDelete(row)}
+      >
         <Trash2 className="h-4 w-4" />
       </button>
     </div>
