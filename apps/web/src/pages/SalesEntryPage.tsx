@@ -95,15 +95,16 @@ export default function SalesEntryPage() {
 
   async function submit() {
     if (!selectedCustomer) return;
+    const billableItems = form.items.filter((item) => Number(item.boxes_sold || 0) > 0 || Number(item.loose_packets_sold || 0) > 0);
     if (hasInsufficientStock) {
       setToast("Insufficient Stock");
       return;
     }
-    if (!form.items.some((item) => Number(item.boxes_sold || 0) > 0 || Number(item.loose_packets_sold || 0) > 0)) {
-      setToast("At least one product quantity is required.");
+    if (billableItems.length === 0) {
+      setToast("Enter boxes quantity for at least one product.");
       return;
     }
-    if (form.items.some((item) => !item.product_id || !item.product_size_ml || !item.packaging_size_name.trim())) {
+    if (billableItems.some((item) => !item.product_id || !item.product_size_ml || !item.packaging_size_name.trim())) {
       setToast("Please select a valid product variation before saving.");
       return;
     }
@@ -117,7 +118,7 @@ export default function SalesEntryPage() {
         legal_invoice_number: form.legal_invoice_number?.trim() || null,
         rough_bill_enabled: Boolean(form.rough_bill_enabled),
         rough_bill_number: form.rough_bill_number?.trim() || null,
-        items: form.items.map((item) => normalizeItem({
+        items: billableItems.map((item) => normalizeItem({
           ...item,
           product_size_ml: Number(item.product_size_ml || 0),
           product_id: item.product_id || null,
