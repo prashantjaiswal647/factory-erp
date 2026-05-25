@@ -67,6 +67,53 @@ def resolve_factory_google_sheet_id(db: Session, factory_id: str) -> str | None:
     return sheet.google_sheet_id if sheet else None
 
 
+def build_order_invoice_payload(db: Session, factory_id: str, order: Order) -> dict:
+    line_items = [
+        {
+            "product_size_ml": item.product_size_ml,
+            "variety": (item.variety or "").strip(),
+            "packaging_size_name": (item.packaging_size_name or "").strip(),
+            "boxes_sold": item.boxes_sold or 0,
+            "loose_packets_sold": item.loose_packets_sold or 0,
+            "rate_per_box": effective_rate_per_box(item),
+            "rate_per_packet": to_money(item.rate_per_packet),
+            "line_total": to_money(item.final_rate),
+        }
+        for item in order.items
+    ]
+    return {
+        "event": "invoice.created",
+        "factory_id": factory_id,
+        "google_spreadsheet_id": resolve_factory_google_sheet_id(db, factory_id),
+        "target_sheet_name": f"Factory_{factory_id}_Sales",
+        "sync_type": "sales",
+        "action": "insert",
+        "document_policy": {
+            "legal_invoice_type": "bill_of_supply",
+            "legal_invoice_number": str(order.id),
+            "rough_bill_enabled": True,
+            "rough_bill_number": f"RB-{order.id}",
+            "rough_bill_label": "Customer Understanding Bill",
+            "rough_bill_disclaimer": "Internal customer understanding and rate settlement document. Not a government tax invoice.",
+        },
+        "invoice": {
+            "invoice_id": order.id,
+            "sale_ids": [order.id],
+            "invoice_date": order.order_date.date() if order.order_date else datetime.now(timezone.utc).date(),
+            "customer_id": order.customer_id,
+            "customer_name": order.customer.name if order.customer else "",
+            "customer_phone": customer_display_phone(order.customer) if order.customer else "",
+            "payment_method": order.payment_method,
+            "bill_total": to_money(order.total_amount),
+            "amount_paid": to_money(order.amount_paid),
+            "previous_due": Decimal("0.00"),
+            "customer_total_due": to_money(order.customer.total_due or order.customer.balance_amount or 0) if order.customer else Decimal("0.00"),
+            "status": order.status,
+        },
+        "items": line_items,
+    }
+
+
 def payment_status_for(total_amount: Decimal, amount_paid: Decimal) -> str:
     paid = to_money(amount_paid)
     total = to_money(total_amount)
@@ -1200,6 +1247,7 @@ def approve_sales_order(
         action="insert",
         data={"order_id": order_id, "status": order.status},
     )
+    background_tasks.add_task(push_invoice_to_n8n_bg, build_order_invoice_payload(db, str(current_user.factory_id), order))
 
     if order.customer is not None:
         message = build_confirmed_bill_message(order.customer.name, factory_display_name(current_user), to_money(order.total_amount))

@@ -741,6 +741,10 @@ export function createDailySale(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/invoice", payload);
 }
 
+export function createPendingSaleOrder(payload: DailySaleCreate) {
+  return api.post<DailySaleResponse>("/api/sales/order", payload);
+}
+
 export function createSalesCustomer(payload: CustomerCreate) {
   return api.post("/api/sales/customers", payload);
 }

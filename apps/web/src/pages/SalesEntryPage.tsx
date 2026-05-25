@@ -2,7 +2,8 @@ import { Check, Plus, ReceiptText, Search, Trash2 } from "lucide-react";
 import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { createDailySale, getInventory, searchCustomers } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { createDailySale, createPendingSaleOrder, getInventory, searchCustomers } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
 
 type SaleItem = DailySaleCreate["items"][number];
@@ -43,6 +44,7 @@ export default function SalesEntryPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSearchResult | null>(null);
   const [inventoryRows, setInventoryRows] = useState<LiveStockRow[]>([]);
   const { triggerDataRefresh } = useDataRefresh();
+  const { user } = useAuth();
   const customerSearchRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<DailySaleCreate>({
     date: new Date().toISOString().slice(0, 10),
@@ -128,8 +130,13 @@ export default function SalesEntryPage() {
           variety: item.variety.trim() || "Plain White"
         }))
       };
-      await createDailySale(payload);
-      setToast("Order sent to Owner for approval.");
+      if (user?.role === "Owner") {
+        await createDailySale(payload);
+        setToast("Invoice generated and sent to automation.");
+      } else {
+        await createPendingSaleOrder(payload);
+        setToast("Order sent to Owner for approval.");
+      }
       triggerDataRefresh();
       setSelectedCustomer(null);
       setCustomerQuery("");

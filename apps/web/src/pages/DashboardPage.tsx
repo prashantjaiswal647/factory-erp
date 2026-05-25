@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
-import { getDashboardMachines, getDashboardWorkers, getInventory, getProductionAlerts, deleteOnboardingEntry } from "../lib/api";
-import type { DashboardMachine, DashboardWorker, LiveStockRow, ProductionAlertsResponse } from "../lib/api";
+import { approveSalesOrder, getDashboardMachines, getDashboardWorkers, getInventory, getPendingSales, getProductionAlerts, deleteOnboardingEntry, rejectSalesOrder } from "../lib/api";
+import type { DashboardMachine, DashboardWorker, LiveStockRow, PendingSale, ProductionAlertsResponse } from "../lib/api";
 
 type StockStatus = "In Stock" | "Low Stock" | "Out of Stock";
 
@@ -36,7 +36,10 @@ export default function DashboardPage() {
   const [workers, setWorkers] = useState<DashboardWorker[]>([]);
   const [machines, setMachines] = useState<DashboardMachine[]>([]);
   const [inventory, setInventory] = useState<LiveStockRow[]>([]);
+  const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
   const [productionAlerts, setProductionAlerts] = useState<ProductionAlertsResponse | null>(null);
+  const [approvalMessage, setApprovalMessage] = useState("");
+  const [processingOrderId, setProcessingOrderId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const { user } = useAuth();
@@ -71,6 +74,24 @@ export default function DashboardPage() {
       if (inventoryRes.status === "fulfilled") setInventory(Array.isArray(inventoryRes.value.data) ? inventoryRes.value.data : []);
       if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
 
+      if (user?.role === "Owner") {
+        try {
+          const pendingResponse = await getPendingSales();
+          setPendingSales(Array.isArray(pendingResponse.data) ? pendingResponse.data : []);
+        } catch (caught) {
+          if (axios.isAxiosError(caught) && caught.response?.status === 401) {
+            localStorage.clear();
+            setError("Session expired. Please log in again.");
+            navigate("/login", { replace: true });
+            return;
+          }
+          setPendingSales([]);
+          setApprovalMessage("Pending sales approvals could not be refreshed.");
+        }
+      } else {
+        setPendingSales([]);
+      }
+
       if (rejected?.status === "rejected") {
         const detail = axios.isAxiosError(rejected.reason) ? rejected.reason.response?.data?.detail : null;
         setError(`Some dashboard data could not be refreshed: ${typeof detail === "string" ? detail : "showing available data."}`);
@@ -101,6 +122,21 @@ export default function DashboardPage() {
     } catch (caught) {
       const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
       alert(message);
+    }
+  }
+
+  async function handleSaleApproval(orderId: number, action: "approve" | "reject") {
+    setProcessingOrderId(orderId);
+    setApprovalMessage("");
+    try {
+      const response = action === "approve" ? await approveSalesOrder(orderId) : await rejectSalesOrder(orderId);
+      setApprovalMessage(response.data.message || `Order ${action === "approve" ? "approved" : "rejected"}.`);
+      await load();
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Approval action failed";
+      setApprovalMessage(String(message));
+    } finally {
+      setProcessingOrderId(null);
     }
   }
 
@@ -152,6 +188,15 @@ export default function DashboardPage() {
         <MetricCard icon={PackageCheck} tone="rose" label="Production Today" value={productionToday} helper="Finished goods" />
         <MetricCard icon={AlertTriangle} tone={lowStockCount > 0 ? "amber" : "green"} label="Low Stock Alerts" value={lowStockCount} helper={lowStockCount > 0 ? "Needs review" : "All clear"} />
       </section>
+
+      {user?.role === "Owner" ? (
+        <PendingSalesApprovalSection
+          message={approvalMessage}
+          pendingSales={pendingSales}
+          processingOrderId={processingOrderId}
+          onAction={handleSaleApproval}
+        />
+      ) : null}
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -231,6 +276,66 @@ function buildDashboardStockRows(rows: LiveStockRow[]): StockDisplayRow[] {
         source: row
       };
     });
+}
+
+function PendingSalesApprovalSection({ message, pendingSales, processingOrderId, onAction }: { message: string; pendingSales: PendingSale[]; processingOrderId: number | null; onAction: (orderId: number, action: "approve" | "reject") => void }) {
+  return (
+    <section className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-950">Sales Approval Desk</h2>
+          <p className="mt-1 text-sm text-zinc-500">Bills created by Sub-Owner or Supervisor appear here. Owner approval is required before final invoice automation runs.</p>
+        </div>
+        <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-800">
+          {pendingSales.length} pending
+        </span>
+      </div>
+      {message ? <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm font-semibold text-zinc-700">{message}</div> : null}
+      {pendingSales.length === 0 ? (
+        <EmptyState message="No sales are waiting for approval." />
+      ) : (
+        <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-100">
+          <table className="min-w-full divide-y divide-zinc-100 text-sm">
+            <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
+              <tr>
+                {["Order", "Customer", "Date", "Items", "Amount", "Actions"].map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {pendingSales.map((sale) => (
+                <tr key={sale.order_id} className="align-top hover:bg-zinc-50">
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">#{sale.order_id}</td>
+                  <td className="px-4 py-3">
+                    <p className="font-semibold text-zinc-900">{sale.customer_name || "-"}</p>
+                    <p className="text-xs text-zinc-500">{sale.customer_phone || "-"}</p>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{formatDate(sale.order_date)}</td>
+                  <td className="px-4 py-3 text-zinc-700">
+                    {sale.items.map((item, index) => (
+                      <p key={`${sale.order_id}-${index}`} className="whitespace-nowrap">
+                        {item.product_size_ml || "-"}ml {item.variety || ""} - {item.boxes_sold} boxes
+                      </p>
+                    ))}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">Rs {Number(sale.total_amount || 0).toLocaleString("en-IN")}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-zinc-300" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "approve")}>
+                        {processingOrderId === sale.order_id ? "Working..." : "Approve & Generate"}
+                      </button>
+                      <button className="rounded-md border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:bg-zinc-100" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "reject")}>
+                        Reject
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function StockListRow({ row, onDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void }) {
@@ -411,6 +516,13 @@ function StatusBadge({ status }: { status: StockStatus }) {
 
 function formatNumber(value: number) {
   return Number(value || 0).toLocaleString("en-IN");
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
 function unitLabel(unit: string) {
