@@ -392,7 +392,32 @@ export type DailySaleResponse = {
   bill_total: string;
   amount_paid: string;
   customer_total_due: string;
+  invoice_document_id?: number | null;
   status?: string;
+};
+
+export type InvoiceDocumentSummary = {
+  id: number;
+  invoice_number: string;
+  invoice_date: string;
+  customer_id?: number | null;
+  customer_name: string;
+  customer_phone?: string | null;
+  payment_method: string;
+  bill_total: string;
+  amount_paid: string;
+  customer_total_due: string;
+  status: string;
+  pdf_generated_count: number;
+  created_at: string;
+};
+
+export type InvoiceDashboardResponse = {
+  total_invoices: number;
+  total_billed: string;
+  total_paid: string;
+  total_due: string;
+  invoices: InvoiceDocumentSummary[];
 };
 
 export type FinalStockOption = {
@@ -739,6 +764,14 @@ export function getAiDashboardInsights() {
 
 export function createDailySale(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/invoice", payload);
+}
+
+export function getInvoiceDocuments() {
+  return api.get<InvoiceDashboardResponse>("/api/sales/invoices");
+}
+
+export function downloadInvoicePdf(invoiceId: number) {
+  return api.get<Blob>(`/api/sales/invoices/${invoiceId}/pdf`, { responseType: "blob" });
 }
 
 export function createPendingSaleOrder(payload: DailySaleCreate) {

@@ -6,6 +6,7 @@ import os
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -17,10 +18,10 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, Order, OrderItem, Payment, User
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
-from services.n8n_invoice import push_invoice_to_n8n_bg
+from services.invoice_pdf import build_invoice_pdf_bytes
 from services.n8n_sync import sync_data_to_n8n_bg
 
 
@@ -38,6 +39,20 @@ def factory_id_text(factory_id) -> str:
 
 def factory_id_filter(column, factory_id):
     return cast(column, String) == factory_id_text(factory_id)
+
+
+def json_safe(value):
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
 
 
 def require_sold_quantity(boxes_sold: int, loose_packets_sold: int) -> None:
@@ -267,6 +282,30 @@ class SalesOrderActionResponse(BaseModel):
     status: str
 
 
+class InvoiceDocumentSummary(BaseModel):
+    id: int
+    invoice_number: str
+    invoice_date: str
+    customer_id: int | None = None
+    customer_name: str
+    customer_phone: str | None = None
+    payment_method: str
+    bill_total: Decimal
+    amount_paid: Decimal
+    customer_total_due: Decimal
+    status: str
+    pdf_generated_count: int
+    created_at: str
+
+
+class InvoiceDashboardResponse(BaseModel):
+    total_invoices: int
+    total_billed: Decimal
+    total_paid: Decimal
+    total_due: Decimal
+    invoices: list[InvoiceDocumentSummary]
+
+
 def build_invoice_details(payload: DailySaleCreate) -> str:
     details = []
     for item in payload.items:
@@ -407,6 +446,38 @@ def resolve_user_email(user: User | None) -> str | None:
     if is_email_address(user.username):
         return user.username.strip()
     return None
+
+
+def create_invoice_document(
+    *,
+    db: Session,
+    factory_id: str,
+    current_user: User,
+    customer: Customer | None,
+    invoice_payload: dict,
+    order_id: int | None = None,
+) -> InvoiceDocument:
+    invoice = invoice_payload.get("invoice", {})
+    invoice_number = str(invoice.get("invoice_id") or invoice_payload.get("invoice_number") or datetime.now(timezone.utc).timestamp())
+    document = InvoiceDocument(
+        factory_id=factory_id,
+        customer_id=customer.id if customer is not None else invoice.get("customer_id"),
+        order_id=order_id,
+        invoice_number=invoice_number,
+        invoice_date=invoice.get("invoice_date") or datetime.now(timezone.utc).date(),
+        customer_name=invoice.get("customer_name") or (customer.name if customer is not None else ""),
+        customer_phone=invoice.get("customer_phone") or (customer_display_phone(customer) if customer is not None else ""),
+        payment_method=invoice.get("payment_method") or "Cash",
+        bill_total=to_money(invoice.get("bill_total")),
+        amount_paid=to_money(invoice.get("amount_paid")),
+        customer_total_due=to_money(invoice.get("customer_total_due")),
+        status=invoice.get("status") or "created",
+        payload_json=json_safe(invoice_payload),
+        created_by_user_id=current_user.id,
+    )
+    db.add(document)
+    db.flush()
+    return document
 
 
 def should_alert_owner_for_sale(role: str | None) -> bool:
@@ -727,6 +798,15 @@ def add_sale_invoice(
             "items": line_items,
         }
 
+        invoice_document = create_invoice_document(
+            db=db,
+            factory_id=factory_id,
+            current_user=current_user,
+            customer=customer,
+            invoice_payload=invoice_payload,
+        )
+        db.commit()
+
         background_tasks.add_task(
             sync_data_to_n8n_bg,
             factory_id=str(factory_id),
@@ -734,8 +814,6 @@ def add_sale_invoice(
             action="insert",
             data=payload,
         )
-
-        background_tasks.add_task(push_invoice_to_n8n_bg, invoice_payload)
 
         background_tasks.add_task(
             send_n8n_whatsapp_event,
@@ -755,6 +833,7 @@ def add_sale_invoice(
             bill_total=current_bill_amount,
             amount_paid=to_money(payload.amount_paid),
             customer_total_due=customer_due_after_payment,
+            invoice_document_id=invoice_document.id,
         )
     except HTTPException:
         db.rollback()
@@ -1093,6 +1172,84 @@ async def send_bill_notification(
     )
 
 
+@router.get("/invoices", response_model=InvoiceDashboardResponse)
+def list_invoice_documents(
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = factory_id_text(current_user.factory_id)
+    invoices = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .order_by(InvoiceDocument.invoice_date.desc(), InvoiceDocument.id.desc())
+        .limit(100)
+        .all()
+    )
+    totals = (
+        db.query(
+            sql_func.count(InvoiceDocument.id),
+            sql_func.coalesce(sql_func.sum(InvoiceDocument.bill_total), 0),
+            sql_func.coalesce(sql_func.sum(InvoiceDocument.amount_paid), 0),
+            sql_func.coalesce(sql_func.sum(InvoiceDocument.customer_total_due), 0),
+        )
+        .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .one()
+    )
+    return InvoiceDashboardResponse(
+        total_invoices=int(totals[0] or 0),
+        total_billed=to_money(totals[1]),
+        total_paid=to_money(totals[2]),
+        total_due=to_money(totals[3]),
+        invoices=[
+            InvoiceDocumentSummary(
+                id=invoice.id,
+                invoice_number=invoice.invoice_number,
+                invoice_date=invoice.invoice_date.isoformat(),
+                customer_id=invoice.customer_id,
+                customer_name=invoice.customer_name,
+                customer_phone=invoice.customer_phone,
+                payment_method=invoice.payment_method,
+                bill_total=to_money(invoice.bill_total),
+                amount_paid=to_money(invoice.amount_paid),
+                customer_total_due=to_money(invoice.customer_total_due),
+                status=invoice.status,
+                pdf_generated_count=invoice.pdf_generated_count,
+                created_at=invoice.created_at.isoformat() if invoice.created_at else "",
+            )
+            for invoice in invoices
+        ],
+    )
+
+
+@router.get("/invoices/{invoice_document_id}/pdf")
+def download_invoice_pdf(
+    invoice_document_id: int,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = factory_id_text(current_user.factory_id)
+    invoice = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .filter(InvoiceDocument.id == invoice_document_id)
+        .first()
+    )
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    pdf_bytes = build_invoice_pdf_bytes(invoice.payload_json or {})
+    invoice.pdf_generated_count = (invoice.pdf_generated_count or 0) + 1
+    invoice.last_pdf_generated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    filename = f"invoice_{factory_id}_{invoice.invoice_number}.pdf".replace("/", "_").replace("\\", "_")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/pending", response_model=list[PendingSaleResponse])
 def list_pending_sales(
     current_user: User = Depends(check_permissions(["Owner"])),
@@ -1247,7 +1404,16 @@ def approve_sales_order(
         action="insert",
         data={"order_id": order_id, "status": order.status},
     )
-    background_tasks.add_task(push_invoice_to_n8n_bg, build_order_invoice_payload(db, str(current_user.factory_id), order))
+    invoice_payload = build_order_invoice_payload(db, str(current_user.factory_id), order)
+    create_invoice_document(
+        db=db,
+        factory_id=str(current_user.factory_id),
+        current_user=current_user,
+        customer=order.customer,
+        invoice_payload=invoice_payload,
+        order_id=order.id,
+    )
+    db.commit()
 
     if order.customer is not None:
         message = build_confirmed_bill_message(order.customer.name, factory_display_name(current_user), to_money(order.total_amount))

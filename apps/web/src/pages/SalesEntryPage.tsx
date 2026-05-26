@@ -1,5 +1,6 @@
 import { Check, Plus, ReceiptText, Search, Trash2 } from "lucide-react";
 import { RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { useAuth } from "../context/AuthContext";
@@ -38,6 +39,7 @@ function apiErrorMessage(error: unknown) {
 
 export default function SalesEntryPage() {
   const [toast, setToast] = useState("");
+  const [lastInvoiceId, setLastInvoiceId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSearchResult[]>([]);
@@ -132,10 +134,12 @@ export default function SalesEntryPage() {
         }))
       };
       if (user?.role === "Owner") {
-        await createDailySale(payload);
-        setToast("Invoice generated and sent to automation.");
+        const response = await createDailySale(payload);
+        setLastInvoiceId(response.data.invoice_document_id || null);
+        setToast("Invoice saved. PDF can be downloaded from Invoices.");
       } else {
         await createPendingSaleOrder(payload);
+        setLastInvoiceId(null);
         setToast("Order sent to Owner for approval.");
       }
       triggerDataRefresh();
@@ -170,6 +174,11 @@ export default function SalesEntryPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-5">
       {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
+      {lastInvoiceId ? (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
+          Invoice saved. <Link className="underline" to="/invoices">Open Invoices to download PDF</Link>.
+        </div>
+      ) : null}
       <header>
         <h1 className="text-2xl font-semibold text-zinc-950">Sales Entry</h1>
         <p className="mt-1 text-sm text-zinc-500">Search customer, select stock by size and variety, and generate invoice.</p>

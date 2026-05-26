@@ -12,6 +12,7 @@ import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import FactoryExpensesPage from "./pages/FactoryExpensesPage";
 import FactorySheetViewer from "./pages/FactorySheetViewer";
+import InvoicesPage from "./pages/InvoicesPage";
 import InventoryPage from "./pages/InventoryPage";
 import Integrations from "./pages/Integrations";
 import LandingPage from "./pages/LandingPage";
@@ -132,6 +133,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
               <SalesEntryPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="invoices"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
+              <InvoicesPage />
             </PrivateRoute>
           }
         />

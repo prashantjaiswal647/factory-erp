@@ -63,6 +63,7 @@ from models import (
     Worker,
     HisabSettlement,
     AppUsageLog,
+    InvoiceDocument,
     TokenUsageLog,
 )
 from routers.onboarding import router as onboarding_router
@@ -696,6 +697,10 @@ def ensure_runtime_schema():
         "CREATE TABLE IF NOT EXISTS factory_automation_sheets (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, sheet_name VARCHAR(255) NOT NULL, sheet_type VARCHAR(50) NOT NULL DEFAULT 'cron_automation', google_sheet_url VARCHAR(500), google_sheet_id VARCHAR(255) NOT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
         "CREATE INDEX IF NOT EXISTS idx_factory_automation_sheets_factory_id ON factory_automation_sheets(factory_id)",
         "CREATE INDEX IF NOT EXISTS idx_factory_automation_sheets_sheet_type ON factory_automation_sheets(sheet_type)",
+        "CREATE TABLE IF NOT EXISTS invoice_documents (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id), customer_id INTEGER NULL REFERENCES customers(id), order_id INTEGER NULL REFERENCES orders(id), invoice_number VARCHAR(100) NOT NULL, invoice_date DATE NOT NULL, customer_name VARCHAR(255) NOT NULL, customer_phone VARCHAR(50), payment_method VARCHAR(50) NOT NULL DEFAULT 'Cash', bill_total NUMERIC(14,2) NOT NULL DEFAULT 0, amount_paid NUMERIC(14,2) NOT NULL DEFAULT 0, customer_total_due NUMERIC(14,2) NOT NULL DEFAULT 0, status VARCHAR(50) NOT NULL DEFAULT 'created', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, pdf_generated_count INTEGER NOT NULL DEFAULT 0, last_pdf_generated_at TIMESTAMP WITH TIME ZONE NULL, created_by_user_id INTEGER NULL REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT uq_invoice_documents_factory_invoice_number UNIQUE (factory_id, invoice_number), CONSTRAINT ck_invoice_documents_bill_total_non_negative CHECK (bill_total >= 0), CONSTRAINT ck_invoice_documents_amount_paid_non_negative CHECK (amount_paid >= 0), CONSTRAINT ck_invoice_documents_due_non_negative CHECK (customer_total_due >= 0), CONSTRAINT ck_invoice_documents_pdf_count_non_negative CHECK (pdf_generated_count >= 0))",
+        "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_created ON invoice_documents(factory_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_date ON invoice_documents(factory_id, invoice_date DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_invoice_documents_customer_id ON invoice_documents(customer_id)",
         "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
         "ALTER TABLE attendance_logs DROP CONSTRAINT IF EXISTS ck_attendance_logs_duty_hours_positive",
         "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_duty_hours_positive CHECK (duty_hours > 0)"

@@ -960,6 +960,46 @@ class SalesInvoice(TenantMixin, Base):
     )
 
 
+class InvoiceDocument(TenantMixin, Base):
+    __tablename__ = "invoice_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, index=True)
+    invoice_number = Column(String(100), nullable=False, index=True)
+    invoice_date = Column(Date, nullable=False, index=True)
+    customer_name = Column(String(255), nullable=False, index=True)
+    customer_phone = Column(String(50), nullable=True, index=True)
+    payment_method = Column(String(50), nullable=False, default="Cash", server_default="Cash")
+    bill_total = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    customer_total_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    status = Column(String(50), nullable=False, default="created", server_default="created", index=True)
+    payload_json = Column(
+        MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    pdf_generated_count = Column(Integer, nullable=False, default=0, server_default="0")
+    last_pdf_generated_at = Column(DateTime(timezone=True), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    customer = relationship("Customer")
+    order = relationship("Order")
+    created_by = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "invoice_number", name="uq_invoice_documents_factory_invoice_number"),
+        CheckConstraint("bill_total >= 0", name="ck_invoice_documents_bill_total_non_negative"),
+        CheckConstraint("amount_paid >= 0", name="ck_invoice_documents_amount_paid_non_negative"),
+        CheckConstraint("customer_total_due >= 0", name="ck_invoice_documents_due_non_negative"),
+        CheckConstraint("pdf_generated_count >= 0", name="ck_invoice_documents_pdf_count_non_negative"),
+    )
+
+
 class BlankStock(TenantMixin, Base):
     __tablename__ = "blank_stock"
 

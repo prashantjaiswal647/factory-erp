@@ -614,6 +614,7 @@ class DailySaleResponse(BaseModel):
     bill_total: Decimal
     amount_paid: Decimal
     customer_total_due: Decimal
+    invoice_document_id: Optional[int] = None
 
 
 class UserSubscriptionResponse(BaseModel):
