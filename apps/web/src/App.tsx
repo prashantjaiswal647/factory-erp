@@ -41,6 +41,9 @@ import {
   SuperAdminUsagePage,
 } from "./pages/SuperAdminPages";
 import UnauthorizedPage from "./pages/UnauthorizedPage";
+import PrivacyPolicy from "./components/PrivacyPolicy";
+import TermsConditions from "./components/TermsConditions";
+import RefundPolicy from "./components/RefundPolicy";
 
 function RoleLanding() {
   const { user } = useAuth();
@@ -57,6 +60,9 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="login" element={<LoginPage />} />
+      <Route path="privacy-policy" element={<PrivacyPolicy />} />
+      <Route path="terms-conditions" element={<TermsConditions />} />
+      <Route path="refund-policy" element={<RefundPolicy />} />
       <Route path="unauthorized" element={<UnauthorizedPage />} />
       <Route path="store/:storeToken" element={<StorefrontPage />} />
       <Route path="store/:storeToken/success" element={<StorefrontSuccessPage />} />

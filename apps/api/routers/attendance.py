@@ -60,6 +60,7 @@ class AttendanceSummaryRow(BaseModel):
     worker_name: str
     phone: Optional[str] = None
     daily_wage_rate: Decimal
+    previous_attendance: int = 0
     duty_days: Decimal
     uncleared_advance: Decimal
     net_current_balance: Decimal
@@ -207,6 +208,7 @@ def attendance_summary(
                 worker_name=worker.name,
                 phone=worker.phone,
                 daily_wage_rate=worker_rate(worker),
+                previous_attendance=int(opening_att.present_days or 0) if opening_att else 0,
                 duty_days=duty_days,
                 uncleared_advance=advance_total,
                 net_current_balance=money(duty_amount - advance_total),

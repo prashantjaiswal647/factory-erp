@@ -73,6 +73,7 @@ const positioningCards = [
 
 export default function LandingPage() {
   const [open, setOpen] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
 
   return (
     <main className="min-h-screen bg-[#FFF7ED] text-[#111827]">
@@ -94,9 +95,32 @@ export default function LandingPage() {
                 {item.label}
               </a>
             ))}
-            <button className="inline-flex items-center gap-1 transition hover:text-[#6D28D9]" type="button">
-              Resources <ChevronDown className="h-3.5 w-3.5" />
-            </button>
+            <div className="relative">
+              <button 
+                className="inline-flex items-center gap-1 transition hover:text-[#6D28D9] focus:outline-none" 
+                type="button"
+                onClick={() => setResourcesOpen((prev) => !prev)}
+                onBlur={() => setTimeout(() => setResourcesOpen(false), 200)}
+              >
+                Resources <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {resourcesOpen && (
+                <div className="absolute right-0 mt-3 w-56 origin-top-right rounded-xl border border-[#F5E6D3] bg-white p-2 shadow-xl ring-1 ring-black/5 animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-[#4C1D95] px-3 py-2 border-b border-[#FFF7ED] mb-1">
+                    Legal &amp; Compliance
+                  </div>
+                  <Link to="/privacy-policy" className="flex items-center rounded-lg px-3 py-2 text-sm text-[#4B5563] hover:bg-[#F3E8FF] hover:text-[#6D28D9] transition-all">
+                    Privacy Policy
+                  </Link>
+                  <Link to="/terms-conditions" className="flex items-center rounded-lg px-3 py-2 text-sm text-[#4B5563] hover:bg-[#F3E8FF] hover:text-[#6D28D9] transition-all">
+                    Terms &amp; Conditions
+                  </Link>
+                  <Link to="/refund-policy" className="flex items-center rounded-lg px-3 py-2 text-sm text-[#4B5563] hover:bg-[#F3E8FF] hover:text-[#6D28D9] transition-all">
+                    Refund &amp; Cancellation
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="hidden items-center gap-5 md:flex">
@@ -121,6 +145,14 @@ export default function LandingPage() {
                   {item.label}
                 </a>
               ))}
+              <div className="border-t border-[#FFF7ED] my-2 pt-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-[#4C1D95] mb-2 px-1">Legal</p>
+                <div className="grid gap-2 pl-2">
+                  <Link to="/privacy-policy" className="text-[#4B5563] hover:text-[#6D28D9]" onClick={() => setOpen(false)}>Privacy Policy</Link>
+                  <Link to="/terms-conditions" className="text-[#4B5563] hover:text-[#6D28D9]" onClick={() => setOpen(false)}>Terms &amp; Conditions</Link>
+                  <Link to="/refund-policy" className="text-[#4B5563] hover:text-[#6D28D9]" onClick={() => setOpen(false)}>Refund Policy</Link>
+                </div>
+              </div>
               <Link className="rounded-lg border border-[#E5E7EB] px-4 py-2 text-center" to="/login">Login</Link>
               <Link className="rounded-lg bg-[#6D28D9] px-4 py-2 text-center text-white" to="/login">Book a Demo</Link>
             </div>
@@ -257,7 +289,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="testimonials" className="bg-white">
+      <section id="testimonials" className="bg-white border-b border-[#E5E7EB]">
         <div className="mx-auto max-w-7xl px-4 py-16 lg:px-8">
           <div className="rounded-3xl border border-[#E5E7EB] bg-[#FFF7ED] p-8 shadow-sm">
             <p className="text-center text-xl font-black text-[#111827] md:text-2xl">
@@ -268,6 +300,48 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Premium Footer with Compliance Links */}
+      <footer className="bg-white py-12 px-4 sm:px-6 lg:px-8 border-t border-[#E5E7EB]">
+        <div className="mx-auto max-w-7xl grid grid-cols-1 md:grid-cols-4 gap-8">
+          <div className="md:col-span-2">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="grid h-10 w-10 place-items-center rounded-full border border-[#E5E7EB] bg-[#FFF7ED] text-[#4C1D95]">
+                <span className="text-lg font-black">म</span>
+              </div>
+              <div>
+                <p className="text-xl font-black tracking-tight">MUNSHI <span className="text-[#6D28D9]">AI</span></p>
+                <p className="text-xs text-[#4B5563]">Operated under parent firm Cosmic Yog</p>
+              </div>
+            </div>
+            <p className="text-sm text-[#4B5563] max-w-sm">
+              AI-Powered Factory ERP designed specifically for machinery manufacturing plants. Programmatically secure, isolated, and legally compliant.
+            </p>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-black uppercase tracking-wider text-[#4C1D95] mb-4">Product</h4>
+            <ul className="space-y-2 text-sm">
+              <li><a href="#features" className="text-[#4B5563] hover:text-[#6D28D9] transition">Features</a></li>
+              <li><a href="#industries" className="text-[#4B5563] hover:text-[#6D28D9] transition">Industries</a></li>
+              <li><a href="#pricing" className="text-[#4B5563] hover:text-[#6D28D9] transition">Pricing Plans</a></li>
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-black uppercase tracking-wider text-[#4C1D95] mb-4">Legal &amp; Compliance</h4>
+            <ul className="space-y-2 text-sm">
+              <li><Link to="/privacy-policy" className="text-[#4B5563] hover:text-[#6D28D9] transition">Privacy Policy</Link></li>
+              <li><Link to="/terms-conditions" className="text-[#4B5563] hover:text-[#6D28D9] transition">Terms &amp; Conditions</Link></li>
+              <li><Link to="/refund-policy" className="text-[#4B5563] hover:text-[#6D28D9] transition">Refund Policy</Link></li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="mx-auto max-w-7xl mt-12 pt-8 border-t border-[#E5E7EB] flex flex-col sm:flex-row items-center justify-between text-xs text-[#4B5563] gap-4">
+          <p>© {new Date().getFullYear()} Cosmic Yog. All rights reserved.</p>
+          <p>Powered by OpenClaw &amp; n8n automation channels.</p>
+        </div>
+      </footer>
     </main>
   );
 }

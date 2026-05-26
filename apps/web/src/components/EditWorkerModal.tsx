@@ -13,6 +13,8 @@ type EditableWorker = {
   daily_wage_rate?: string | number | null;
   daily_wages?: string | number | null;
   duty_hours?: string | number | null;
+  previous_attendance?: string | number | null;
+  opening_attendance?: { present_days?: string | number | null } | null;
   shift_timing?: string | null;
   shift_type?: string | null;
 };
@@ -38,6 +40,7 @@ export function EditWorkerModal({
   const [phone, setPhone] = useState(worker.phone ?? "");
   const [dailyWageRate, setDailyWageRate] = useState(String(worker.daily_wage_rate ?? worker.daily_wages ?? ""));
   const [dutyHours, setDutyHours] = useState(String(worker.duty_hours ?? ""));
+  const [previousAttendance, setPreviousAttendance] = useState(String(worker.previous_attendance ?? worker.opening_attendance?.present_days ?? ""));
   const [shiftType, setShiftType] = useState(worker.shift_type ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -47,6 +50,7 @@ export function EditWorkerModal({
     setPhone(worker.phone ?? "");
     setDailyWageRate(String(worker.daily_wage_rate ?? worker.daily_wages ?? ""));
     setDutyHours(String(worker.duty_hours ?? ""));
+    setPreviousAttendance(String(worker.previous_attendance ?? worker.opening_attendance?.present_days ?? ""));
     setShiftType(worker.shift_type ?? "");
     setError("");
   }, [worker]);
@@ -63,6 +67,7 @@ export function EditWorkerModal({
         daily_wage_rate: Number(dailyWageRate || 0),
         daily_wages: Number(dailyWageRate || 0),
         duty_hours: dutyHours ? Number(dutyHours) : undefined,
+        previous_attendance: Number(previousAttendance || 0),
         shift_type: shiftType.trim() || null
       });
       await onSaved(response.data);
@@ -87,6 +92,7 @@ export function EditWorkerModal({
           <Field label="Phone Number" value={phone} onChange={setPhone} />
           <Field label="Daily Wage" value={dailyWageRate} onChange={setDailyWageRate} type="number" />
           <Field label="Duty Hours" value={dutyHours} onChange={setDutyHours} type="number" />
+          <Field label="Previous Attendance" value={previousAttendance} onChange={setPreviousAttendance} type="number" />
           <Field label="Shift Type" value={shiftType} onChange={setShiftType} />
         </div>
         {error ? <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p> : null}

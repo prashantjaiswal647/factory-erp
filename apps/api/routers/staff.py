@@ -1,7 +1,7 @@
 import re
 import random
 from typing import Literal, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status, BackgroundTasks
@@ -108,6 +108,7 @@ class WorkerUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     phone_number: Optional[str] = Field(default=None, max_length=50)
     phone: Optional[str] = Field(default=None, max_length=50)
+    previous_attendance: Optional[int] = Field(default=None, ge=0)
     daily_wage_rate: Optional[float] = Field(default=None, ge=0)
     daily_wages: Optional[float] = Field(default=None, ge=0)
     duty_hours: Optional[float] = Field(default=None, gt=0)
@@ -124,6 +125,7 @@ class WorkerProfileResponse(BaseModel):
     daily_wage_rate: float | None = None
     daily_wages: float | None = None
     duty_hours: float | None = None
+    previous_attendance: int = 0
     shift_timing: str | None = None
     shift_type: str | None = None
     is_active: bool
@@ -895,9 +897,33 @@ def update_worker_profile(
         if field in updates:
             setattr(worker, field, updates[field])
 
+    previous_attendance = updates.pop("previous_attendance", None)
+    opening_attendance = (
+        db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+        .filter(WorkerOpeningAttendance.worker_id == worker.id)
+        .with_for_update()
+        .first()
+    )
+    if previous_attendance is not None:
+        if opening_attendance is None and previous_attendance > 0:
+            today = date.today()
+            opening_attendance = WorkerOpeningAttendance(
+                factory_id=current_user.factory_id,
+                worker_id=worker.id,
+                period_start=today,
+                period_end=today,
+                present_days=previous_attendance,
+                created_by_user_id=current_user.id,
+            )
+            db.add(opening_attendance)
+        elif opening_attendance is not None:
+            opening_attendance.present_days = previous_attendance
+
     try:
         db.commit()
         db.refresh(worker)
+        worker.previous_attendance = int(opening_attendance.present_days or 0) if opening_attendance else 0
         return worker
     except IntegrityError as exc:
         db.rollback()

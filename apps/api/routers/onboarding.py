@@ -70,6 +70,7 @@ class OnboardingWorkerSummary(BaseModel):
     name: str
     daily_wages: Decimal
     duty_hours: float
+    previous_attendance: int = 0
 
 
 class OnboardingMachineSummary(BaseModel):
@@ -385,13 +386,23 @@ def list_onboarding_workers(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    return (
+    workers = (
         db.query(Worker)
         .filter(Worker.factory_id == str(current_user.factory_id))
         .filter(Worker.is_active.is_(True))
         .order_by(Worker.name.asc())
         .all()
     )
+    opening_by_worker_id = {
+        row.worker_id: int(row.present_days or 0)
+        for row in db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == str(current_user.factory_id))
+        .filter(WorkerOpeningAttendance.worker_id.in_([worker.id for worker in workers] or [0]))
+        .all()
+    }
+    for worker in workers:
+        worker.previous_attendance = opening_by_worker_id.get(worker.id, 0)
+    return workers
 
 
 @router.get("/machines", response_model=List[OnboardingMachineSummary])

@@ -516,6 +516,7 @@ export type OnboardingOverview = {
     name: string;
     daily_wages: string;
     duty_hours: number;
+    previous_attendance?: number;
   }>;
   machines: Array<{
     id: number;
@@ -680,6 +681,7 @@ export type AttendanceSummaryRow = {
   worker_name: string;
   phone?: string | null;
   daily_wage_rate: string;
+  previous_attendance?: number;
   duty_days: string;
   uncleared_advance: string;
   net_current_balance: string;
@@ -697,6 +699,7 @@ export type WorkerProfile = {
   daily_wage_rate?: number | null;
   daily_wages?: number | null;
   duty_hours?: number | null;
+  previous_attendance?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
   is_active: boolean;
@@ -708,6 +711,7 @@ export type WorkerUpdatePayload = {
   daily_wage_rate?: number;
   daily_wages?: number;
   duty_hours?: number;
+  previous_attendance?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
 };

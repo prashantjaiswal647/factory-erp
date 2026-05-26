@@ -105,6 +105,7 @@ export default function AttendancePage() {
         ...selectedWorker,
         worker_name: updatedWorker.name,
         phone: updatedWorker.phone ?? null,
+        previous_attendance: updatedWorker.previous_attendance ?? selectedWorker.previous_attendance ?? 0,
         daily_wage_rate: String(updatedWorker.daily_wage_rate ?? updatedWorker.daily_wages ?? selectedWorker.daily_wage_rate)
       };
       await loadLedger(refreshed);
@@ -215,7 +216,7 @@ export default function AttendancePage() {
                 <p className="text-sm text-zinc-500">{month} date-wise duty, production aur advance.</p>
               </div>
               <div className="flex items-center gap-2">
-                <button className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker(selectedWorker)}>
+                <button className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker({ ...selectedWorker, previous_attendance: Number(ledger.opening_attendance?.present_days || selectedWorker.previous_attendance || 0) })}>
                   <Edit2 className="h-4 w-4" />
                   Edit
                 </button>
