@@ -90,8 +90,8 @@ export default function LoginPage() {
       setError("Password and Confirm Password do not match.");
       return;
     }
-    if (!signupForm.email.trim()) {
-      setError("Email address required hai.");
+    if (!signupForm.phone_number.trim()) {
+      setError("Phone number is strictly required.");
       return;
     }
     if (!validateLocalPhone(signupCountryCode, signupForm.phone_number)) {
@@ -226,11 +226,6 @@ export default function LoginPage() {
                 <PasswordInput label="Password" value={loginPassword} onChange={setLoginPassword} autoComplete="current-password" data-testid="staff-password-input" />
               </div>
               <Messages error={error} notice={notice} />
-              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED] disabled:cursor-not-allowed disabled:bg-[#E5E7EB]" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Login with Google"} onClick={startGoogleSignup} type="button">
-                <span className="text-lg font-bold text-[#4285F4]">G</span>
-                Log in with Google
-              </button>
-              {!googleClientId ? <p className="mt-2 text-xs text-[#4B5563]">Google login setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
               <button className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#6D28D9] px-4 text-sm font-bold text-white shadow-lg shadow-purple-200 hover:bg-[#4C1D95] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]" disabled={isSubmitting} type="submit">
                 <LogIn className="h-4 w-4" />
                 {isSubmitting ? "Signing in..." : "Login"}
@@ -240,7 +235,7 @@ export default function LoginPage() {
             <form onSubmit={submitSignup}>
               <div className="space-y-4">
                 <Field label="Full Name" value={signupForm.full_name} onChange={(full_name) => setSignupForm({ ...signupForm, full_name })} autoComplete="name" />
-                <Field label="Email" value={signupForm.email} onChange={(email) => setSignupForm({ ...signupForm, email })} autoComplete="email" type="email" />
+                <Field label="Email (Optional)" value={signupForm.email} onChange={(email) => setSignupForm({ ...signupForm, email })} autoComplete="email" type="email" required={false} />
                 <PhoneNumberInput
                   countryCode={signupCountryCode}
                   localNumber={signupForm.phone_number}
@@ -256,11 +251,6 @@ export default function LoginPage() {
                 <Check className="h-4 w-4" />
                 {isSubmitting ? "Creating..." : "Sign Up"}
               </button>
-              <button className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-4 text-sm font-bold text-[#111827] hover:bg-[#FFF7ED] disabled:cursor-not-allowed disabled:bg-[#E5E7EB]" disabled={isSubmitting || !googleClientId} title={!googleClientId ? "Google OAuth client ID is not configured" : "Sign up with Google"} onClick={startGoogleSignup} type="button">
-                <span className="text-lg font-bold text-[#4285F4]">G</span>
-                Sign up with Google
-              </button>
-              {!googleClientId ? <p className="mt-2 text-xs text-[#4B5563]">Google sign up setup pending hai. Admin ko VITE_GOOGLE_CLIENT_ID configure karna hoga.</p> : null}
             </form>
           )}
         </div>

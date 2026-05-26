@@ -5,11 +5,10 @@ export default function TermsConditions() {
 
   const sections = [
     { id: "agreement", title: "1. Scope & Binding Agreement" },
-    { id: "account-ownership", title: "2. Account Security & Verification" },
-    { id: "licensing", title: "3. Scope of License & Use" },
-    { id: "liability-waiver", title: "4. Liability Waiver & Uptime Commitments" },
-    { id: "term-termination", title: "5. Terms, Modifications & Termination" },
-    { id: "disputes", title: "6. Governing Law & Dispute Resolution" },
+    { id: "account-ownership", title: "2. Authentication Security & Liability" },
+    { id: "liability-waiver", title: "3. Service Downtime Limitation" },
+    { id: "human-loop", title: "4. Human-In-The-Loop Verification" },
+    { id: "governing-law", title: "5. Governing Law & Dispute Resolution" },
   ];
 
   const handlePrint = () => {
@@ -33,7 +32,7 @@ export default function TermsConditions() {
               Terms &amp; Conditions
             </h1>
             <p className="mt-2 text-sm text-[#4B5563]">
-              Product: <span className="font-semibold text-[#6D28D9]">MunshiAI</span> | Managed by <span className="font-semibold text-[#4C1D95]">Cosmic Yog</span>
+              Product: <span className="font-semibold text-[#6D28D9]">MunshiAI</span> | Issued by <span className="font-semibold text-[#4C1D95]">Cosmic Yog</span>
             </p>
           </div>
           
@@ -48,7 +47,7 @@ export default function TermsConditions() {
               Print Terms
             </button>
             <a
-              href="mailto:legal@cosmicyog.com?subject=MunshiAI%20Terms%20Inquiry"
+              href="mailto:cosmicyog7@gmail.com?subject=MunshiAI%20Terms%20Inquiry"
               className="inline-flex items-center justify-center rounded-lg bg-[#6D28D9] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#4C1D95] transition-all duration-200"
             >
               Legal Inquiry
@@ -94,122 +93,72 @@ export default function TermsConditions() {
               </h2>
               <p className="mb-4">
                 These Terms and Conditions constitute a legally binding agreement made between you, whether personally or on behalf of an 
-                incorporated business, manufacturing syndicate, or factory (referred to as the "User", "Licensee", or "you"), and 
-                <strong> Cosmic Yog</strong> ("Company", "we", "us", or "our"), concerning your access to and use of the 
-                <strong> MunshiAI</strong> software application, cloud interface, and integration portals.
-              </p>
-              <p>
-                By checking boxes, initiating a trial tier registration, or logging into the active software deployment, you explicitly 
-                represent that you have read, understood, and consented to be bound by all of these Terms. If you do not agree to 
-                be governed by this contract, access is immediately revoked, and you must terminate all utilization of our systems.
+                incorporated business or factory (referred to as the "User", "Licensee", or "you"), and 
+                <strong> Cosmic Yog</strong> ("Company", "we", "us", or "our"), under the sole proprietorship of <strong>PRASHANT</strong>, 
+                with its registered office located at <strong>K46/189 hartirath varanasi 221001, VARANASI, 221001, Uttar Pradesh</strong>, concerning 
+                your access to and use of the <strong>MunshiAI</strong> software application.
               </p>
             </section>
 
             {/* Section 2 */}
             <section id="account-ownership" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                2. Account Security &amp; Verification
+                2. Authentication Security &amp; Liability
               </h2>
               <p className="mb-4">
-                To maintain the high-fidelity security standards required for industrial and transactional ERP databases, all operator accounts, 
-                supervisors, and administrative staff profiles must be validated. Our primary authentication layer utilizes:
-              </p>
-              
-              <div className="my-5 rounded-xl border border-[#F5E6D3] bg-[#FFF7ED] p-5">
-                <h4 className="font-semibold text-[#4C1D95] text-sm mb-2">Primary Verification Methods</h4>
-                <ul className="list-disc pl-5 space-y-2 text-xs sm:text-sm text-[#4B5563]">
-                  <li><strong>Phone + Password Authentication:</strong> Multi-factor verification tied to verified corporate mobile connections.</li>
-                  <li><strong>Google OAuth Verification:</strong> Single sign-on authentication integrated via secure OAuth 2.0 pipelines.</li>
-                </ul>
-              </div>
-
-              <p className="mb-4">
-                The designated <strong>Factory Manager</strong> or primary workspace subscriber is <strong>solely responsible</strong> for maintaining 
-                the strict confidentiality of team access credentials, credentials provisioning, and active API tokens. 
+                Our secure login environment utilizes Phone Number authentication coupled with password credentials. The registered <strong>Factory Manager</strong> or administrator is <strong>solely responsible</strong> for safeguarding password hashes, restricting local employee credentials, and maintaining the confidentiality of operational session keys.
               </p>
               <p>
-                Cosmic Yog shall not be responsible or legally liable for unauthorized system entries, data modification, or leaks occurring 
-                from local password compromise, supervisor-level credential sharing, or negligence in auditing active factory access keys.
+                Cosmic Yog shall hold zero liability for data losses, unauthorized alterations, or security exposures resulting from credential sharing, local operational negligence, or mobile device compromise.
               </p>
             </section>
 
             {/* Section 3 */}
-            <section id="licensing" className="scroll-mt-6">
+            <section id="liability-waiver" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                3. Scope of License &amp; Use
+                3. Service Downtime Limitation
               </h2>
-              <p className="mb-4">
-                Subject to continued tier-fee compliance, Cosmic Yog grants the subscriber a limited, revocable, non-exclusive, non-transferable 
-                license to use the features of MunshiAI exclusively for the management of the licensee's own factory workflows, accounting logs, 
-                invoice creations, and raw materials analytics.
-              </p>
-              <p>
-                You may not: (a) reverse-engineer or attempt to extract source codes from the compilation packages; (b) share access with 
-                competing business entities; or (c) leverage the OpenClaw integrations or local AI models to build a generic competitor software 
-                or secondary commercial application.
-              </p>
+              <div className="my-6 rounded-xl border-l-4 border-amber-500 bg-amber-50 p-5 shadow-sm">
+                <h4 className="font-bold text-[#111827] mb-2 uppercase tracking-wide text-xs text-amber-800">
+                  IMPORTANT LEGAL NOTICE: Liability &amp; Downtime Waiver
+                </h4>
+                <p className="text-xs sm:text-sm text-amber-900 leading-relaxed font-semibold">
+                  "Cosmic Yog or MunshiAI holds zero financial liability for any direct, indirect, or consequential manufacturing pauses, production losses, factory output drops, staff idle-time payroll costs, or sync delays arising from scheduled maintenance, network dropouts, upstream hosting outages, or third-party server downtime."
+                </p>
+              </div>
             </section>
 
             {/* Section 4 */}
-            <section id="liability-waiver" className="scroll-mt-6">
+            <section id="human-loop" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                4. Liability Waiver &amp; Uptime Commitments
+                4. Human-In-The-Loop Verification
               </h2>
-              
-              <div className="my-6 rounded-xl border-l-4 border-amber-500 bg-amber-50 p-5 shadow-sm">
-                <h4 className="font-bold text-[#111827] mb-2 uppercase tracking-wide text-xs text-amber-800">
-                  IMPORTANT LEGAL NOTICE: Uptime &amp; Indemnity Waiver
-                </h4>
-                <p className="text-xs sm:text-sm text-amber-900 leading-relaxed font-semibold">
-                  "Under no circumstances shall Cosmic Yog or MunshiAI be held legally liable to you or any third party for temporary factory operational losses, supply-chain disruptions, production down-time, payroll calculation errors, or data synchronization delays resulting from scheduled server maintenance, security upgrades, network dropouts, or third-party uptime issues (including but not limited to hosting providers, database clusters, or OpenClaw AI gateway failures)."
-                </p>
-              </div>
-
               <p className="mb-4">
-                We make reasonable commercial efforts to guarantee 99.9% uptime, but B2B software relies heavily on remote internet routes and external APIs. 
-                Licensee explicitly acknowledges that they maintain standalone local emergency contingency plans for physical shop floor management and 
-                worker log backups in case of brief service interruptions.
+                All production metrics, monthly sheet calculations, automated raw material yields, and estimated wastage computations processed via the OpenClaw AI engine or automated pipeline utilities serve as supportive planning metrics only.
+              </p>
+              <p className="font-semibold text-[#111827]">
+                The Factory Administrator must verification-check and manually sign off on all automated sheets and wastage reports before utilizing them for payroll, regulatory invoicing, tax filings, or commercial business decisions.
               </p>
             </section>
 
             {/* Section 5 */}
-            <section id="term-termination" className="scroll-mt-6">
+            <section id="governing-law" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                5. Terms, Modifications &amp; Termination
+                5. Governing Law &amp; Support Contact
               </h2>
               <p className="mb-4">
-                These terms will remain in active effect while you use the Service. We reserve the absolute right, in our sole discretion 
-                and without notice or financial liability, to suspend, disable, or terminate workspaces that breach billing deadlines, 
-                violate licensing restrictions, or present operational security hazards to our shared servers.
+                These terms shall be governed by and construed in accordance with the laws of Uttar Pradesh, India. Any dispute arising out of this contract shall be settled under the exclusive jurisdiction of the courts of Varanasi, Uttar Pradesh, India.
               </p>
-              <p>
-                We may revise these Terms and Conditions periodically to adjust for regulatory changes or product enhancements. Subscribing managers 
-                will receive digital notifications upon significant updates. Continuous use of the Service following revisions constitutes formal 
-                acceptance of modified terms.
-              </p>
-            </section>
-
-            {/* Section 6 */}
-            <section id="disputes" className="scroll-mt-6">
-              <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                6. Governing Law &amp; Dispute Resolution
-              </h2>
-              <p className="mb-4">
-                These Terms and Conditions and your use of the Service are governed by and construed in accordance with the laws of the jurisdiction 
-                under which <strong>Cosmic Yog</strong> is legally incorporated, without regard to conflict of law principles. 
-              </p>
-              <p>
-                Any legal actions, arbitration proceedings, or contract dispute negotiations arising directly out of your commercial usage of MunshiAI 
-                shall be settled exclusively in the designated arbitration courts of Cosmic Yog's registered corporate domicile.
-              </p>
+              <div className="rounded-xl bg-[#FFF7ED] p-5 border border-[#F5E6D3] text-xs sm:text-sm">
+                <p className="font-bold text-[#4C1D95]">Cosmic Yog Support Desk</p>
+                <p>Proprietor: PRASHANT</p>
+                <p>Office Address: K46/189 hartirath varanasi 221001, VARANASI, 221001, Uttar Pradesh</p>
+                <p>Email: <a href="mailto:cosmicyog7@gmail.com" className="text-[#6D28D9] hover:underline">cosmicyog7@gmail.com</a></p>
+                <p>Phone Support: <span className="font-semibold text-[#111827]">8285811727</span></p>
+              </div>
             </section>
 
           </div>
-        </div>
-
-        {/* Footer print-only watermark */}
-        <div className="hidden print:block mt-12 text-center text-xs text-gray-400 border-t pt-4">
-          MunshiAI Terms &amp; Conditions • Cosmic Yog Legal Compliance Department • Printed from secure server.
         </div>
       </div>
     </div>

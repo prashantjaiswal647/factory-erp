@@ -4,11 +4,10 @@ export default function RefundPolicy() {
   const [activeSection, setActiveSection] = useState("refund-window");
 
   const sections = [
-    { id: "refund-window", title: "1. 7-Day Refund window" },
-    { id: "credit-process", title: "2. Systematic Crediting & Processing" },
-    { id: "cancellation", title: "3. B2B Cancellation Guidelines" },
-    { id: "tier-modifications", title: "4. Tier Modifications & Upgrades" },
-    { id: "ineligible-claims", title: "5. Ineligible Refund Claims" },
+    { id: "refund-window", title: "1. Strict 7-Day Refund window" },
+    { id: "credit-process", title: "2. Payout Processing Timeline" },
+    { id: "cancellation", title: "3. Post-Threshold Cancellations" },
+    { id: "support", title: "4. Contact Support Desk" },
   ];
 
   const handlePrint = () => {
@@ -47,7 +46,7 @@ export default function RefundPolicy() {
               Print Policy
             </button>
             <a
-              href="mailto:billing@cosmicyog.com?subject=MunshiAI%20Refund%20Claim"
+              href="mailto:cosmicyog7@gmail.com?subject=MunshiAI%20Refund%20Claim"
               className="inline-flex items-center justify-center rounded-lg bg-[#6D28D9] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#4C1D95] transition-all duration-200"
             >
               Submit Claim
@@ -89,123 +88,60 @@ export default function RefundPolicy() {
             {/* Section 1 */}
             <section id="refund-window" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                1. 7-Day Refund Window &amp; Eligibility
+                1. Strict 7-Day Refund Window
               </h2>
               <p className="mb-4">
-                At Cosmic Yog, we stand behind the operational quality and analytical capability of MunshiAI. To ensure a risk-free 
-                onboarding experience for factory administrators, we strictly implement a <strong>7-day money-back guarantee</strong>.
+                Subscribing enterprise managers of MunshiAI are eligible to claim a full refund of their paid tier fee if requested in writing within exactly <strong>seven (7) calendar days</strong> of their initial subscription tier activation, or the monthly billing cycle renewal date.
               </p>
-              
-              <div className="my-5 rounded-xl border border-[#F5E6D3] bg-[#FFF7ED] p-5">
-                <h4 className="font-semibold text-[#111827] text-sm mb-2 uppercase tracking-wide">
-                  Refund Request Period
-                </h4>
-                <p className="text-xs sm:text-sm text-[#4B5563] leading-relaxed">
-                  Subscribed enterprise accounts can claim a full, 100% refund of fees paid if the claim is submitted in writing 
-                  within exactly <strong>seven (7) calendar days</strong> of their initial subscription tier activation, or the 
-                  commencement/renewal date of their recurring monthly billing cycle. 
-                </p>
-                <p className="mt-2 text-xs text-red-600 font-medium">
-                  Important: Any refund request initiated on or after the eighth (8th) day of the cycle shall be systematically rejected.
-                </p>
-              </div>
-
-              <p>
-                This grace window enables factory operators to fully test the database speeds, worker attendance interfaces, and 
-                OpenClaw automated reporting structures in a live operational environment with zero permanent financial commitment.
+              <p className="text-xs text-red-600 font-semibold uppercase tracking-wider">
+                Any refund request initiated on or after the eighth (8th) day of the cycle is strictly non-eligible and will be rejected.
               </p>
             </section>
 
             {/* Section 2 */}
             <section id="credit-process" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                2. Systematic Crediting &amp; Processing
+                2. Payout Processing Timeline
               </h2>
-              <p className="mb-4">
-                To guarantee transparency and speed, all approved refund payments are routed systematically through our automated merchant accounts.
-              </p>
-
               <div className="my-6 rounded-xl border-l-4 border-[#6D28D9] bg-[#FFF7ED] p-5 shadow-sm">
                 <h4 className="font-bold text-[#111827] mb-2 uppercase tracking-wide text-xs">Standard Crediting Clause</h4>
                 <p className="text-xs sm:text-sm text-[#4B5563] leading-relaxed font-semibold">
                   "Approved refund claims initiated within the valid 7-day window will be systematically credited back to the user's original payment source within 7 to 10 working days."
                 </p>
               </div>
-
-              <p>
-                Depending on your financial institution's processing cycles (including banks, card networks, and local UPI gateways), 
-                the refund transaction may take additional business days to appear on your bank statement. Cosmic Yog will issue a transaction 
-                completion slip via registered workspace emails immediately upon internal authorization.
-              </p>
             </section>
 
             {/* Section 3 */}
             <section id="cancellation" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                3. B2B Cancellation Guidelines
+                3. Post-Threshold Cancellations
               </h2>
               <p className="mb-4">
-                As a B2B SaaS software built to maintain complex multi-user databases, our subscription cancellation workflow is engineered 
-                to avoid sudden shutdowns that could stall physical factory shop floors:
+                Cancellation requests received after the 7-day threshold has elapsed are completely non-refundable for the active billing cycle.
               </p>
-              
-              <ul className="list-decimal pl-5 space-y-3 mb-4">
-                <li>
-                  <strong className="text-[#4C1D95]">No Pro-Rated Mid-Cycle Credits:</strong> Cancellations requested after the 7-day 
-                  refund window has elapsed will prevent future billing renewals but are completely non-refundable. The subscription remains 
-                  active for the remainder of the current paid billing duration.
-                </li>
-                <li>
-                  <strong className="text-[#4C1D95]">Active Access Retention:</strong> To ensure business continuity, your workspace, including 
-                  active operator logs, inventory lists, and supervisor sheets, will remain active and usable until the final second of the 
-                  active monthly billing cycle.
-                </li>
-                <li>
-                  <strong className="text-[#4C1D95]">Critical Data Export Period:</strong> Factory managers must export all historical ledger logs, 
-                  worker profiles, and inventory registers using the CSV/JSON download tools <em>before</em> the billing cycle officially ends. 
-                  Once the subscription terminates, workspace access is restricted and databases are queued for scheduled deletion as outlined 
-                  in our Privacy Policy.
-                </li>
-              </ul>
+              <p>
+                Upon post-threshold cancellation, the subscription remains fully active and your factory operator workspaces usable until the final second of the current billing cycle. This stops future recurring billing runs while preventing sudden factory operations halt, allowing sufficient time for database backups and registry exports.
+              </p>
             </section>
 
             {/* Section 4 */}
-            <section id="tier-modifications" className="scroll-mt-6">
+            <section id="support" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                4. Tier Modifications &amp; Upgrades
+                4. Contact Support Desk
               </h2>
               <p className="mb-4">
-                When a factory upgrades its active tier mid-cycle (e.g. scaling from the Lite tier to Enterprise to support more workers 
-                or integrations), the database immediately adjusts capabilities. 
+                To submit an eligibility refund claim, please contact the Billing &amp; Invoicing desk with your transaction receipt details:
               </p>
-              <p>
-                Upgrades will charge a pro-rated difference for the remaining active days of the monthly cycle. Refunds or pro-rated cash-backs 
-                are not issued if a factory decides to downgrade its active package mid-month; instead, the downsized limits will take effect 
-                commencing from the next monthly billing cycle startup.
-              </p>
-            </section>
-
-            {/* Section 5 */}
-            <section id="ineligible-claims" className="scroll-mt-6">
-              <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                5. Ineligible Refund Claims
-              </h2>
-              <p className="mb-4">
-                To prevent fraud and maintain the integrity of our software services, refunds are explicitly disallowed in the following events:
-              </p>
-              <ul className="list-disc pl-5 space-y-2 mb-4 text-[#4B5563]">
-                <li>Workspace terminations resulting from structural violations of our Terms &amp; Conditions (e.g. credential sharing or attempting to scrape proprietary code).</li>
-                <li>Disputes regarding scheduled maintenance downtime or upstream API outages, which are covered under the standard Liability Waiver in our Terms &amp; Conditions.</li>
-                <li>Multiple consecutive registrations and refund claims by the same factory owner under alternate names to exploit the 7-day guarantee window.</li>
-              </ul>
+              <div className="rounded-xl bg-[#FFF7ED] p-5 border border-[#F5E6D3] text-xs sm:text-sm">
+                <p className="font-bold text-[#4C1D95]">Cosmic Yog Billing Desk</p>
+                <p>Proprietor: PRASHANT</p>
+                <p>Registered Address: K46/189 hartirath varanasi 221001, VARANASI, 221001, Uttar Pradesh</p>
+                <p>Email Support: <a href="mailto:cosmicyog7@gmail.com" className="text-[#6D28D9] hover:underline">cosmicyog7@gmail.com</a></p>
+                <p>Phone Helpdesk: <span className="font-semibold text-[#111827]">8285811727</span></p>
+              </div>
             </section>
 
           </div>
-        </div>
-
-        {/* Footer print-only watermark */}
-        <div className="hidden print:block mt-12 text-center text-xs text-gray-400 border-t pt-4">
-          MunshiAI Refund &amp; Cancellation Policy • Cosmic Yog Legal Compliance Department • Printed securely.
         </div>
       </div>
     </div>

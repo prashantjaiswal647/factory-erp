@@ -5,11 +5,11 @@ export default function PrivacyPolicy() {
 
   const sections = [
     { id: "introduction", title: "1. Corporate Context & Scope" },
-    { id: "data-isolation", title: "2. Database & Factory Data Isolation" },
-    { id: "ai-processing", title: "3. AI Processing & Third-Party Gateways" },
+    { id: "data-isolation", title: "2. Multi-tenancy Isolation (factory_id)" },
+    { id: "ai-processing", title: "3. AI Data Compliance (OpenClaw & n8n)" },
     { id: "information-collection", title: "4. Information We Collect" },
-    { id: "data-retention", title: "5. Retention & Archiving" },
-    { id: "contact", title: "6. Legal & Compliance Contact" },
+    { id: "data-retention", title: "5. Retention & Purging" },
+    { id: "contact", title: "6. Legal & Support Contact" },
   ];
 
   const handlePrint = () => {
@@ -33,7 +33,7 @@ export default function PrivacyPolicy() {
               Privacy Policy
             </h1>
             <p className="mt-2 text-sm text-[#4B5563]">
-              Product: <span className="font-semibold text-[#6D28D9]">MunshiAI</span> | Operated under parent firm <span className="font-semibold text-[#4C1D95]">Cosmic Yog</span>
+              Product: <span className="font-semibold text-[#6D28D9]">MunshiAI</span> | Owned and operated by <span className="font-semibold text-[#4C1D95]">Cosmic Yog</span>
             </p>
           </div>
           
@@ -48,7 +48,7 @@ export default function PrivacyPolicy() {
               Print Policy
             </button>
             <a
-              href="mailto:compliance@cosmicyog.com?subject=MunshiAI%20Privacy%20Policy%20Inquiry"
+              href="mailto:cosmicyog7@gmail.com?subject=MunshiAI%20Privacy%20Policy%20Inquiry"
               className="inline-flex items-center justify-center rounded-lg bg-[#6D28D9] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#4C1D95] transition-all duration-200"
             >
               Contact Legal
@@ -90,78 +90,57 @@ export default function PrivacyPolicy() {
             {/* Section 1 */}
             <section id="introduction" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                1. Corporate Context & Scope
+                1. Corporate Context &amp; Scope
               </h2>
               <p className="mb-4">
                 This Privacy Policy describes the policies and procedures of <strong>Cosmic Yog</strong> (hereinafter referred to as the 
-                "Company", "we", "us", or "our"), operating the digital enterprise software application <strong>MunshiAI</strong> (the "Service" 
-                or "Product"), regarding the collection, processing, security, and containment of operational telemetry, metadata, financial records, 
-                and personnel information. 
+                "Company", "we", "us", or "our"), under the sole proprietorship of <strong>PRASHANT</strong>, with its physical headquarters and 
+                registered corporate office located at <strong>K46/189 hartirath varanasi 221001, VARANASI, 221001, Uttar Pradesh</strong>, operating 
+                the digital enterprise software application <strong>MunshiAI</strong> (the "Service" or "Product").
               </p>
               <p>
                 By registering, licensing, or accessing the Service, the subscribing business entity and its designated representatives, managers, 
-                and operators agree to the data collection and operational security frameworks set forth herein. If you are entering into this 
-                agreement on behalf of a factory, manufacturing facility, or registered enterprise, you declare that you possess the requisite 
-                legal authority to bind such entity to these provisions.
+                and operators agree to the data collection and operational security frameworks set forth herein.
               </p>
             </section>
 
             {/* Section 2 */}
             <section id="data-isolation" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                2. Database & Factory Data Isolation
+                2. Database &amp; Multi-tenancy Isolation (factory_id)
               </h2>
               <div className="rounded-xl bg-purple-50 p-5 border border-[#F3E8FF] mb-4">
                 <h3 className="text-sm font-semibold text-[#4C1D95] uppercase tracking-wide mb-2">
-                  Technical Safeguard: Schema-Level Segmentation
+                  Technical Safeguard: Logical Multi-Tenancy segregation
                 </h3>
                 <p className="text-xs sm:text-sm text-[#4B5563]">
-                  To guarantee absolute privacy and commercial security, MunshiAI implements a strict multi-tenant data architecture. 
-                  All relational database tables, ledger logs, and operational transaction stores enforce parameterized 
-                  <code>factory_id</code> verification checks at the physical and logical query building level.
+                  All raw materials, inventory sheets, machine logs, shift timelines, and daily worker entries are strictly segregated at the logical database level. We enforce parameterized <code>factory_id</code> verification checks on all database transaction requests to guarantee that data remains completely locked and inaccessible to other customer tenants.
                 </p>
               </div>
               <p className="mb-4">
-                No request, query, indexing routine, or report compilation may traverse across tenant boundary lines. Every transaction 
-                is cryptographically bound to the specific organization's identifier. The system dynamically validates every API authorization 
-                against the session's active <code>factory_id</code>, neutralizing any possibility of cross-factory data leaks, accidental 
-                spills, or lateral access escalation. 
-              </p>
-              <p>
-                Staff credentials, active sessions, and data storage files associated with one license instance are completely segregated 
-                from other customer workspaces. Database isolation rules are checked on every persistent state change, ensuring that your 
-                operational metrics and factory assets remain strictly private to your registered corporate branch.
+                This strict tenant segmentation blocks unauthorized lateral data traversal, API leaks, or accidental horizontal privilege escalations, keeping your factory intelligence and private metrics safe inside your registered business branch.
               </p>
             </section>
 
             {/* Section 3 */}
             <section id="ai-processing" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                3. AI Processing & Third-Party Gateways
+                3. AI Data Compliance (OpenClaw &amp; n8n)
               </h2>
               <p className="mb-4">
-                MunshiAI leverages state-of-the-art Large Language Models (LLMs) and advanced natural language routing interfaces, 
-                primarily via our secure <strong>OpenClaw</strong> third-party AI interface, to analyze factory logs, compute metrics, and answer natural 
-                language queries on demand.
+                MunshiAI routes user operational queries, wastage indicators, and production logs through state-of-the-art Large Language Models (LLMs) via our secure <strong>OpenClaw</strong> gateway and automated <strong>n8n</strong> pipelines.
               </p>
               
               <div className="my-6 rounded-xl border-l-4 border-[#6D28D9] bg-[#FFF7ED] p-5 shadow-sm">
                 <h4 className="font-bold text-[#111827] mb-2">The Zero-Cache AI Transaction Commitment</h4>
                 <p className="text-xs sm:text-sm text-[#4B5563] leading-relaxed">
-                  We explicitly declare that all customer factory metrics, raw materials volume data, attendance registers, and financial ledger records processed via third-party AI interfaces or the OpenClaw gateway are <strong>strictly transactional</strong>.
+                  We explicitly declare that all customer factory metrics, raw materials volume data, and ledger records processed via third-party AI interfaces, OpenClaw, or automated n8n pipelines are <strong>strictly transient</strong>.
                 </p>
                 <ul className="mt-3 list-disc pl-5 space-y-1 text-xs sm:text-sm text-[#4B5563]">
-                  <li><strong>No Cached Stores:</strong> Transmitted metrics and context schemas are kept in memory only for the duration of the query execution and are never cached or written to persistent third-party disks.</li>
-                  <li><strong>No Training Use:</strong> All sent payload metrics are strictly excluded from external foundation model re-training, weight optimization, reinforcement learning (RLHF), or general AI development datasets.</li>
-                  <li><strong>Encrypted Transport:</strong> Data sent between MunshiAI, OpenClaw, and LLM providers is fully encrypted using TLS 1.3 protocol standards.</li>
+                  <li><strong>No Cached Stores:</strong> Transmitted metrics are kept in memory only for the duration of the query execution and are never cached or written to persistent third-party disks.</li>
+                  <li><strong>No Training Use:</strong> All sent payload metrics are strictly excluded from external foundation model re-training, weight optimization, or general AI training datasets.</li>
                 </ul>
               </div>
-
-              <p>
-                This transactional parameter ensures that your confidential manufacturing intelligence, proprietary formulation metrics, 
-                and payroll structures remain proprietary. Standard processing logs generated by API routes are automatically sanitized 
-                to scrub variable numerical outputs and proprietary identifiers.
-              </p>
             </section>
 
             {/* Section 4 */}
@@ -175,16 +154,10 @@ export default function PrivacyPolicy() {
               </p>
               <ul className="list-decimal pl-5 mb-4 space-y-2">
                 <li>
-                  <strong className="text-[#4C1D95]">User Credentials & Identity Metrics:</strong> Registered phone numbers, 
-                  encrypted passwords, and secure tokens received from Google OAuth integrations.
+                  <strong className="text-[#4C1D95]">User Identity:</strong> Registered phone numbers, password hashes, and user profiles.
                 </li>
                 <li>
-                  <strong className="text-[#4C1D95]">Factory Operational Telemetry:</strong> Stock logs, production quantities, 
-                  raw material invoices, product pricing tiers, machine statuses, and employee timesheets.
-                </li>
-                <li>
-                  <strong className="text-[#4C1D95]">Billing & Subscription Indicators:</strong> Transaction history, current active tier 
-                  identifiers, credit card tokens handled securely through PCI-DSS compliant gateways, and historical ledger actions.
+                  <strong className="text-[#4C1D95]">Factory Telemetry:</strong> Machine numbers, mold sizes, shift performance data, raw material inputs, and worker registries.
                 </li>
               </ul>
             </section>
@@ -192,43 +165,33 @@ export default function PrivacyPolicy() {
             {/* Section 5 */}
             <section id="data-retention" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                5. Retention & Archiving
+                5. Retention &amp; Purging
               </h2>
               <p className="mb-4">
                 Your data is retained as long as your enterprise subscription with Cosmic Yog remains active. If a factory manager 
                 initiates a profile termination or subscription cancellation, the system will retain tenant assets for a grace period 
-                of thirty (30) days to prevent accidental data loss and permit the export of operational files.
-              </p>
-              <p>
-                Upon the expiration of the retention window, all operational registers, production logs, database rows associated with 
-                your specific <code>factory_id</code>, and customer listings will be systematically purged from our active transactional databases. 
-                Encrypted database backup snapshots are routinely rotated and will overwrite previous data points within ninety (90) days.
+                of thirty (30) days, after which all database rows tied to your <code>factory_id</code> will be systematically purged.
               </p>
             </section>
 
             {/* Section 6 */}
             <section id="contact" className="scroll-mt-6">
               <h2 className="text-xl font-bold text-[#4C1D95] border-b border-[#F5E6D3] pb-2 mb-3">
-                6. Legal & Compliance Contact
+                6. Legal &amp; Support Contact
               </h2>
               <p className="mb-4">
-                For questions regarding database isolation validations, OpenClaw API data handling guarantees, or to request a full 
-                export of your system registries under GDPR/CCPA framework equivalents, please contact our designated corporate data officer:
+                For questions regarding database isolation validations, OpenClaw API data handling guarantees, or other legal inquiries, please contact our compliance office:
               </p>
               <div className="rounded-xl bg-[#FFF7ED] p-5 border border-[#F5E6D3] text-xs sm:text-sm">
-                <p className="font-bold text-[#4C1D95]">Cosmic Yog Compliance Office</p>
-                <p>Attention: Data Protection & Legal Counsel (MunshiAI)</p>
-                <p>Email: <a href="mailto:compliance@cosmicyog.com" className="text-[#6D28D9] hover:underline">compliance@cosmicyog.com</a></p>
-                <p className="mt-2 text-xs text-[#4B5563]">Physical address registry available upon formal corporate requests.</p>
+                <p className="font-bold text-[#4C1D95]">Cosmic Yog Legal Department</p>
+                <p>Proprietor: PRASHANT</p>
+                <p>Address: K46/189 hartirath varanasi 221001, VARANASI, 221001, Uttar Pradesh</p>
+                <p>Email: <a href="mailto:cosmicyog7@gmail.com" className="text-[#6D28D9] hover:underline">cosmicyog7@gmail.com</a></p>
+                <p>Phone: <span className="font-semibold text-[#111827]">8285811727</span></p>
               </div>
             </section>
 
           </div>
-        </div>
-
-        {/* Footer print-only watermark */}
-        <div className="hidden print:block mt-12 text-center text-xs text-gray-400 border-t pt-4">
-          MunshiAI Privacy Policy • Cosmic Yog Legal Compliance Department • Printed directly from secure portal.
         </div>
       </div>
     </div>
