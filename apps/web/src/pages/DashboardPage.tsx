@@ -1,10 +1,12 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Boxes, CalendarDays, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench, Trash2 } from "lucide-react";
+import { AlertTriangle, Boxes, CalendarDays, Edit2, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench, Trash2 } from "lucide-react";
 import axios from "axios";
+import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { EditWorkerModal } from "../components/EditWorkerModal";
 import { approveSalesOrder, getDashboardMachines, getDashboardWorkers, getInventory, getPendingSales, getProductionAlerts, deleteOnboardingEntry, rejectSalesOrder } from "../lib/api";
 import type { DashboardMachine, DashboardWorker, LiveStockRow, PendingSale, ProductionAlertsResponse } from "../lib/api";
 
@@ -40,6 +42,7 @@ export default function DashboardPage() {
   const [productionAlerts, setProductionAlerts] = useState<ProductionAlertsResponse | null>(null);
   const [approvalMessage, setApprovalMessage] = useState("");
   const [processingOrderId, setProcessingOrderId] = useState<number | null>(null);
+  const [editingWorker, setEditingWorker] = useState<DashboardWorker | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const { user } = useAuth();
@@ -230,6 +233,11 @@ export default function DashboardPage() {
             `₹${Number(worker.daily_wages || 0).toLocaleString("en-IN")}`
           ])}
           headers={["Name", "Phone", "Shift", "Daily Wages"]}
+          actions={workers.slice(0, 6).map((worker) => (
+            <button key={worker.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker(worker)} title="Edit Worker">
+              <Edit2 className="h-4 w-4" />
+            </button>
+          ))}
           to="/attendance"
         />
         <SimpleTableCard
@@ -246,6 +254,7 @@ export default function DashboardPage() {
           to="/machines"
         />
       </section>
+      {editingWorker ? <EditWorkerModal worker={editingWorker} onClose={() => setEditingWorker(null)} onSaved={load} /> : null}
     </div>
   );
 }
@@ -411,7 +420,7 @@ function MetricCard({ icon: Icon, tone, label, value, helper }: { icon: LucideIc
   );
 }
 
-function SimpleTableCard({ icon: Icon, title, headers, rows, empty, to }: { icon: LucideIcon; title: string; headers: string[]; rows: string[][]; empty: string; to: string }) {
+function SimpleTableCard({ icon: Icon, title, headers, rows, empty, to, actions }: { icon: LucideIcon; title: string; headers: string[]; rows: string[][]; empty: string; to: string; actions?: React.ReactNode[] }) {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
@@ -427,12 +436,16 @@ function SimpleTableCard({ icon: Icon, title, headers, rows, empty, to }: { icon
         <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-100">
           <table className="min-w-full divide-y divide-zinc-100 text-sm">
             <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
-              <tr>{headers.map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}</tr>
+              <tr>
+                {headers.map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
+                {actions ? <th className="px-4 py-3 text-right font-semibold">Action</th> : null}
+              </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {rows.map((row, index) => (
                 <tr key={`${title}-${index}`} className="hover:bg-zinc-50">
                   {row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="whitespace-nowrap px-4 py-3 text-zinc-700">{cell}</td>)}
+                  {actions ? <td className="whitespace-nowrap px-4 py-3 text-right">{actions[index]}</td> : null}
                 </tr>
               ))}
             </tbody>

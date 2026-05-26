@@ -104,6 +104,31 @@ class SecurityVerifyFactoryIdRequest(BaseModel):
     otp_code: str = Field(..., min_length=4)
 
 
+class WorkerUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    phone_number: Optional[str] = Field(default=None, max_length=50)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    daily_wage_rate: Optional[float] = Field(default=None, ge=0)
+    daily_wages: Optional[float] = Field(default=None, ge=0)
+    duty_hours: Optional[float] = Field(default=None, gt=0)
+    shift_timing: Optional[str] = Field(default=None, max_length=100)
+    shift_type: Optional[str] = Field(default=None, max_length=100)
+
+
+class WorkerProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    phone: str | None = None
+    daily_wage_rate: float | None = None
+    daily_wages: float | None = None
+    duty_hours: float | None = None
+    shift_timing: str | None = None
+    shift_type: str | None = None
+    is_active: bool
+
+
 # Helper Functions
 # ---------------------------------------------------------------------------
 
@@ -816,6 +841,68 @@ def delete_staff_opening_attendance(
 # Explicit Workers Router (Principal Security Specs)
 # ---------------------------------------------------------------------------
 workers_router = APIRouter(prefix="/api/workers", tags=["workers"])
+
+
+@workers_router.patch("/{worker_id}", response_model=WorkerProfileResponse)
+@workers_router.put("/{worker_id}", response_model=WorkerProfileResponse)
+def update_worker_profile(
+    worker_id: int,
+    payload: WorkerUpdateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    worker = (
+        db.query(Worker)
+        .filter(Worker.id == worker_id)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .with_for_update()
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    phone = updates.pop("phone_number", None)
+    if phone is None:
+        phone = updates.pop("phone", None)
+
+    name = updates.pop("name", None)
+    if name is not None:
+        clean_name = name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name cannot be blank")
+        duplicate = (
+            db.query(Worker.id)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter(Worker.id != worker_id)
+            .filter(sql_func.lower(Worker.name) == clean_name.lower())
+            .first()
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Worker name already exists")
+        worker.name = clean_name
+
+    if phone is not None:
+        worker.phone = phone.strip() or None
+
+    if "daily_wage_rate" in updates:
+        worker.daily_wage_rate = updates["daily_wage_rate"]
+        worker.daily_wages = updates["daily_wage_rate"]
+    if "daily_wages" in updates:
+        worker.daily_wages = updates["daily_wages"]
+        worker.daily_wage_rate = updates["daily_wages"]
+    for field in ("duty_hours", "shift_timing", "shift_type"):
+        if field in updates:
+            setattr(worker, field, updates[field])
+
+    try:
+        db.commit()
+        db.refresh(worker)
+        return worker
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Worker update conflicts with existing data") from exc
+
 
 @workers_router.delete("/{worker_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_worker(

@@ -690,6 +690,28 @@ export type AttendanceSummaryResponse = {
   workers: AttendanceSummaryRow[];
 };
 
+export type WorkerProfile = {
+  id: number;
+  name: string;
+  phone?: string | null;
+  daily_wage_rate?: number | null;
+  daily_wages?: number | null;
+  duty_hours?: number | null;
+  shift_timing?: string | null;
+  shift_type?: string | null;
+  is_active: boolean;
+};
+
+export type WorkerUpdatePayload = {
+  name?: string;
+  phone_number?: string;
+  daily_wage_rate?: number;
+  daily_wages?: number;
+  duty_hours?: number;
+  shift_timing?: string | null;
+  shift_type?: string | null;
+};
+
 export type WorkerLedgerDay = {
   date: string;
   attendance_id?: number | null;
@@ -856,6 +878,10 @@ export function getAttendanceSummary(month: string) {
 
 export function getWorkerLedger(workerId: number, month: string) {
   return api.get<WorkerLedgerResponse>(`/api/workers/${workerId}/attendance-ledger`, { params: { month } });
+}
+
+export function updateWorkerProfile(workerId: number, payload: WorkerUpdatePayload) {
+  return api.patch<WorkerProfile>(`/api/workers/${workerId}`, payload);
 }
 
 export function upsertWorkerAttendance(workerId: number, payload: { date: string; status: WorkerLedgerDay["status"]; production_qty?: number | null }) {

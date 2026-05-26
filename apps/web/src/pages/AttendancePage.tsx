@@ -1,6 +1,7 @@
-import { CalendarDays, Check, IndianRupee, PanelRightClose, Plus, ReceiptIndianRupee, Search } from "lucide-react";
+import { CalendarDays, Check, Edit2, IndianRupee, PanelRightClose, Plus, ReceiptIndianRupee, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { EditWorkerModal } from "../components/EditWorkerModal";
 import {
   addWorkerAdvance,
   getAttendanceSummary,
@@ -8,7 +9,7 @@ import {
   settleWorkerHisab,
   upsertWorkerAttendance
 } from "../lib/api";
-import type { AttendanceSummaryRow, SettlementResponse, WorkerLedgerDay, WorkerLedgerResponse } from "../lib/api";
+import type { AttendanceSummaryRow, SettlementResponse, WorkerLedgerDay, WorkerLedgerResponse, WorkerProfile } from "../lib/api";
 
 const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -34,6 +35,7 @@ export default function AttendancePage() {
   const [summary, setSummary] = useState<AttendanceSummaryRow[]>([]);
   const [query, setQuery] = useState("");
   const [selectedWorker, setSelectedWorker] = useState<AttendanceSummaryRow | null>(null);
+  const [editingWorker, setEditingWorker] = useState<AttendanceSummaryRow | null>(null);
   const [ledger, setLedger] = useState<WorkerLedgerResponse | null>(null);
   const [advanceDraft, setAdvanceDraft] = useState<{ date: string; amount: number } | null>(null);
   const [settlementOpen, setSettlementOpen] = useState(false);
@@ -94,6 +96,20 @@ export default function AttendancePage() {
     await loadLedger(selectedWorker);
     await loadSummary();
     setToast("Advance saved");
+  }
+
+  async function refreshAfterWorkerEdit(updatedWorker: WorkerProfile) {
+    await loadSummary();
+    if (selectedWorker) {
+      const refreshed = {
+        ...selectedWorker,
+        worker_name: updatedWorker.name,
+        phone: updatedWorker.phone ?? null,
+        daily_wage_rate: String(updatedWorker.daily_wage_rate ?? updatedWorker.daily_wages ?? selectedWorker.daily_wage_rate)
+      };
+      await loadLedger(refreshed);
+    }
+    setToast("Worker updated");
   }
 
   async function previewSettlement() {
@@ -173,9 +189,14 @@ export default function AttendancePage() {
                     <td className="px-5 py-3 text-right text-red-700">{money(worker.uncleared_advance)}</td>
                     <td className="px-5 py-3 text-right font-semibold">{money(worker.net_current_balance)}</td>
                     <td className="px-5 py-3 text-right">
-                      <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => loadLedger(worker)}>
-                        View Ledger
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker(worker)} title="Edit Worker">
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => loadLedger(worker)}>
+                          View Ledger
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -193,9 +214,15 @@ export default function AttendancePage() {
                 <h2 className="text-xl font-semibold text-zinc-950">{selectedWorker.worker_name}</h2>
                 <p className="text-sm text-zinc-500">{month} date-wise duty, production aur advance.</p>
               </div>
-              <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600" type="button" onClick={() => setSelectedWorker(null)}>
-                <PanelRightClose className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker(selectedWorker)}>
+                  <Edit2 className="h-4 w-4" />
+                  Edit
+                </button>
+                <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600" type="button" onClick={() => setSelectedWorker(null)}>
+                  <PanelRightClose className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto p-5">
@@ -302,6 +329,7 @@ export default function AttendancePage() {
           </div>
         </Modal>
       ) : null}
+      {editingWorker ? <EditWorkerModal worker={editingWorker} onClose={() => setEditingWorker(null)} onSaved={refreshAfterWorkerEdit} /> : null}
     </div>
   );
 }
