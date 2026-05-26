@@ -14,14 +14,14 @@ import {
   TrendingUp,
   UsersRound,
   X,
-  Zap
+  Zap,
+  Sparkles
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import PricingPlansSection from "../components/PricingPlansSection";
 import heroImage from "../assets/munshi-ai-hero-final.png";
-import mobileHeroImage from "../assets/munshi-ai-hero-mobile.png";
 
 const navLinks = [
   { label: "Features", href: "#features" },
@@ -31,24 +31,24 @@ const navLinks = [
 ];
 
 const heroBadges = [
-  { icon: Factory, title: "Production Tracking" },
-  { icon: Boxes, title: "Inventory Management" },
-  { icon: CreditCard, title: "Finance & Payments" },
-  { icon: FileText, title: "E-Invoicing" },
-  { icon: BarChart3, title: "AI Production Charts" },
-  { icon: Zap, title: "AI Insights & Reports" }
+  { icon: Factory, title: "Live Floor OEE Telemetry" },
+  { icon: Boxes, title: "AI Stock Forecasting" },
+  { icon: CreditCard, title: "B2B Storefront & UPI" },
+  { icon: FileText, title: "E-Invoicing & Invoices" },
+  { icon: BarChart3, title: "AI Financial BI Charts" },
+  { icon: Sparkles, title: "WhatsApp AI Supervisor" }
 ];
 
 const features = [
-  { icon: ReceiptText, title: "Daily Production Entry", text: "Roz ka production, machine aur shift data simple form se record karein." },
-  { icon: TrendingUp, title: "Wastage Calculation", text: "Material wastage aur cost leakage ko automatic track karein." },
-  { icon: Boxes, title: "Raw Material Inventory", text: "Blank, roll, chemical, packaging ya raw stock ka live hisaab." },
-  { icon: PackageCheck, title: "Finished Goods Stock", text: "Ready maal, boxes aur dispatch stock par clear visibility." },
-  { icon: FileText, title: "E-Invoicing", text: "Invoice, GST-ready records aur customer billing ek jagah." },
-  { icon: BellRing, title: "Payment Reminder", text: "Pending payment aur customer follow-up ke liye smart alerts." },
-  { icon: BarChart3, title: "AI Enabled Production Charts", text: "Production trend, downtime aur output ko visual charts mein dekhein." },
-  { icon: UsersRound, title: "Worker & Machine Performance", text: "Staff, machine aur shift performance ko compare karein." },
-  { icon: Zap, title: "n8n Automation", text: "WhatsApp, reminders, reports aur backend workflows automate karein." }
+  { icon: Factory, title: "Live Machine OEE Telemetry", text: "Floor machines ka live running status, actual speed (RPM), circular OEE gauge score, aur operator downtime reasons track karein." },
+  { icon: Zap, title: "Predictive Inventory TTL", text: "AI automatically calculates raw blanks & bottom roll depletion days remaining to prevent stock-outs, plus supplier WhatsApp PO launchers." },
+  { icon: CreditCard, title: "Private B2B Storefront & UPI", text: "Distributor private portal checkouts with instant advance payment discount rewards (2%) and horizontal order dispatch timeline steppers." },
+  { icon: Sparkles, title: "WhatsApp Supervisor Voice Bot", text: "WhatsApp par direct voice note ya simple text send karke production logs, worker advances, expense tickets aur attendances add karein." },
+  { icon: BarChart3, title: "Interactive Financial BI Charts", text: "Recharts graphs se dual-axis revenue cash collections, wage margin breakdown, aur machinery wastage heatmaps ek screen par monitor karein." },
+  { icon: UsersRound, title: "Worker Settlement ('Hisab')", text: "Daily present/absent sheets maintain karein, advance payments debit karein aur auto worker credit summary settle karein." },
+  { icon: FileText, title: "E-Invoicing", text: "Invoices, GST billing receipts, customer outstanding balances, aur account credit logs maintain karein." },
+  { icon: BellRing, title: "Automated Outstanding Reminders", text: "High outstanding customer accounts ko automatic payment reminders aur direct ledger links dispatch karein." },
+  { icon: TrendingUp, title: "Yield Cost Calculation", text: "BOM paper roll punch yields aur machine shift outputs ke base par dynamic raw wastage cost evaluate karein." }
 ];
 
 const industries = ["Paper Cup Manufacturing", "Paper Glass Manufacturing", "Disposable Packaging Units"];
@@ -56,18 +56,18 @@ const industries = ["Paper Cup Manufacturing", "Paper Glass Manufacturing", "Dis
 const positioningCards = [
   {
     icon: Factory,
-    title: "Machinery Friendly ERP",
-    text: "For production units where machine-wise output, wastage and daily performance matter."
+    title: "Live Telemetry & OEE ERP",
+    text: "For production units where machine speed, mould change logs, and daily floor halts matter."
   },
   {
     icon: PackageCheck,
-    title: "Paper Cup Ready",
-    text: "Pre-configured workflows for paper cup, paper glass, raw material, bottom roll, packing and dispatch."
+    title: "Paper Cup & Disposable Ready",
+    text: "Pre-configured workflows for blanks, bottom roll, packaging consumables, dispatch, and AI supervisor bot."
   },
   {
     icon: BarChart3,
-    title: "AI Powered Reports",
-    text: "Production trends, payment reminders, inventory alerts and business insights in one dashboard."
+    title: "Interactive AI BI Dashboard",
+    text: "Financial cost breakdowns, sales collection gap analyses, stock TTL predictions, and floor OEE metrics in one place."
   }
 ];
 
@@ -208,7 +208,7 @@ export default function LandingPage() {
 
           <img
             className="mt-6 block w-full rounded-2xl object-cover object-top shadow-2xl shadow-orange-100 md:hidden"
-            src={mobileHeroImage}
+            src={heroImage}
             alt="Munshi AI robot working inside a factory office"
           />
         </div>

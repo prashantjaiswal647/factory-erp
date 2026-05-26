@@ -38,6 +38,7 @@ from models import (
     AttendanceLog,
     BlankStock,
     BottomStock,
+    ActivityLog,
     BoxStock,
     Customer,
     CustomerActivity,
@@ -83,9 +84,6 @@ from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
 from routers import machine_templates
-#from routers.ai_invoice import CalculateDraftRequest, InvoiceDraftItem, calculate_draft
-#from routers.ai_invoice import router as ai_invoice_router
-#from routers.internal_automation import router as internal_automation_router
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 
@@ -502,6 +500,7 @@ class StoreCheckoutRequest(BaseModel):
     items: List[StoreCheckoutItem] = Field(..., min_length=1)
     payment_method: str
     terms_accepted: bool
+    utr_transaction_id: Optional[str] = None
 
 class StoreCheckoutItemResponse(BaseModel):
     product_id: int
@@ -693,6 +692,10 @@ def ensure_runtime_schema():
     statements = [
         "CREATE TABLE IF NOT EXISTS factories (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL UNIQUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS google_sheet_id VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS gst_number VARCHAR(50)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS address_place VARCHAR(255)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS initial_invoice_number INTEGER DEFAULT 1",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS current_invoice_counter INTEGER DEFAULT 1",
         f"INSERT INTO factories (name) VALUES ('{default_factory_name}') ON CONFLICT (name) DO NOTHING",
         "CREATE TABLE IF NOT EXISTS factory_automation_sheets (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, sheet_name VARCHAR(255) NOT NULL, sheet_type VARCHAR(50) NOT NULL DEFAULT 'cron_automation', google_sheet_url VARCHAR(500), google_sheet_id VARCHAR(255) NOT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
         "CREATE INDEX IF NOT EXISTS idx_factory_automation_sheets_factory_id ON factory_automation_sheets(factory_id)",
@@ -703,7 +706,16 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_customer_id ON invoice_documents(customer_id)",
         "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
         "ALTER TABLE attendance_logs DROP CONSTRAINT IF EXISTS ck_attendance_logs_duty_hours_positive",
-        "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_duty_hours_positive CHECK (duty_hours > 0)"
+        "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_duty_hours_positive CHECK (duty_hours > 0)",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS advance_payment_discount_percentage NUMERIC(5, 2) DEFAULT 2.00",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS utr_transaction_id VARCHAR(50)",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_payment_verified BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_status",
+        "ALTER TABLE orders ADD CONSTRAINT ck_orders_status CHECK (status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected', 'Received'))",
+        "CREATE TABLE IF NOT EXISTS activity_logs (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, event_type VARCHAR(50) NOT NULL, description TEXT NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
+        "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_created ON activity_logs (factory_id, created_at DESC)",
+        "ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS ck_activity_logs_event_type",
+        "ALTER TABLE activity_logs ADD CONSTRAINT ck_activity_logs_event_type CHECK (event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry'))"
     ]
     with engine.begin() as connection:
         for stmt in statements: connection.execute(text(stmt))
@@ -823,6 +835,223 @@ def on_startup():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+class CustomerVerificationRequest(BaseModel):
+    store_token: str
+    phone_number: str
+
+class CustomerVerificationResponse(BaseModel):
+    status: str
+    message: str
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+
+@app.post("/api/store/verify-customer", response_model=CustomerVerificationResponse)
+def verify_customer_storefront(payload: CustomerVerificationRequest, db: Session = Depends(get_db)):
+    customer = db.query(Customer).filter(
+        or_(Customer.store_token == payload.store_token, Customer.portal_access_token == payload.store_token)
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Store token invalid or not registered.")
+        
+    input_phone = payload.phone_number.strip().replace(" ", "").replace("-", "")
+    if not input_phone:
+        raise HTTPException(status_code=400, detail="Mobile number is required.")
+        
+    reg_phone = (customer.phone_number or "").strip().replace(" ", "").replace("-", "")
+    reg_contact = (customer.contact_number or "").strip().replace(" ", "").replace("-", "")
+    reg_phone_alt = (customer.phone or "").strip().replace(" ", "").replace("-", "")
+    
+    match_found = False
+    for r_phone in [reg_phone, reg_contact, reg_phone_alt]:
+        if not r_phone:
+            continue
+        if input_phone == r_phone or (len(input_phone) >= 10 and len(r_phone) >= 10 and input_phone[-10:] == r_phone[-10:]):
+            match_found = True
+            break
+            
+    if not match_found:
+        raise HTTPException(status_code=403, detail="Distributor verification failed. Mobile number is not mapped to this store account.")
+        
+    return CustomerVerificationResponse(
+        status="success",
+        message="Verification successful",
+        customer_id=customer.id,
+        customer_name=customer.name
+    )
+
+@app.get("/api/storefront/{storeToken}", response_model=StorefrontResponse)
+def get_storefront_details(storeToken: str, db: Session = Depends(get_db)):
+    customer = db.query(Customer).filter(
+        or_(Customer.store_token == storeToken, Customer.portal_access_token == storeToken)
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Storefront not found")
+        
+    factory = db.query(Factory).filter(Factory.id == customer.factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="Factory not found")
+        
+    discount = getattr(factory, "advance_payment_discount_percentage", Decimal("2.00"))
+    if discount is None:
+        discount = Decimal("2.00")
+        
+    products_db = db.query(FinishedGoodsStock).filter(FinishedGoodsStock.factory_id == str(customer.factory_id)).all()
+    
+    storefront_products = []
+    for p in products_db:
+        latest_costing = db.query(CostingOutputMaster).filter(
+            CostingOutputMaster.factory_id == str(customer.factory_id),
+            CostingOutputMaster.product_cup_size_ml == p.cup_size_ml
+        ).order_by(CostingOutputMaster.created_at.desc()).first()
+        
+        if latest_costing and latest_costing.selling_price_per_box:
+            base_price = latest_costing.selling_price_per_box
+        else:
+            base_price = Decimal("250.00")
+            
+        availability = "In Stock" if p.boxes_available > 10 else ("Low Stock" if p.boxes_available > 0 else "Out of Stock")
+        
+        storefront_products.append(StorefrontProduct(
+            product_id=p.id,
+            cup_size_ml=p.cup_size_ml,
+            packaging_profile_name=p.packaging_profile.profile_name if p.packaging_profile else f"{p.cup_size_ml}ml Product",
+            availability_status=availability,
+            base_price=base_price,
+            image_url=p.packaging_profile.image_url if p.packaging_profile else None,
+            print_design_name=p.packaging_profile.print_design_name if p.packaging_profile else None
+        ))
+        
+    return StorefrontResponse(
+        customer_id=customer.id,
+        customer_name=customer.name,
+        contact_number=customer.phone_number or customer.contact_number,
+        advance_discount_pct=float(discount),
+        terms_and_conditions="Advance payment receives a direct cash discount on order checkout totals.",
+        products=storefront_products
+    )
+
+@app.post("/api/storefront/{storeToken}/order", response_model=StoreCheckoutResponse)
+def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: Session = Depends(get_db)):
+    customer = db.query(Customer).filter(
+        or_(Customer.store_token == storeToken, Customer.portal_access_token == storeToken)
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Storefront not found")
+        
+    factory = db.query(Factory).filter(Factory.id == customer.factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="Factory not found")
+        
+    discount_pct = getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00")
+    if payload.payment_method != "Full_Advance_UPI":
+        discount_pct = Decimal("0.00")
+        
+    order_items_response = []
+    total_base_amount = Decimal("0.00")
+    total_final_amount = Decimal("0.00")
+    
+    db_items = []
+    for item in payload.items:
+        stock = db.query(FinishedGoodsStock).filter(
+            FinishedGoodsStock.id == item.product_id,
+            FinishedGoodsStock.factory_id == str(customer.factory_id)
+        ).first()
+        if not stock:
+            raise HTTPException(status_code=400, detail="Product not found in this factory scope")
+            
+        latest_costing = db.query(CostingOutputMaster).filter(
+            CostingOutputMaster.factory_id == str(customer.factory_id),
+            CostingOutputMaster.product_cup_size_ml == stock.cup_size_ml
+        ).order_by(CostingOutputMaster.created_at.desc()).first()
+        
+        if latest_costing and latest_costing.selling_price_per_box:
+            base_price = latest_costing.selling_price_per_box
+        else:
+            base_price = Decimal("250.00")
+            
+        final_price = base_price
+        if payload.payment_method == "Full_Advance_UPI":
+            final_price = base_price * (Decimal("1") - (discount_pct / Decimal("100")))
+            
+        line_total = final_price * Decimal(item.quantity)
+        total_base_amount += base_price * Decimal(item.quantity)
+        total_final_amount += line_total
+        
+        order_items_response.append(StoreCheckoutItemResponse(
+            product_id=stock.id,
+            packaging_profile_name=stock.packaging_profile.profile_name if stock.packaging_profile else f"{stock.cup_size_ml}ml Product",
+            quantity=item.quantity,
+            base_rate=to_money(base_price),
+            final_rate=to_money(final_price),
+            line_total=to_money(line_total)
+        ))
+        
+        db_items.append(OrderItem(
+            factory_id=str(customer.factory_id),
+            product_id=stock.id,
+            quantity=item.quantity,
+            base_rate=base_price,
+            final_rate=final_price,
+            product_size_ml=stock.cup_size_ml,
+            variety=stock.packaging_profile.print_design_name if stock.packaging_profile else None,
+            packaging_size_name=stock.packaging_profile.box_size_name if stock.packaging_profile else None,
+            boxes_sold=item.quantity,
+            rate_per_box=final_price
+        ))
+        
+    discount_amount = total_base_amount - total_final_amount
+    previous_balance = customer.balance_amount or Decimal("0.00")
+    
+    db_order = Order(
+        factory_id=str(customer.factory_id),
+        customer_id=customer.id,
+        status="Received",
+        payment_method=payload.payment_method,
+        total_amount=total_final_amount,
+        amount_paid=total_final_amount if payload.payment_method == "Full_Advance_UPI" else Decimal("0.00"),
+        balance_amount=Decimal("0.00") if payload.payment_method == "Full_Advance_UPI" else total_final_amount,
+        payment_status="Paid" if payload.payment_method == "Full_Advance_UPI" else "Unpaid",
+        pending_amount=Decimal("0.00") if payload.payment_method == "Full_Advance_UPI" else total_final_amount,
+        terms_accepted=payload.terms_accepted,
+        utr_transaction_id=getattr(payload, "utr_transaction_id", None),
+        is_payment_verified=False
+    )
+    
+    db.add(db_order)
+    db.flush()
+    
+    for db_item in db_items:
+        db_item.order_id = db_order.id
+        db.add(db_item)
+        
+    if payload.payment_method == "Normal_Credit":
+        customer.balance_amount = previous_balance + total_final_amount
+
+    activity = ActivityLog(
+        factory_id=customer.factory_id,
+        event_type="payment",
+        description=f"Distributor storefront checkout: {customer.name} placed Order #{db_order.id} for ₹{total_final_amount:,.2f} ({payload.payment_method})"
+    )
+    db.add(activity)
+
+    db.commit()
+    db.refresh(db_order)
+    db.refresh(customer)
+    
+    return StoreCheckoutResponse(
+        message="Order placed successfully",
+        order_id=db_order.id,
+        status=db_order.status,
+        payment_method=payload.payment_method,
+        discount_pct=discount_pct,
+        discount_amount=to_money(discount_amount),
+        total_amount=to_money(total_final_amount),
+        previous_balance=to_money(previous_balance),
+        new_total_balance=to_money(customer.balance_amount),
+        items=order_items_response
+    )
+
 
 @app.post("/token", response_model=TokenResponse)
 @app.post("/api/auth/token", response_model=TokenResponse)

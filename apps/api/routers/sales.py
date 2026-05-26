@@ -18,7 +18,7 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.invoice_pdf import build_invoice_pdf_bytes
@@ -604,6 +604,17 @@ def add_sale_invoice(
     factory_id = factory_id_text(current_user.factory_id)
 
     try:
+        # Get factory to lock and retrieve counter safely
+        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+        invoice_num = payload.legal_invoice_number
+        if not invoice_num:
+            if factory:
+                cnt = factory.current_invoice_counter or factory.initial_invoice_number or 1
+                invoice_num = str(cnt)
+                factory.current_invoice_counter = cnt + 1
+            else:
+                invoice_num = str(datetime.now(timezone.utc).timestamp())
+
         customer = (
             db.query(Customer)
             .filter(factory_id_filter(Customer.factory_id, factory_id))
@@ -763,6 +774,13 @@ def add_sale_invoice(
                 packaging_size_name=item.packaging_size_name,
             )
 
+        activity = ActivityLog(
+            factory_id=int(factory_id),
+            event_type="payment",
+            description=f"Generated sales invoice #{invoice_num} for customer {customer.name}: Bill total ₹{current_bill_amount:,.2f}, Paid ₹{payload.amount_paid:,.2f}"
+        )
+        db.add(activity)
+
         db.commit()
 
         google_spreadsheet_id = resolve_factory_google_sheet_id(db, factory_id)
@@ -775,14 +793,15 @@ def add_sale_invoice(
             "action": "insert",
             "document_policy": {
                 "legal_invoice_type": payload.legal_invoice_type,
-                "legal_invoice_number": payload.legal_invoice_number or str(sale_ids[0] if sale_ids else ""),
+                "legal_invoice_number": invoice_num,
                 "rough_bill_enabled": payload.rough_bill_enabled,
-                "rough_bill_number": payload.rough_bill_number or f"RB-{sale_ids[0] if sale_ids else 'pending'}",
+                "rough_bill_number": payload.rough_bill_number or f"RB-{invoice_num}",
                 "rough_bill_label": "Customer Understanding Bill",
                 "rough_bill_disclaimer": "Internal customer understanding and rate settlement document. Not a government tax invoice.",
             },
             "invoice": {
-                "invoice_id": sale_ids[0] if sale_ids else None,
+                "invoice_id": invoice_num,
+                "invoice_type": payload.legal_invoice_type,
                 "sale_ids": sale_ids,
                 "invoice_date": payload.date,
                 "customer_id": customer.id,
@@ -1387,6 +1406,13 @@ def approve_sales_order(
                 variety=item.variety,
                 packaging_size_name=item.packaging_size_name,
             )
+
+        activity = ActivityLog(
+            factory_id=current_user.factory_id,
+            event_type="payment",
+            description=f"Approved Storefront Order #{order.id} for customer {order.customer.name if order.customer else 'N/A'}: Bill Total ₹{order.total_amount:,.2f}"
+        )
+        db.add(activity)
 
         db.commit()
     except HTTPException:

@@ -10,6 +10,7 @@ type AuthUser = {
   id?: number;
   user_id?: string | null;
   username: string;
+  name?: string | null;
   phone_number?: string | null;
   full_name?: string | null;
   role: UserRole;
@@ -136,6 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       id: data.user.id,
       user_id: data.user.user_id,
       username: data.user.username,
+      name: (data.user as any).name || data.user.full_name,
       phone_number: data.user.phone_number,
       full_name: data.user.full_name,
       role,

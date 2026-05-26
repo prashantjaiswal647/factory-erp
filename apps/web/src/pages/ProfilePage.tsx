@@ -6,7 +6,7 @@ import axios from "axios";
 import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
-import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword } from "../lib/api";
+import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
@@ -75,6 +75,44 @@ export default function ProfilePage() {
       }
     } finally {
       setIsChangingPassword(false);
+    }
+  }
+
+  const [factoryProfile, setFactoryProfile] = useState<any>(null);
+  const [isFactorySaving, setIsFactorySaving] = useState(false);
+
+  useEffect(() => {
+    if (user?.role === 'Owner') {
+      void loadFactoryProfile();
+    }
+  }, [user]);
+
+  async function loadFactoryProfile() {
+    try {
+      const response = await getFactoryProfile();
+      setFactoryProfile(response.data);
+    } catch (err) {
+      console.error('Failed to load factory profile:', err);
+    }
+  }
+
+  async function handleFactorySave(event: FormEvent) {
+    event.preventDefault();
+    if (!factoryProfile) return;
+    setIsFactorySaving(true);
+    try {
+      await updateFactoryProfile({
+        factory_name: factoryProfile.factory_name,
+        address: factoryProfile.address || '',
+        gst_number: factoryProfile.gst_number || '',
+        advance_payment_discount_percentage: Number(factoryProfile.advance_payment_discount_percentage || 0)
+      });
+      setToast('Factory Settings saved successfully.');
+      void loadFactoryProfile();
+    } catch {
+      setToast('Failed to save Factory Settings.');
+    } finally {
+      setIsFactorySaving(false);
     }
   }
 
@@ -227,6 +265,70 @@ export default function ProfilePage() {
           ) : null}
         </form>
       </section>
+
+      {user?.role === "Owner" && factoryProfile && (
+        <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">
+            <h2 className="text-lg font-semibold text-zinc-950">Factory B2B Setup & Store Settings</h2>
+            <p className="text-sm text-zinc-500">Configure your disposable factory's commercial settings and private B2B distributor portal parameters.</p>
+          </div>
+          <form className="p-5 space-y-4" onSubmit={handleFactorySave}>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500">Company Name</span>
+                <input
+                  type="text"
+                  className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  value={factoryProfile.factory_name || ""}
+                  onChange={(e) => setFactoryProfile({ ...factoryProfile, factory_name: e.target.value })}
+                  required
+                />
+              </label>
+              <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500">GST Number (GSTIN)</span>
+                <input
+                  type="text"
+                  placeholder="e.g. 07AAAAA1111A1Z1"
+                  className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  value={factoryProfile.gst_number || ""}
+                  onChange={(e) => setFactoryProfile({ ...factoryProfile, gst_number: e.target.value })}
+                />
+              </label>
+              <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500">Advance payment discount percentage (%)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  value={factoryProfile.advance_payment_discount_percentage ?? 2.00}
+                  onChange={(e) => setFactoryProfile({ ...factoryProfile, advance_payment_discount_percentage: e.target.value })}
+                  required
+                />
+              </label>
+              <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500">Factory Address</span>
+                <input
+                  type="text"
+                  className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  value={factoryProfile.address || ""}
+                  onChange={(e) => setFactoryProfile({ ...factoryProfile, address: e.target.value })}
+                />
+              </label>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                type="submit"
+                disabled={isFactorySaving}
+                className="inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-zinc-300 transition"
+              >
+                {isFactorySaving ? "Saving..." : "Save Settings"}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" data-testid="change-password-section">
         <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">

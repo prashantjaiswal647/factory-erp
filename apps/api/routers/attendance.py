@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
-from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker, WorkerOpeningAttendance
+from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker, WorkerOpeningAttendance, ActivityLog
 from schemas import OpeningAttendanceResponse
 
 
@@ -303,6 +303,14 @@ def upsert_attendance(
     log.status = payload.status
     log.is_present = payload.status in ("Present", "Half-day")
     log.production_qty = payload.production_qty
+
+    activity = ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type="attendance",
+        description=f"Attendance of {worker.name} marked as {payload.status} for {payload.date}"
+    )
+    db.add(activity)
+
     db.commit()
     db.refresh(log)
     advance_amount = money(
@@ -338,6 +346,14 @@ def add_worker_advance(
         is_settled=False,
     )
     db.add(advance)
+
+    activity = ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type="payment",
+        description=f"Paid salary advance of ₹{payload.amount:,.2f} to {worker.name}"
+    )
+    db.add(activity)
+
     db.commit()
     db.refresh(advance)
     return {"id": advance.id, "worker_id": worker.id, "date": advance.date, "amount": advance.amount}
@@ -474,6 +490,14 @@ def settle_hisab(
         row.is_settled = True
     for row in advance_rows:
         row.is_settled = True
+
+    activity = ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type="payment",
+        description=f"Settled worker payroll for {worker.name}: Net ₹{preview.net_payable:,.2f} paid"
+    )
+    db.add(activity)
+
     db.commit()
     db.refresh(settlement)
     preview.settlement_id = settlement.id

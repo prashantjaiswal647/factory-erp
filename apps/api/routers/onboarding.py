@@ -45,6 +45,18 @@ from schemas import (
     Step2MachineItem,
     Step2Request,
     Step2Response,
+    CustomerPayload,
+    MachinePayload,
+    MaterialYieldPayload,
+    OnboardingCompleteRequest,
+    OnboardingCompleteResponse,
+    PackagingProfilePayload,
+    RawMaterialPayload,
+    Step1Request,
+    Step1Response,
+    Step2MachineItem,
+    Step2Request,
+    Step2Response,
     Step3PackagingMetricItem,
     Step3RawMaterialMetricItem,
     Step3Request,
@@ -53,11 +65,12 @@ from schemas import (
     PlasticStockCreate,
     WorkerCreate,
     WorkerPayload,
+    FactoryProfileUpdate,
+    FactoryProfileResponse,
     WorkerResponse,
 )
 from services.n8n_sync import sync_data_to_n8n_bg
 from subscription_limits import check_machine_limit, get_machine_limit_usage
-
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 logger = logging.getLogger(__name__)
@@ -172,6 +185,62 @@ class BlankStockCreate(BaseModel):
     size_ml: int = Field(..., gt=0)
     kg_per_sack: Decimal = Field(..., gt=0)
     total_sacks: Decimal = Field(..., ge=0)
+
+
+@router.get("/factory-profile", response_model=FactoryProfileResponse)
+def get_factory_profile(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db)
+):
+    if not current_user.factory_id:
+        raise HTTPException(status_code=404, detail="No factory linked to this user")
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="Factory not found")
+    return FactoryProfileResponse(
+        id=factory.id,
+        factory_name=factory.factory_name or factory.name,
+        address=factory.address,
+        gst_number=getattr(factory, "gst_number", None),
+        initial_invoice_number=getattr(factory, "initial_invoice_number", 1) or 1,
+        current_invoice_counter=getattr(factory, "current_invoice_counter", 1) or 1,
+        advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00")
+    )
+
+@router.post("/factory-profile", response_model=FactoryProfileResponse)
+def update_factory_profile(
+    payload: FactoryProfileUpdate,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db)
+):
+    if not current_user.factory_id:
+        raise HTTPException(status_code=404, detail="No factory linked to this user")
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="Factory not found")
+    
+    factory.factory_name = payload.factory_name.strip()
+    factory.address = payload.address.strip() if payload.address else None
+    factory.gst_number = payload.gst_number.strip() if payload.gst_number else None
+    
+    if payload.initial_invoice_number is not None:
+        factory.initial_invoice_number = payload.initial_invoice_number
+        factory.current_invoice_counter = payload.initial_invoice_number
+        
+    if payload.advance_payment_discount_percentage is not None:
+        factory.advance_payment_discount_percentage = payload.advance_payment_discount_percentage
+        
+    db.commit()
+    db.refresh(factory)
+    return FactoryProfileResponse(
+        id=factory.id,
+        factory_name=factory.factory_name or factory.name,
+        address=factory.address,
+        gst_number=factory.gst_number,
+        initial_invoice_number=factory.initial_invoice_number,
+        current_invoice_counter=factory.current_invoice_counter,
+        advance_payment_discount_percentage=factory.advance_payment_discount_percentage
+    )
 
 
 @router.get("/overview", response_model=OnboardingOverviewResponse)

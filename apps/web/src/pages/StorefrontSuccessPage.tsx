@@ -127,6 +127,61 @@ export default function StorefrontSuccessPage() {
             </div>
           )}
 
+          {/* Order Tracking Pipeline */}
+          <div className="mt-8 border-t border-zinc-200 pt-6">
+            <h3 className="text-sm font-semibold text-zinc-950 uppercase tracking-wider mb-4">Order Dispatch Tracking Pipeline</h3>
+            <div className="relative">
+              {/* Connector line */}
+              <div className="absolute top-5 left-8 right-8 h-0.5 bg-zinc-200 -z-10 hidden sm:block" />
+              
+              <div className="grid gap-6 sm:grid-cols-4">
+                {/* Step 1 */}
+                <div className="flex sm:flex-col items-center gap-3 text-left sm:text-center">
+                  <div className="h-10 w-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shadow ring-4 ring-emerald-100 shrink-0">
+                    ✓
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-900">Order Received</h4>
+                    <p className="text-[10px] text-zinc-500 mt-0.5">We have received your order details successfully.</p>
+                  </div>
+                </div>
+
+                {/* Step 2 */}
+                <div className="flex sm:flex-col items-center gap-3 text-left sm:text-center">
+                  <div className="h-10 w-10 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold shadow ring-4 ring-amber-100 animate-pulse shrink-0">
+                    ➔
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-amber-700 font-bold">Factory Review</h4>
+                    <p className="text-[10px] text-zinc-600 mt-0.5">Owner review pending at the Approval Desk.</p>
+                  </div>
+                </div>
+
+                {/* Step 3 */}
+                <div className="flex sm:flex-col items-center gap-3 text-left sm:text-center">
+                  <div className="h-10 w-10 rounded-full bg-zinc-100 text-zinc-400 border border-zinc-200 flex items-center justify-center font-bold shrink-0">
+                    3
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-400">Manufacturing Queue</h4>
+                    <p className="text-[10px] text-zinc-400 mt-0.5">Raw materials check and mould set-up.</p>
+                  </div>
+                </div>
+
+                {/* Step 4 */}
+                <div className="flex sm:flex-col items-center gap-3 text-left sm:text-center">
+                  <div className="h-10 w-10 rounded-full bg-zinc-100 text-zinc-400 border border-zinc-200 flex items-center justify-center font-bold shrink-0">
+                    4
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-400">Dispatched</h4>
+                    <p className="text-[10px] text-zinc-400 mt-0.5">Order will be handed over to logistics.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-6 flex justify-end">
             <Link
               className="inline-flex h-10 items-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"

@@ -26,6 +26,12 @@ from schemas import (
     BottomStockResponse,
     BoxStockCreate,
     BoxStockResponse,
+    BlankStockBatchCreate,
+    BlankStockResponse,
+    BottomStockCreate,
+    BottomStockResponse,
+    BoxStockCreate,
+    BoxStockResponse,
     CustomerCreate,
     CustomerResponse,
     FactoryInfoCreate,
@@ -34,6 +40,7 @@ from schemas import (
     FinalProductStockResponse,
     MachineCreate,
     MachineResponse,
+    MachineUpdate,
     PolybagStockCreate,
     PolybagStockResponse,
     WorkerCreate,
@@ -111,8 +118,62 @@ def create_machine(
         speed_per_minute=payload.speed_per_minute,
         speed_bpm=payload.speed_per_minute,
         speed_cups_per_minute=payload.speed_per_minute,
+        machine_name=payload.machine_name,
     )
     db.add(machine)
+    db.commit()
+    db.refresh(machine)
+    return machine
+
+
+@router.patch("/machines/{machine_id}", response_model=MachineResponse)
+def update_machine(
+    machine_id: int,
+    payload: MachineUpdate,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    machine = (
+        db.query(Machine)
+        .filter(Machine.id == machine_id)
+        .filter(Machine.factory_id == factory_id)
+        .first()
+    )
+    if machine is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Machine not found or access denied",
+        )
+
+    if payload.machine_type is not None:
+        machine.machine_type = payload.machine_type
+    if payload.machine_number is not None:
+        machine_number = normalize_name(payload.machine_number).upper()
+        existing = (
+            db.query(Machine)
+            .filter(Machine.factory_id == factory_id)
+            .filter(sql_func.lower(Machine.machine_number) == machine_number.lower())
+            .filter(Machine.id != machine_id)
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Machine number already exists")
+        machine.machine_number = machine_number
+        machine.machine_sequence_number = machine_number
+        machine.name = machine_number
+    if payload.mould_size_ml is not None:
+        machine.mould_size_ml = payload.mould_size_ml
+        machine.cup_size_ml = payload.mould_size_ml
+    if payload.bottom_size_mm is not None:
+        machine.bottom_size_mm = payload.bottom_size_mm
+    if payload.speed_per_minute is not None:
+        machine.speed_per_minute = payload.speed_per_minute
+        machine.speed_bpm = payload.speed_per_minute
+        machine.speed_cups_per_minute = payload.speed_per_minute
+    if payload.machine_name is not None or "machine_name" in payload.model_fields_set:
+        machine.machine_name = payload.machine_name
+
     db.commit()
     db.refresh(machine)
     return machine

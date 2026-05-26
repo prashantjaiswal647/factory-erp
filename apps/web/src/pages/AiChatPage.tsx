@@ -227,103 +227,191 @@ export default function AiChatPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-7.5rem)] min-h-[560px] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-      {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-4">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
-            <Sparkles className="h-5 w-5" aria-hidden="true" />
+    <div className="grid h-[calc(100vh-7.5rem)] min-h-[560px] lg:grid-cols-[1fr_320px] overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+      {/* Left Chat Console */}
+      <div className="flex flex-col h-full overflow-hidden border-r border-zinc-200">
+        {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-zinc-950">AI Supervisor</h1>
+              <p className="text-sm text-zinc-500">Posts production, sales, and expenses to the ERP</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-lg font-semibold text-zinc-950">AI Supervisor</h1>
-            <p className="text-sm text-zinc-500">Posts production, sales, and expenses to the ERP</p>
+          <div className="hidden rounded-md border border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 sm:block">
+            Session active
           </div>
         </div>
-        <div className="hidden rounded-md border border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 sm:block">
-          Session active
-        </div>
-      </div>
 
-      <div className="border-b border-zinc-200 bg-white px-5 py-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-zinc-950">Operations / Billing</h2>
-            <p className="text-xs text-zinc-500">Generate and send a storefront order bill.</p>
+        <div className="border-b border-zinc-200 bg-white px-5 py-4 shrink-0">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-950">Operations / Billing</h2>
+              <p className="text-xs text-zinc-500">Generate and send a storefront order bill.</p>
+            </div>
+            {isBillingLoading ? <span className="text-xs font-medium text-zinc-400">Loading...</span> : null}
           </div>
-          {isBillingLoading ? <span className="text-xs font-medium text-zinc-400">Loading...</span> : null}
-        </div>
-        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
-          <label className="block text-sm">
-            <span className="font-medium text-zinc-700">Customer</span>
-            <select
-              className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-              value={selectedCustomerId}
-              onChange={(event) => setSelectedCustomerId(event.target.value)}
+          <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+            <label className="block text-sm">
+              <span className="font-medium text-zinc-700">Customer</span>
+              <select
+                className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                value={selectedCustomerId}
+                onChange={(event) => setSelectedCustomerId(event.target.value)}
+              >
+                <option value="">Select customer</option>
+                {billingCustomers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name} {customer.phone_number ? `- ${customer.phone_number}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-sm">
+              <span className="font-medium text-zinc-700">Recent Order</span>
+              <select
+                className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-50"
+                value={selectedOrderId}
+                onChange={(event) => setSelectedOrderId(event.target.value)}
+                disabled={!selectedCustomerId || billingOrders.length === 0}
+              >
+                <option value="">Select order</option>
+                {billingOrders.map((order) => (
+                  <option key={order.id} value={order.id}>
+                    #{order.id} - Rs {order.total_amount} - {order.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              className="mt-auto inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+              type="button"
+              disabled={!selectedCustomerId || !selectedOrderId || isBillSending}
+              onClick={handleSendBill}
             >
-              <option value="">Select customer</option>
-              {billingCustomers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name} {customer.phone_number ? `- ${customer.phone_number}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+              {isBillSending ? "Sending..." : "Generate & Send Bill"}
+            </button>
+          </div>
+        </div>
 
-          <label className="block text-sm">
-            <span className="font-medium text-zinc-700">Recent Order</span>
-            <select
-              className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-50"
-              value={selectedOrderId}
-              onChange={(event) => setSelectedOrderId(event.target.value)}
-              disabled={!selectedCustomerId || billingOrders.length === 0}
-            >
-              <option value="">Select order</option>
-              {billingOrders.map((order) => (
-                <option key={order.id} value={order.id}>
-                  #{order.id} - Rs {order.total_amount} - {order.status}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="flex-1 space-y-4 overflow-y-auto bg-zinc-50 px-5 py-6">
+          {messages.map((message) => (
+            <ChatBubble key={message.id} message={message} />
+          ))}
 
+          {isThinking ? <ThinkingIndicator /> : null}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <form className="flex gap-3 border-t border-zinc-200 bg-white p-4 shrink-0" onSubmit={handleSubmit}>
+          <input
+            className="h-11 flex-1 rounded-md border border-zinc-200 bg-zinc-50 px-4 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-70"
+            placeholder="Example: Aaj 10 box bane 65ml ke Premium Packing me"
+            type="text"
+            value={inputValue}
+            onChange={(event) => setInputValue(event.target.value)}
+            disabled={isThinking}
+          />
           <button
-            className="mt-auto inline-flex h-10 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
-            type="button"
-            disabled={!selectedCustomerId || !selectedOrderId || isBillSending}
-            onClick={handleSendBill}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-medium text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+            type="submit"
+            disabled={isThinking || !inputValue.trim()}
           >
-            {isBillSending ? "Sending..." : "Generate & Send Bill"}
+            <SendHorizontal className="h-4 w-4" aria-hidden="true" />
+            Send
           </button>
+        </form>
+      </div>
+
+      {/* Right WhatsApp Simulator Column */}
+      <div className="hidden lg:flex flex-col h-full bg-zinc-50 border-l border-zinc-200 overflow-y-auto">
+        <div className="p-4 border-b border-zinc-200 bg-white sticky top-0 z-10">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">💬</span>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-950">WhatsApp Bot Simulator</h3>
+              <p className="text-[10px] text-zinc-500">Test voice & text command templates</p>
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-4 space-y-4">
+          <div className="bg-[#E8F9EE] border border-[#C6F1D6] p-3 rounded-lg text-xs text-[#1E7E34] space-y-1">
+            <p className="font-semibold flex items-center gap-1">🟢 WhatsApp Active</p>
+            <p className="text-[10px] text-[#28a745]">Owner & Supervisors can post data directly by sending text or voice notes.</p>
+          </div>
+
+          <div className="space-y-3">
+            {/* Category 1 */}
+            <div className="space-y-1.5">
+              <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">📦 Production entry</h4>
+              <div className="space-y-2">
+                {[
+                  "Aaj 25 box bane 210ml Printed design me",
+                  "log production: 50 boxes of 65ml plain white cups",
+                  "Machine 1 pr 15 box ban gye 100ml ke"
+                ].map((txt) => (
+                  <button
+                    key={txt}
+                    onClick={() => setInputValue(txt)}
+                    type="button"
+                    className="w-full text-left bg-white p-2.5 rounded border border-zinc-200 hover:border-brand-500 hover:bg-brand-50/20 text-xs text-zinc-700 transition"
+                  >
+                    {txt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Category 2 */}
+            <div className="space-y-1.5 pt-2">
+              <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">👥 Worker Attendance</h4>
+              <div className="space-y-2">
+                {[
+                  "mark attendance: Sunil present, Ramesh half day, Suresh absent",
+                  "Sunil present aaj",
+                  "attendance log: Rajesh present today"
+                ].map((txt) => (
+                  <button
+                    key={txt}
+                    onClick={() => setInputValue(txt)}
+                    type="button"
+                    className="w-full text-left bg-white p-2.5 rounded border border-zinc-200 hover:border-brand-500 hover:bg-brand-50/20 text-xs text-zinc-700 transition"
+                  >
+                    {txt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Category 3 */}
+            <div className="space-y-1.5 pt-2">
+              <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">💰 Expense & Sales</h4>
+              <div className="space-y-2">
+                {[
+                  "add expense Rs 3400 for electricity bill payment",
+                  "log sale of 40 boxes 100ml variety Premium to Ramesh Distributors",
+                  "diesel ka kharcha 1500 add kro"
+                ].map((txt) => (
+                  <button
+                    key={txt}
+                    onClick={() => setInputValue(txt)}
+                    type="button"
+                    className="w-full text-left bg-white p-2.5 rounded border border-zinc-200 hover:border-brand-500 hover:bg-brand-50/20 text-xs text-zinc-700 transition"
+                  >
+                    {txt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto bg-zinc-50 px-5 py-6">
-        {messages.map((message) => (
-          <ChatBubble key={message.id} message={message} />
-        ))}
-
-        {isThinking ? <ThinkingIndicator /> : null}
-        <div ref={messagesEndRef} />
-      </div>
-
-      <form className="flex gap-3 border-t border-zinc-200 bg-white p-4" onSubmit={handleSubmit}>
-        <input
-          className="h-11 flex-1 rounded-md border border-zinc-200 bg-zinc-50 px-4 text-sm outline-none transition placeholder:text-zinc-400 focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-70"
-          placeholder="Example: Aaj 10 box bane 65ml ke Premium Packing me"
-          type="text"
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          disabled={isThinking}
-        />
-        <button
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-medium text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
-          type="submit"
-          disabled={isThinking || !inputValue.trim()}
-        >
-          <SendHorizontal className="h-4 w-4" aria-hidden="true" />
-          Send
-        </button>
-      </form>
     </div>
   );
 }

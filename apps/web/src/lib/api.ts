@@ -86,6 +86,7 @@ export type MachineCreate = {
   mould_size_ml: number;
   bottom_size_mm: number;
   speed_per_minute: number;
+  machine_name?: string;
 };
 
 export type MachineLimitUsage = {
@@ -788,6 +789,34 @@ export function getAiDashboardInsights() {
   return api.get<AiDashboardInsights>("/api/dashboard/ai-insights");
 }
 
+export type FinancialBIStatsRow = {
+  day: string;
+  Sales: number;
+  Collection: number;
+  Expense: number;
+};
+
+export type CostBreakdownRow = {
+  name: string;
+  value: number;
+  color: string;
+};
+
+export type WastageBIRow = {
+  machine: string;
+  wastage: number;
+};
+
+export type AnalyticsBIResponse = {
+  financial_data: FinancialBIStatsRow[];
+  cost_breakdown: CostBreakdownRow[];
+  wastage_data: WastageBIRow[];
+};
+
+export function getDashboardAnalytics() {
+  return api.get<AnalyticsBIResponse>("/api/dashboard/analytics");
+}
+
 export function createDailySale(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/invoice", payload);
 }
@@ -928,6 +957,58 @@ export function getOnboardingOverview() {
   return api.get<OnboardingOverview>("/api/onboarding/overview");
 }
 
+export type FactoryProfile = {
+  id: number;
+  factory_name: string;
+  address?: string;
+  gst_number?: string;
+  initial_invoice_number: number;
+  current_invoice_counter: number;
+  advance_payment_discount_percentage?: number;
+};
+
+export type FactoryProfileUpdate = {
+  factory_name: string;
+  address?: string;
+  gst_number?: string;
+  initial_invoice_number?: number;
+  advance_payment_discount_percentage?: number;
+};
+
+export function getFactoryProfile() {
+  return api.get<FactoryProfile>("/api/onboarding/factory-profile");
+}
+
+export function updateFactoryProfile(payload: FactoryProfileUpdate) {
+  return api.post<FactoryProfile>("/api/onboarding/factory-profile", payload);
+}
+
+export type CustomerVerificationResponse = {
+  status: string;
+  message: string;
+  customer_id?: number;
+  customer_name?: string;
+};
+
+export function verifyStorefrontCustomer(store_token: string, phone_number: string) {
+  return api.post<CustomerVerificationResponse>("/api/store/verify-customer", {
+    store_token,
+    phone_number
+  });
+}
+
+export function getAccountantSummary(month: number, year: number, download: boolean = false) {
+  if (download) {
+    return api.get(`/api/sales/invoices/accountant-summary`, {
+      params: { month, year, download },
+      responseType: "blob"
+    });
+  }
+  return api.get(`/api/sales/invoices/accountant-summary`, {
+    params: { month, year }
+  });
+}
+
 export function getDashboardWorkers() {
   return api.get<DashboardWorker[]>("/api/onboarding/workers");
 }
@@ -946,6 +1027,10 @@ export function getDashboardCustomers() {
 
 export function deleteDashboardMachine(id: number) {
   return api.delete(`/api/onboarding/machine/${id}`);
+}
+
+export function updateMachine(machineId: number, payload: Partial<MachineCreate>) {
+  return api.patch(`/api/setup/machines/${machineId}`, payload);
 }
 
 export function deleteDashboardWorker(id: number) {
@@ -1356,5 +1441,30 @@ export function deleteOnboardingEntry(entryId: string, type?: string) {
   return api.delete(`/api/onboarding/entry/${entryId}`, {
     params: type ? { type } : undefined
   });
+}
+
+export type ActivityLog = {
+  id: number;
+  factory_id: number;
+  event_type: "production" | "attendance" | "expense" | "payment" | "machine_telemetry";
+  description: string;
+  created_at: string;
+};
+
+export function getOperationsSequence(dateString?: string) {
+  const url = dateString ? `/api/operations/sequence?date=${dateString}` : "/api/operations/sequence";
+  return api.get<ActivityLog[]>(url);
+}
+
+export function createManualActivityLog(payload: { event_type: string; description: string }) {
+  return api.post<ActivityLog>("/api/operations/sequence", payload);
+}
+
+export function updateActivityLog(logId: number, payload: { event_type: string; description: string }) {
+  return api.put<ActivityLog>(`/api/operations/sequence/${logId}`, payload);
+}
+
+export function deleteActivityLog(logId: number) {
+  return api.delete(`/api/operations/sequence/${logId}`);
 }
 

@@ -75,6 +75,11 @@ class Factory(Base):
     token_limit = Column(Integer, nullable=True)
     admin_note = Column(Text, nullable=True)
     google_sheet_id = Column(String(255), nullable=True)
+    gst_number = Column(String(50), nullable=True)
+    address_place = Column(String(255), nullable=True)
+    initial_invoice_number = Column(Integer, default=1, server_default="1")
+    current_invoice_counter = Column(Integer, default=1, server_default="1")
+    advance_payment_discount_percentage = Column(Numeric(5, 2), nullable=False, default=2.00, server_default="2.00")
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")
@@ -885,12 +890,14 @@ class Order(TenantMixin, Base):
     terms_accepted = Column(Boolean, nullable=False, default=False)
     is_discount_revoked = Column(Boolean, nullable=False, default=False, server_default="false")
     owner_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    utr_transaction_id = Column(String(50), nullable=True)
+    is_payment_verified = Column(Boolean, nullable=False, default=False, server_default="false")
 
     customer = relationship("Customer", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
 
     __table_args__ = (
-        CheckConstraint("status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected')", name="ck_orders_status"),
+        CheckConstraint("status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected', 'Received')", name="ck_orders_status"),
         CheckConstraint(
             "payment_method IN ('Normal_Credit', 'Full_Advance_UPI', 'Full_Advance_Doorstep')",
             name="ck_orders_payment_method",
@@ -1206,4 +1213,20 @@ class Payment(TenantMixin, Base):
     __table_args__ = (
         CheckConstraint("amount_paid > 0", name="ck_payments_amount_paid_positive"),
         CheckConstraint("payment_mode IN ('Cash', 'UPI', 'Bank Transfer')", name="ck_payments_mode_valid"),
+    )
+
+
+class ActivityLog(TenantMixin, Base):
+    __tablename__ = "activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String(50), nullable=False, index=True)  # production, attendance, expense, payment, machine_telemetry
+    description = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry')",
+            name="ck_activity_logs_event_type",
+        ),
     )

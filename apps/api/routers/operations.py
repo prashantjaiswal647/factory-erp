@@ -23,7 +23,9 @@ from models import (
     Worker,
     Payment,
     MaterialYield,
+    ActivityLog,
 )
+from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.n8n_sync import sync_data_to_n8n_bg
@@ -103,6 +105,14 @@ def mark_worker_present_for_production(
     )
     db.add(attendance_log)
     db.flush()
+
+    activity = ActivityLog(
+        factory_id=int(factory_id),
+        event_type="attendance",
+        description=f"System automatically marked attendance Present for {worker.name} (linked to production)"
+    )
+    db.add(activity)
+
     print("Automatic attendance marked Present for production worker:", attendance_log.id)
     return attendance_log
 
@@ -401,6 +411,13 @@ def create_daily_production(
             variety=variety,
             packaging_size_name=packaging_size_name,
         )
+
+        activity = ActivityLog(
+            factory_id=int(factory_id),
+            event_type="production",
+            description=f"Recorded daily production: {payload.total_boxes_made} boxes & {payload.loose_packets_made} loose packets of {product_size_ml}ml cups made by {worker.name} on machine {machine.name or machine.machine_number}"
+        )
+        db.add(activity)
 
         db.commit()
         db.refresh(production)

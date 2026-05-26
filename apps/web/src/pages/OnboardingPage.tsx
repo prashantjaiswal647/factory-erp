@@ -1,8 +1,9 @@
 import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog } from "../lib/api";
 import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
+import { EditMachineModal } from "../components/EditMachineModal";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
@@ -19,7 +20,8 @@ const machineDraft: MachineCreate = {
   machine_number: "",
   mould_size_ml: 210,
   bottom_size_mm: 68,
-  speed_per_minute: 55
+  speed_per_minute: 55,
+  machine_name: ""
 };
 type DynamicField = { label: string; value: string; source: "template" | "custom" };
 
@@ -44,6 +46,18 @@ export default function OnboardingPage() {
   const [machines, setMachines] = useState<MachineCreate[]>([]);
   const [machineTemplates, setMachineTemplates] = useState<MachineTemplateRecord[]>([]);
   const [dynamicMachineFields, setDynamicMachineFields] = useState<DynamicField[]>([]);
+  const [savedMachines, setSavedMachines] = useState<any[]>([]);
+  const [editingMachine, setEditingMachine] = useState<any | null>(null);
+  const [telemetryStates, setTelemetryStates] = useState<Record<number, {
+    status: "Running" | "Stopped";
+    speed: number;
+    actualProduction: number;
+    downtimeReason: string;
+    activeMould: number;
+    mouldLogs: Array<{ mould: number; timestamp: string }>;
+    downtimeLogs: Array<{ reason: string; timestamp: string }>;
+    expanded: boolean;
+  }>>({});
   const [blankStock, setBlankStock] = useState(blankStockDraft);
   const [bottomStock, setBottomStock] = useState(bottomStockDraft);
   const [boxStock, setBoxStock] = useState<BoxPackagingStockCreate>(boxStockDraft);
@@ -66,11 +80,45 @@ export default function OnboardingPage() {
   const [customPacketsPerBox, setCustomPacketsPerBox] = useState(10);
   const [initialQuantity, setInitialQuantity] = useState(0);
 
+  // Company Profile states
+  const [companyName, setCompanyName] = useState("");
+  const [companyAddress, setCompanyAddress] = useState("");
+  const [companyGST, setCompanyGST] = useState("");
+  const [startingInvoiceNum, setStartingInvoiceNum] = useState(1);
+  const [advanceDiscountNum, setAdvanceDiscountNum] = useState(2.00);
+
   useEffect(() => {
     void loadFinalProducts();
     void loadMachineUsage();
     void loadMachineTemplates();
-  }, []);
+    void loadSavedMachines();
+    
+    async function loadFactoryProfile() {
+      try {
+        const response = await getFactoryProfile();
+        const profile = response.data;
+        if (profile) {
+          setCompanyName(profile.factory_name || "");
+          setCompanyAddress(profile.address || "");
+          setCompanyGST(profile.gst_number || "");
+          setStartingInvoiceNum(profile.initial_invoice_number || 1);
+          setAdvanceDiscountNum(profile.advance_payment_discount_percentage || 2.00);
+        }
+      } catch (err) {
+        console.error("Failed to load factory profile:", err);
+      }
+    }
+    void loadFactoryProfile();
+  }, [user]);
+
+  async function loadSavedMachines() {
+    try {
+      const response = await getOnboardingOverview();
+      setSavedMachines(response.data.machines || []);
+    } catch (err) {
+      console.error("Failed to load saved machines:", err);
+    }
+  }
 
   useEffect(() => {
     applyTemplateFields(machine.machine_type);
@@ -230,6 +278,7 @@ export default function OnboardingPage() {
       setToast("Machines saved");
       setStep(2);
       await loadMachineUsage();
+      await loadSavedMachines();
     } catch (caught) {
       console.error("Failed to save machines during onboarding:", caught);
       setToast("Machine save failed.");
@@ -357,6 +406,30 @@ export default function OnboardingPage() {
     }
   }
 
+  async function saveCompanyProfile() {
+    if (!companyName.trim()) {
+      setToast("Company Name is required.");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await updateFactoryProfile({
+        factory_name: companyName.trim(),
+        address: companyAddress.trim(),
+        gst_number: companyGST.trim(),
+        initial_invoice_number: startingInvoiceNum,
+        advance_payment_discount_percentage: Number(advanceDiscountNum || 0)
+      });
+      setToast("Company Profile saved successfully");
+      setStep(1); // Proceed to Workers
+    } catch (err) {
+      console.error("Failed to save factory profile:", err);
+      setToast("Failed to save Company Profile.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   function updateBottomStock(patch: Partial<typeof bottomStockDraft>) {
     const previousSuggestedRolls = (bottomStock.rolls_per_bag || 0) * (bottomStock.total_bags || 0);
     const previousSuggestedWeight = Number(((bottomStock.bag_weight_kg || 0) * (bottomStock.total_bags || 0)).toFixed(3));
@@ -387,8 +460,8 @@ export default function OnboardingPage() {
 
       <ConfigurationOverview />
 
-      <div className="grid gap-3 md:grid-cols-4">
-        {["Workers", "Machines", "Raw Materials", "Final Product Stock"].map((label, index) => (
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
+        {["Company Profile", "Workers", "Machines", "Raw Materials", "Final Product Stock"].map((label, index) => (
           <button
             key={label}
             className={`flex h-12 items-center justify-center rounded-md border text-sm font-semibold ${
@@ -403,6 +476,53 @@ export default function OnboardingPage() {
       </div>
 
       {step === 0 ? (
+        <Panel icon={Factory} title="Company Profile Details">
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-500">
+              Set up your factory profile and default invoice preferences. These details are used to auto-generate beautiful GST Invoices and Bill of Supply documents.
+            </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <TextInput
+                label="Company / Factory Name"
+                placeholder="e.g. Maruti Disposable Products"
+                value={companyName}
+                onChange={setCompanyName}
+              />
+              <TextInput
+                label="GST Number (GSTIN) - Optional"
+                placeholder="e.g. 07AAAAA1111A1Z1"
+                value={companyGST}
+                onChange={setCompanyGST}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <TextInput
+                label="Factory Address / Place"
+                placeholder="e.g. Wazirpur Industrial Area, New Delhi"
+                value={companyAddress}
+                onChange={setCompanyAddress}
+              />
+              <NumberInput
+                label="Starting Invoice Number Counter"
+                value={startingInvoiceNum}
+                onChange={setStartingInvoiceNum}
+              />
+              <NumberInput
+                label="Advance UPI Discount (%)"
+                value={advanceDiscountNum}
+                onChange={setAdvanceDiscountNum}
+              />
+            </div>
+            <SaveButton
+              label="Save Company Profile"
+              isSaving={isSaving}
+              onClick={saveCompanyProfile}
+            />
+          </div>
+        </Panel>
+      ) : null}
+
+      {step === 1 ? (
         <Panel icon={UserRound} title="Worker">
           <div className="grid gap-3 md:grid-cols-3">
             <TextInput label="Name" value={worker.name} onChange={(name) => setWorker({ ...worker, name })} />
@@ -557,7 +677,7 @@ export default function OnboardingPage() {
         </Panel>
       ) : null}
 
-      {step === 1 ? (
+      {step === 2 ? (
         <Panel icon={Factory} title="Machines">
           {machineUsage ? (
             <div className={`mb-4 rounded-md border px-4 py-3 text-sm ${machineUsage.limit_reached ? "border-red-200 bg-red-50 text-red-700" : machineUsage.nearing_limit ? "border-amber-200 bg-amber-50 text-amber-800" : "border-zinc-200 bg-zinc-50 text-zinc-600"}`}>
@@ -566,16 +686,17 @@ export default function OnboardingPage() {
                 : `Machine usage: ${machineUsage.used}/${machineUsage.limit}`}
             </div>
           ) : null}
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-6">
             <TextInput label="Machine no." value={machine.machine_number} onChange={(machine_number) => setMachine({ ...machine, machine_number })} />
             <SelectInput label="Type" value={machine.machine_type} options={["Paper Cup", "Dona", "Paper Bag"]} onChange={(machine_type) => {
               const nextType = machine_type as MachineCreate["machine_type"];
               setMachine({ ...machine, machine_type: nextType });
               applyTemplateFields(nextType);
             }} />
+            <TextInput label="Machine Name (Optional)" placeholder="e.g., 100ml-Coffee-A" value={machine.machine_name || ""} onChange={(machine_name) => setMachine({ ...machine, machine_name })} />
             <NumberInput label="Mould ml" value={machine.mould_size_ml} onChange={(mould_size_ml) => setMachine({ ...machine, mould_size_ml })} />
             <NumberInput label="Bottom mm" value={machine.bottom_size_mm} onChange={(bottom_size_mm) => setMachine({ ...machine, bottom_size_mm })} />
-            <NumberInput label="Speed/min" value={machine.speed_per_minute} onChange={(speed_per_minute) => setMachine({ ...machine, speed_per_minute })} />
+            <NumberInput label="Designed Optimal Speed (RPM)" value={machine.speed_per_minute} onChange={(speed_per_minute) => setMachine({ ...machine, speed_per_minute })} />
           </div>
           <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-4">
             <div className="flex items-center justify-between gap-3">
@@ -629,11 +750,11 @@ export default function OnboardingPage() {
                 if (!machine.machine_number.trim()) return;
                 if (machineUsage && machineUsage.used + machines.length >= machineUsage.limit) {
                   showUpgradeModal({
-                    code: "UPGRADE_REQUIRED",
-                    message: `You have reached your limit of ${machineUsage.limit} machines.`,
-                    used: machineUsage.used,
-                    limit: machineUsage.limit,
-                    plan: machineUsage.plan
+                     code: "UPGRADE_REQUIRED",
+                     message: `You have reached your limit of ${machineUsage.limit} machines.`,
+                     used: machineUsage.used,
+                     limit: machineUsage.limit,
+                     plan: machineUsage.plan
                   });
                   return;
                 }
@@ -646,11 +767,271 @@ export default function OnboardingPage() {
             </button>
             <SaveButton label="Save Machines" isSaving={isSaving} disabled={Boolean(machineUsage?.limit_reached)} onClick={saveMachines} />
           </div>
-          <List rows={machines.map((row) => `${row.machine_number} / ${row.mould_size_ml}ml / ${row.speed_per_minute} per min`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
+          <List rows={machines.map((row) => `${row.machine_number}${row.machine_name ? ` (${row.machine_name})` : ""} / ${row.mould_size_ml}ml / ${row.speed_per_minute} per min`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
+
+          {savedMachines.length > 0 && (
+            <div className="mt-6 border-t border-zinc-100 pt-6">
+              <h3 className="text-sm font-semibold text-zinc-950 mb-3">Saved Machines ({savedMachines.length})</h3>
+              <div className="space-y-4">
+                {savedMachines.map((m) => {
+                  const optimalSpeed = m.speed_per_minute || 55;
+                  const expectedTarget = optimalSpeed * 60 * 8; // 8 hours expected output
+
+                  const state = telemetryStates[m.id] || {
+                    status: "Running",
+                    speed: optimalSpeed,
+                    actualProduction: 22000,
+                    downtimeReason: "",
+                    activeMould: m.mould_size_ml || 210,
+                    mouldLogs: [],
+                    downtimeLogs: [],
+                    expanded: false
+                  };
+
+                  const actualCups = state.status === "Stopped" ? 0 : (state.actualProduction !== undefined ? state.actualProduction : 22000);
+                  const oeeScore = expectedTarget > 0 ? Math.min(100, Math.round((actualCups / expectedTarget) * 100)) : 0;
+                  const currentSpeedRPM = state.status === "Stopped" ? 0 : Math.round(actualCups / (60 * 8));
+
+                  return (
+                    <div key={m.id} className="rounded-lg border border-zinc-200 bg-white p-4 transition shadow-sm hover:border-zinc-300">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-zinc-800 flex items-center gap-2">
+                            {m.machine_number || m.machine_sequence_number || `Machine ${m.id}`}
+                            {m.machine_name ? ` (${m.machine_name})` : ""}
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              state.status === "Running" ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                            }`}>
+                              {state.status}
+                            </span>
+                          </span>
+                          <span className="text-xs text-zinc-500 mt-1">
+                            Type: {m.machine_type} | Mould: {state.activeMould}ml | Speed: {currentSpeedRPM} RPM | OEE: {oeeScore}%
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-brand-700 hover:bg-brand-50"
+                            type="button"
+                            onClick={() => setTelemetryStates({
+                              ...telemetryStates,
+                              [m.id]: { ...state, expanded: !state.expanded }
+                            })}
+                          >
+                            📊 {state.expanded ? "Close Telemetry" : "Open Telemetry"}
+                          </button>
+                          <button
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-brand-600"
+                            type="button"
+                            onClick={() => setEditingMachine(m)}
+                            title="Edit Machine"
+                          >
+                            <Settings className="h-4 w-4" />
+                          </button>
+                          <button
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-red-600"
+                            type="button"
+                            onClick={async () => {
+                              if (confirm("Are you sure you want to delete this machine?")) {
+                                try {
+                                  await deleteDashboardMachine(m.id);
+                                  setToast("Machine deleted");
+                                  await loadSavedMachines();
+                                  await loadMachineUsage();
+                                } catch (err) {
+                                  console.error("Failed to delete machine:", err);
+                                  setToast("Failed to delete machine");
+                                }
+                              }
+                            }}
+                            title="Delete Machine"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Expended OEE & Telemetry Panel */}
+                      {state.expanded && (
+                        <div className="mt-4 border-t border-zinc-100 pt-4 grid gap-4 md:grid-cols-2 bg-zinc-50/50 p-3 rounded-lg border border-zinc-100">
+                          {/* Left Column: Live Gauges & Controls */}
+                          <div className="space-y-4">
+                            <h4 className="text-xs font-semibold uppercase text-zinc-500 tracking-wider">Live Controls & OEE</h4>
+                            
+                            {/* OEE Progress bar */}
+                            <div>
+                              <div className="flex items-center justify-between text-xs font-semibold text-zinc-600 mb-1">
+                                <span>Overall Equipment Effectiveness (OEE)</span>
+                                <span className={oeeScore >= 80 ? "text-emerald-600" : oeeScore >= 50 ? "text-amber-600" : "text-red-600"}>{oeeScore}% Score</span>
+                              </div>
+                              <div className="w-full bg-zinc-200 h-2.5 rounded-full overflow-hidden flex">
+                                <div 
+                                  className={`h-full transition-all duration-300 ${
+                                    oeeScore >= 80 ? "bg-emerald-500" : oeeScore >= 50 ? "bg-amber-500" : "bg-red-500"
+                                  }`}
+                                  style={{ width: `${oeeScore}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Status and Speed Controls */}
+                            <div className="grid gap-3 grid-cols-2">
+                              <div>
+                                <label className="block text-xs font-semibold text-zinc-600 mb-1">Machine Status</label>
+                                <select
+                                  value={state.status}
+                                  onChange={(e) => {
+                                    const nextStatus = e.target.value as "Running" | "Stopped";
+                                    setTelemetryStates({
+                                      ...telemetryStates,
+                                      [m.id]: { ...state, status: nextStatus }
+                                    });
+                                    createManualActivityLog({
+                                      event_type: "machine_telemetry",
+                                      description: `Machine ${m.machine_number || m.name || m.id} status changed to ${nextStatus}`
+                                    }).catch(err => console.error(err));
+                                  }}
+                                  className="h-9 w-full rounded border border-zinc-200 px-2 bg-white text-xs"
+                                >
+                                  <option value="Running">Running</option>
+                                  <option value="Stopped">Stopped</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-zinc-600 mb-1">Actual Cups Produced (8h Shift)</label>
+                                <input
+                                  type="number"
+                                  value={state.status === "Stopped" ? 0 : (state.actualProduction !== undefined ? state.actualProduction : 22000)}
+                                  disabled={state.status === "Stopped"}
+                                  onChange={(e) => {
+                                    const nextProd = Number(e.target.value);
+                                    setTelemetryStates({
+                                      ...telemetryStates,
+                                      [m.id]: { ...state, actualProduction: nextProd }
+                                    });
+                                  }}
+                                  className="h-9 w-full rounded border border-zinc-200 px-2 bg-white text-xs"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Designed Speed and Target Read-only block */}
+                            <div className="grid gap-3 grid-cols-2 bg-white p-2 rounded border border-zinc-150 text-[10px]">
+                              <div>
+                                <span className="font-semibold text-zinc-500">Optimal Design Speed:</span>
+                                <p className="font-bold text-zinc-800">{optimalSpeed} RPM</p>
+                              </div>
+                              <div>
+                                <span className="font-semibold text-zinc-500">Expected Shift Target:</span>
+                                <p className="font-bold text-zinc-800">{expectedTarget.toLocaleString()} cups</p>
+                              </div>
+                            </div>
+
+                            {/* Active Mould Selector */}
+                            <div>
+                              <label className="block text-xs font-semibold text-zinc-600 mb-1">Active Mould size</label>
+                              <select
+                                value={state.activeMould}
+                                onChange={(e) => {
+                                  const nextMould = Number(e.target.value);
+                                  const timestamp = new Date().toLocaleTimeString();
+                                  setTelemetryStates({
+                                    ...telemetryStates,
+                                    [m.id]: {
+                                      ...state,
+                                      activeMould: nextMould,
+                                      mouldLogs: [
+                                        { mould: nextMould, timestamp },
+                                        ...state.mouldLogs.slice(0, 4)
+                                      ]
+                                    }
+                                  });
+                                  createManualActivityLog({
+                                    event_type: "machine_telemetry",
+                                    description: `Machine ${m.machine_number || m.name || m.id} mould swapped to ${nextMould}ml cup size`
+                                  }).catch(err => console.error(err));
+                                }}
+                                className="h-9 w-full rounded border border-zinc-200 px-2 bg-white text-xs"
+                              >
+                                {[65, 100, 150, 210, 250].map((size) => (
+                                  <option key={size} value={size}>{size}ml size</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Right Column: Downtime logging & Audit logs */}
+                          <div className="space-y-4 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-xs font-semibold uppercase text-zinc-500 tracking-wider mb-2">Simulate Operator Logs</h4>
+                              {state.status === "Stopped" ? (
+                                <div className="space-y-2">
+                                  <p className="text-[11px] text-zinc-600">Select reason for machine halt:</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {["No paper blank", "Mechanical fault", "Maintenance", "Power failure"].map((reason) => (
+                                      <button
+                                        key={reason}
+                                        onClick={() => {
+                                          const timestamp = new Date().toLocaleTimeString();
+                                          setTelemetryStates({
+                                            ...telemetryStates,
+                                            [m.id]: {
+                                              ...state,
+                                              downtimeReason: reason,
+                                              downtimeLogs: [
+                                                { reason, timestamp },
+                                                ...state.downtimeLogs.slice(0, 4)
+                                              ]
+                                            }
+                                          });
+                                          createManualActivityLog({
+                                            event_type: "machine_telemetry",
+                                            description: `Machine ${m.machine_number || m.name || m.id} stopped: ${reason}`
+                                          }).catch(err => console.error(err));
+                                        }}
+                                        className="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-800 text-[10px] font-semibold rounded"
+                                        type="button"
+                                      >
+                                        ⚠️ {reason}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="text-xs text-zinc-600">Machine is running smoothly. Set status to "Stopped" to log downtime events.</p>
+                              )}
+                            </div>
+
+                            {/* Chronological Audit Logs */}
+                            <div className="bg-white/80 p-2.5 rounded border border-zinc-100 text-[11px] text-zinc-700 flex-1 overflow-y-auto max-h-[120px] mt-2 space-y-1">
+                              <p className="font-semibold text-zinc-800 uppercase tracking-wider text-[9px] mb-1">Live Floor Audit Trail</p>
+                              {state.mouldLogs.length === 0 && state.downtimeLogs.length === 0 && (
+                                <p className="text-zinc-400 italic">No events logged yet for this shift.</p>
+                              )}
+                              {state.downtimeLogs.map((log, idx) => (
+                                <div key={`down-${idx}`} className="text-red-700">
+                                  [{log.timestamp}] Halt: {log.reason}
+                                </div>
+                              ))}
+                              {state.mouldLogs.map((log, idx) => (
+                                <div key={`mould-${idx}`} className="text-brand-700">
+                                  [{log.timestamp}] Mould swapped to {log.mould}ml size
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </Panel>
       ) : null}
 
-      {step === 2 ? (
+      {step === 3 ? (
         <Panel icon={Settings} title="Raw Materials">
           <div className="grid gap-5 xl:grid-cols-2">
             <MaterialCard title="Blank Stock">
@@ -704,7 +1085,7 @@ export default function OnboardingPage() {
         </Panel>
       ) : null}
 
-      {step === 3 ? (
+      {step === 4 ? (
         <Panel icon={PackageCheck} title="Final Product Stock">
           {/* Mode Selector Tab Group */}
           <div className="flex rounded-lg bg-zinc-100 p-1 mb-5 max-w-md">
@@ -864,6 +1245,18 @@ export default function OnboardingPage() {
           )}
         </Panel>
       ) : null}
+      
+      {editingMachine ? (
+        <EditMachineModal
+          machine={editingMachine}
+          onClose={() => setEditingMachine(null)}
+          onSaved={async () => {
+            setToast("Machine updated successfully");
+            await loadSavedMachines();
+            await loadMachineUsage();
+          }}
+        />
+      ) : null}
     </div>
   );
 
@@ -883,11 +1276,11 @@ function Panel({ icon: Icon, title, children }: { icon: typeof UserRound; title:
   );
 }
 
-function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextInput({ label, placeholder, value, onChange }: { label: string; placeholder?: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
-      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }

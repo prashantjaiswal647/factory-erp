@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from dependencies import EXPENSE_ROLES, check_permissions
 from db import get_db
-from models import FactoryExpense, User
+from models import FactoryExpense, User, ActivityLog
 
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
@@ -52,6 +52,14 @@ def create_expense(
         category=category,
     )
     db.add(expense)
+
+    activity = ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type="expense",
+        description=f"Recorded expense of ₹{payload.amount:,.2f} for {expense_name} ({category})"
+    )
+    db.add(activity)
+
     db.commit()
     db.refresh(expense)
     return expense
