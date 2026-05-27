@@ -1040,7 +1040,7 @@ def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: S
     db_order = Order(
         factory_id=str(customer.factory_id),
         customer_id=customer.id,
-        status="Received",
+        status="pending_owner",
         payment_method=payload.payment_method,
         total_amount=total_final_amount,
         amount_paid=total_final_amount if payload.payment_method == "Full_Advance_UPI" else Decimal("0.00"),
