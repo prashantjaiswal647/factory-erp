@@ -109,7 +109,7 @@ export default function OnboardingPage() {
       }
     }
     void loadFactoryProfile();
-  }, [user]);
+  }, []);
 
   async function loadSavedMachines() {
     try {
