@@ -295,6 +295,15 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
+      {user?.role === "Owner" && pendingSales.length > 0 ? (
+        <PendingSalesApprovalSection
+          message={approvalMessage}
+          pendingSales={pendingSales}
+          processingOrderId={processingOrderId}
+          onAction={handleSaleApproval}
+        />
+      ) : null}
+
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <MetricCard icon={Boxes} tone="purple" label="Boxes Available" value={totalFinishedBoxes.toLocaleString("en-IN")} helper="Finished goods ready" />
         <MetricCard icon={UserRound} tone="blue" label="Workers" value={workers.length} helper="On floor" />
@@ -389,14 +398,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {user?.role === "Owner" ? (
-        <PendingSalesApprovalSection
-          message={approvalMessage}
-          pendingSales={pendingSales}
-          processingOrderId={processingOrderId}
-          onAction={handleSaleApproval}
-        />
-      ) : null}
+
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
