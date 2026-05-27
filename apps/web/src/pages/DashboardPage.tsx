@@ -273,7 +273,7 @@ export default function DashboardPage() {
         <div>
           <p className="text-sm font-medium text-brand-700">Munshi AI Factory Operations</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-normal text-zinc-950" data-testid="dashboard-heading">
-            Welcome back, {user?.username || "Owner"}!
+            Welcome back, {user?.full_name || user?.name || user?.username || "Owner"}!
           </h1>
           <p className="mt-1 text-sm text-zinc-500">{factorySummary}</p>
         </div>

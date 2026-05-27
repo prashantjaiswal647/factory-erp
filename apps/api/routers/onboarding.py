@@ -69,11 +69,24 @@ from schemas import (
     FactoryProfileResponse,
     WorkerResponse,
 )
+from routers.operations import log_factory_operation
 from services.n8n_sync import sync_data_to_n8n_bg
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 logger = logging.getLogger(__name__)
+
+
+def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
+    try:
+        log_factory_operation(
+            db,
+            factory_id=int(factory_id),
+            event_type="machine_telemetry",
+            description=f"👥 Onboarding Change: {action} {subject} in system configs",
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for onboarding change: %s", log_error)
 
 
 class OnboardingWorkerSummary(BaseModel):
@@ -808,6 +821,7 @@ def delete_onboarding_worker(
 
     try:
         worker.is_active = False
+        _log_onboarding_change(db, int(current_user.factory_id), "Deleted", worker.name)
         db.commit()
         background_tasks.add_task(
             sync_data_to_n8n_bg,
@@ -841,7 +855,9 @@ def delete_onboarding_machine(
     )
     if machine is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    machine_spec = machine.machine_name or machine.name or machine.machine_number or f"Machine {machine.id}"
     db.delete(machine)
+    _log_onboarding_change(db, int(current_user.factory_id), "Deleted", machine_spec)
     db.commit()
     background_tasks.add_task(
         sync_data_to_n8n_bg,
@@ -964,6 +980,7 @@ def onboarding_step1_create_worker(
         .filter(sql_func.lower(Worker.name) == payload.name.strip().lower())
         .first()
     )
+    created = worker is None
     if worker is None:
         worker = Worker(factory_id=str(current_user.factory_id), name=payload.name.strip())
         db.add(worker)
@@ -1015,6 +1032,7 @@ def onboarding_step1_create_worker(
             )
             db.add(opening_att)
 
+    _log_onboarding_change(db, int(current_user.factory_id), "Added" if created else "Updated", worker.name)
     db.commit()
     db.refresh(worker)
     background_tasks.add_task(
@@ -1041,6 +1059,7 @@ def onboarding_step2_machines(
     factory_id = str(current_user.factory_id)
     check_machine_limit(factory_id, db, requested_count=len(payload.machines))
 
+    machine_specs: list[str] = []
     for item in payload.machines:
         seq = item.machine_sequence_number.strip().upper()
         existing = (
@@ -1067,7 +1086,10 @@ def onboarding_step2_machines(
             can_swap_moulds=item.can_swap_moulds,
         )
         db.add(machine)
+        machine_specs.append(machine.name or machine.machine_sequence_number or f"{item.cup_size_ml}ml machine")
 
+    if machine_specs:
+        _log_onboarding_change(db, int(factory_id), "Added", ", ".join(machine_specs))
     db.commit()
     background_tasks.add_task(
         sync_data_to_n8n_bg,
@@ -1235,8 +1257,10 @@ def complete_onboarding(
     factory_id = str(current_user.factory_id)
 
     try:
+        machine_names = []
         for machine_payload in payload.machines:
             upsert_machine(db, factory_id, machine_payload)
+            machine_names.append(machine_payload.name.strip())
 
         for material_payload in payload.raw_materials:
             material = upsert_raw_material(db, factory_id, material_payload)
@@ -1250,13 +1274,19 @@ def complete_onboarding(
 
         upsert_costing_master(db, factory_id, payload.costing_master)
 
+        worker_names = []
         for worker_payload in payload.workers:
             upsert_worker(db, factory_id, worker_payload)
             upsert_employee_from_worker(db, factory_id, worker_payload)
+            worker_names.append(worker_payload.name.strip())
 
         for customer_payload in payload.customers:
             upsert_customer(db, factory_id, customer_payload)
 
+        if machine_names:
+            _log_onboarding_change(db, int(factory_id), "Updated", ", ".join(machine_names))
+        if worker_names:
+            _log_onboarding_change(db, int(factory_id), "Updated", ", ".join(worker_names))
         db.commit()
         background_tasks.add_task(
             sync_data_to_n8n_bg,

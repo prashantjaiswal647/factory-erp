@@ -609,7 +609,22 @@ def add_sale_invoice(
         invoice_num = payload.legal_invoice_number
         if not invoice_num:
             if factory:
+                existing_invoice_docs = db.query(InvoiceDocument.invoice_number).filter(
+                    InvoiceDocument.factory_id == current_user.factory_id
+                ).all()
+                max_num = 0
+                for doc in existing_invoice_docs:
+                    try:
+                        num_val = int(doc.invoice_number)
+                        if num_val > max_num:
+                            max_num = num_val
+                    except (ValueError, TypeError):
+                        pass
+                
                 cnt = factory.current_invoice_counter or factory.initial_invoice_number or 1
+                if max_num >= cnt:
+                    cnt = max_num + 1
+                
                 invoice_num = str(cnt)
                 factory.current_invoice_counter = cnt + 1
             else:
@@ -859,6 +874,7 @@ def add_sale_invoice(
         raise
     except Exception as exc:
         db.rollback()
+        logger.exception("Sale invoice creation failed due to exception:")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Sale invoice failed and was rolled back: {exc}",

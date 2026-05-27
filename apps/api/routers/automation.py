@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from auth import require_owner
 from db import get_db
 from models import Customer, Order, SalesInvoice, User
-from routers.sales import pending_payment_dues
+from routers.sales import pending_payment_dues, factory_id_filter
 
 
 router = APIRouter(prefix="/api", tags=["automation"])
@@ -51,7 +51,7 @@ def generate_customer_portal_link(
 ):
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.id == customer_id)
         .first()
     )
@@ -82,7 +82,7 @@ def customer_weekly_report(
 ):
     customer = (
         db.query(Customer)
-        .filter(Customer.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
         .filter(Customer.id == customer_id)
         .first()
     )
@@ -93,7 +93,7 @@ def customer_weekly_report(
     week_start = now - timedelta(days=7)
     total_orders = int(
         db.query(sql_func.count(Order.id))
-        .filter(Order.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
         .filter(Order.customer_id == customer.id)
         .filter(Order.order_date >= week_start)
         .scalar()
@@ -101,7 +101,7 @@ def customer_weekly_report(
     )
     cash_paid = Decimal(
         db.query(sql_func.coalesce(sql_func.sum(SalesInvoice.amount_paid), 0))
-        .filter(SalesInvoice.factory_id == current_user.factory_id)
+        .filter(factory_id_filter(SalesInvoice.factory_id, current_user.factory_id))
         .filter(SalesInvoice.customer_id == customer.id)
         .filter(SalesInvoice.date >= week_start.date())
         .scalar()

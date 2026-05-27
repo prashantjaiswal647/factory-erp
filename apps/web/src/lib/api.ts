@@ -837,6 +837,15 @@ export function createSalesCustomer(payload: CustomerCreate) {
   return api.post("/api/sales/customers", payload);
 }
 
+export function generateCustomerPortalLink(customerId: number) {
+  return api.post<{
+    customer_id: number;
+    portal_access_token: string;
+    storefront_url: string;
+    is_portal_approved: boolean;
+  }>(`/api/automation/customers/${customerId}/portal-link`);
+}
+
 export function searchCustomers(q: string) {
   return api.get<CustomerSearchResult[]>("/api/customers/search", { params: { q } });
 }
@@ -1466,5 +1475,9 @@ export function updateActivityLog(logId: number, payload: { event_type: string; 
 
 export function deleteActivityLog(logId: number) {
   return api.delete(`/api/operations/sequence/${logId}`);
+}
+
+export function reportMachineBreakdown(payload: { machine_id: number; issue_category: string; custom_notes?: string }) {
+  return api.post<ActivityLog>("/api/operations/breakdown", payload);
 }
 

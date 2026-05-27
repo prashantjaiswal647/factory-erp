@@ -360,13 +360,33 @@ function Field({ label, value, type = "text", onChange }: { label: string; value
 
 function InvoiceModeField({ value, onChange }: { value: DailySaleCreate["legal_invoice_type"]; onChange: (value: DailySaleCreate["legal_invoice_type"]) => void }) {
   return (
-    <label className="block text-sm">
-      <span className="font-medium text-zinc-700">Legal invoice mode</span>
-      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(event.target.value as DailySaleCreate["legal_invoice_type"])}>
-        <option value="bill_of_supply">Bill of Supply</option>
-        <option value="tax_invoice">Tax Invoice</option>
-      </select>
-    </label>
+    <div className="block text-sm">
+      <span className="font-medium text-zinc-700">Legal Invoice Mode</span>
+      <div className="mt-1 flex h-10 w-full rounded-lg bg-zinc-200/70 p-1 transition-all duration-200">
+        <button
+          type="button"
+          onClick={() => onChange("bill_of_supply")}
+          className={`flex-1 rounded-md text-xs font-bold transition-all duration-300 ${
+            value === "bill_of_supply"
+              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.08)] scale-[1.02]"
+              : "text-zinc-600 hover:text-zinc-950 hover:bg-white/30"
+          }`}
+        >
+          Bill of Supply
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("tax_invoice")}
+          className={`flex-1 rounded-md text-xs font-bold transition-all duration-300 ${
+            value === "tax_invoice"
+              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.08)] scale-[1.02]"
+              : "text-zinc-600 hover:text-zinc-950 hover:bg-white/30"
+          }`}
+        >
+          Tax Invoice
+        </button>
+      </div>
+    </div>
   );
 }
 

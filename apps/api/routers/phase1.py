@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -46,10 +47,24 @@ from schemas import (
     WorkerCreate,
     WorkerResponse,
 )
+from routers.operations import log_factory_operation
 from subscription_limits import check_machine_limit
 
 
 router = APIRouter(prefix="/api/setup", tags=["phase-1-setup"])
+logger = logging.getLogger(__name__)
+
+
+def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
+    try:
+        log_factory_operation(
+            db,
+            factory_id=int(factory_id),
+            event_type="machine_telemetry",
+            description=f"👥 Onboarding Change: {action} {subject} in system configs",
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for phase1 onboarding change: %s", log_error)
 
 
 def normalize_name(value: str) -> str:
@@ -121,6 +136,7 @@ def create_machine(
         machine_name=payload.machine_name,
     )
     db.add(machine)
+    _log_onboarding_change(db, int(factory_id), "Added", machine.machine_name or machine.machine_number or machine.name)
     db.commit()
     db.refresh(machine)
     return machine
@@ -174,6 +190,7 @@ def update_machine(
     if payload.machine_name is not None or "machine_name" in payload.model_fields_set:
         machine.machine_name = payload.machine_name
 
+    _log_onboarding_change(db, int(factory_id), "Updated", machine.machine_name or machine.machine_number or machine.name)
     db.commit()
     db.refresh(machine)
     return machine
@@ -301,6 +318,7 @@ def create_worker(
         shift_hours=payload.duty_hours,
     )
     db.add(worker)
+    _log_onboarding_change(db, int(current_user.factory_id), "Added", worker.name)
     db.commit()
     db.refresh(worker)
     return worker

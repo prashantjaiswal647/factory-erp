@@ -1,9 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import logging
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy import func as sql_func
+from sqlalchemy import func as sql_func, text
 from sqlalchemy.orm import Session
 
 from dependencies import PRODUCTION_ROLES, SALES_ROLES, check_permissions
@@ -35,6 +37,53 @@ router = APIRouter(prefix="/api", tags=["operations"])
 
 MONEY_QUANT = Decimal("0.01")
 QTY_QUANT = Decimal("0.001")
+VALID_ACTIVITY_EVENT_TYPES = {"production", "attendance", "expense", "payment", "machine_telemetry"}
+logger = logging.getLogger(__name__)
+LOCAL_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def log_factory_operation(
+    db: Session,
+    *,
+    factory_id: int,
+    event_type: str,
+    description: str,
+    log_date: Optional[date_cls] = None,
+) -> None:
+    """Best-effort activity audit insert that must never break the caller."""
+    try:
+        normalized_event_type = (event_type or "").strip()
+        if normalized_event_type not in VALID_ACTIVITY_EVENT_TYPES:
+            normalized_event_type = "machine_telemetry"
+        normalized_description = (description or "").strip()
+        if not normalized_description:
+            return
+
+        created_at = datetime.now(LOCAL_TZ)
+        effective_log_date = log_date or created_at.date()
+        savepoint = db.connection().begin_nested()
+        try:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO activity_logs (factory_id, event_type, description, log_date, created_at)
+                    VALUES (:factory_id, :event_type, :description, :log_date, :created_at)
+                    """
+                ),
+                {
+                    "factory_id": int(factory_id),
+                    "event_type": normalized_event_type,
+                    "description": normalized_description,
+                    "log_date": effective_log_date,
+                    "created_at": created_at,
+                },
+            )
+            savepoint.commit()
+        except Exception:
+            savepoint.rollback()
+            raise
+    except Exception as log_error:
+        logger.exception("Activity logging failed and was suppressed: %s", log_error)
 
 
 def to_money(value) -> Decimal:
@@ -106,12 +155,16 @@ def mark_worker_present_for_production(
     db.add(attendance_log)
     db.flush()
 
-    activity = ActivityLog(
-        factory_id=int(factory_id),
-        event_type="attendance",
-        description=f"System automatically marked attendance Present for {worker.name} (linked to production)"
-    )
-    db.add(activity)
+    try:
+        log_factory_operation(
+            db,
+            factory_id=int(factory_id),
+            event_type="attendance",
+            description=f"System automatically marked attendance Present for {worker.name} (linked to production)",
+            log_date=production_date,
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for automatic attendance: %s", log_error)
 
     print("Automatic attendance marked Present for production worker:", attendance_log.id)
     return attendance_log
@@ -412,12 +465,20 @@ def create_daily_production(
             packaging_size_name=packaging_size_name,
         )
 
-        activity = ActivityLog(
-            factory_id=int(factory_id),
-            event_type="production",
-            description=f"Recorded daily production: {payload.total_boxes_made} boxes & {payload.loose_packets_made} loose packets of {product_size_ml}ml cups made by {worker.name} on machine {machine.name or machine.machine_number}"
-        )
-        db.add(activity)
+        total_boxes_completed = payload.total_boxes_made + boxes_from_loose
+        wastage_percent = Decimal("0.00")
+        if total_raw_material_kg > 0:
+            wastage_percent = to_money((wastage_kg / total_raw_material_kg) * Decimal("100"))
+        try:
+            log_factory_operation(
+                db,
+                factory_id=int(factory_id),
+                event_type="production",
+                description=f"\U0001F4E6 Production Update: Machine {machine.id} completed {total_boxes_completed} boxes of {product_size_ml} cups (Wastage: {wastage_percent}%)",
+                log_date=payload.date,
+            )
+        except Exception as log_error:
+            logger.exception("Suppressed activity log failure for production entry: %s", log_error)
 
         db.commit()
         db.refresh(production)
@@ -642,6 +703,18 @@ def create_daily_sale(
                 packaging_size_name=item.packaging_size_name,
             )
 
+        try:
+            sold_boxes = sum(int(item.boxes_sold or 0) for item in payload.items)
+            log_factory_operation(
+                db,
+                factory_id=int(factory_id),
+                event_type="payment",
+                description=f"\U0001F4B0 Sale Logged: Sold {sold_boxes} boxes to {customer.name} - Value: \u20B9{bill_total:,.2f}",
+                log_date=payload.date,
+            )
+        except Exception as log_error:
+            logger.exception("Suppressed activity log failure for daily sale: %s", log_error)
+
         db.commit()
         send_n8n_whatsapp_event(
             {
@@ -724,4 +797,212 @@ def delete_daily_production(
             detail=f"Failed to delete production log: {exc}"
         )
     return None
+
+
+# ==================== OPERATIONS SEQUENCE TIMELINE ENDPOINTS ====================
+
+
+class SequenceLogCreate(BaseModel):
+    event_type: str
+    description: str
+
+
+class SequenceLogUpdate(BaseModel):
+    event_type: str
+    description: str
+
+
+class MachineBreakdownCreate(BaseModel):
+    machine_id: int
+    issue_category: str
+    custom_notes: Optional[str] = None
+
+
+def _activity_to_dict(log: "ActivityLog") -> dict:
+    local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
+    return {
+        "id": log.id,
+        "factory_id": log.factory_id,
+        "event_type": log.event_type,
+        "description": log.description,
+        "log_date": log.log_date.isoformat() if getattr(log, "log_date", None) else None,
+        "created_at": local_created_at.isoformat() if local_created_at else None,
+        "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
+    }
+
+
+@router.get("/operations/sequence")
+def list_sequence_logs(
+    date: Optional[str] = None,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor"])),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+
+    normalized_date = (date or "").strip()
+    if normalized_date.lower() in {"null", "undefined", "none"}:
+        normalized_date = ""
+
+    if normalized_date:
+        try:
+            selected_date = datetime.strptime(normalized_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid date format. Expected YYYY-MM-DD",
+            )
+    else:
+        selected_date = datetime.now(LOCAL_TZ).date()
+
+    logs = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.factory_id == factory_id)
+        .filter(ActivityLog.log_date == selected_date)
+        .order_by(ActivityLog.created_at.desc())
+        .all()
+    )
+    return [_activity_to_dict(log) for log in logs]
+
+
+@router.post("/operations/sequence", status_code=status.HTTP_201_CREATED)
+def create_sequence_log(
+    payload: SequenceLogCreate,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor"])),
+    db: Session = Depends(get_db),
+):
+    if not payload.description or not payload.description.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="description must not be empty",
+        )
+    if not payload.event_type or not payload.event_type.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="event_type must not be empty",
+        )
+
+    event_type = payload.event_type.strip()
+    if event_type not in VALID_ACTIVITY_EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid event_type",
+        )
+
+    activity = ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type=event_type,
+        description=payload.description.strip(),
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    return _activity_to_dict(activity)
+
+
+@router.put("/operations/sequence/{log_id}")
+def update_sequence_log(
+    log_id: int,
+    payload: SequenceLogUpdate,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    if not payload.description or not payload.description.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="description must not be empty",
+        )
+    if not payload.event_type or not payload.event_type.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="event_type must not be empty",
+        )
+
+    activity = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.id == log_id)
+        .filter(ActivityLog.factory_id == current_user.factory_id)
+        .first()
+    )
+    if activity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Activity log not found",
+        )
+
+    event_type = payload.event_type.strip()
+    if event_type not in VALID_ACTIVITY_EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid event_type",
+        )
+
+    activity.event_type = event_type
+    activity.description = payload.description.strip()
+    db.commit()
+    db.refresh(activity)
+    return _activity_to_dict(activity)
+
+
+@router.delete("/operations/sequence/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_sequence_log(
+    log_id: int,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    activity = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.id == log_id)
+        .filter(ActivityLog.factory_id == current_user.factory_id)
+        .first()
+    )
+    if activity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Activity log not found",
+        )
+
+    db.delete(activity)
+    db.commit()
+    return None
+
+
+@router.post("/operations/breakdown", status_code=status.HTTP_201_CREATED)
+def report_machine_breakdown(
+    payload: MachineBreakdownCreate,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor"])),
+    db: Session = Depends(get_db),
+):
+    if not payload.issue_category or not payload.issue_category.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="issue_category must not be empty",
+        )
+
+    factory_id = current_user.factory_id
+    machine = (
+        db.query(Machine)
+        .filter(Machine.id == payload.machine_id)
+        .filter(Machine.factory_id == factory_id)
+        .first()
+    )
+    if machine is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Machine not found",
+        )
+
+    machine_label = machine.name or machine.machine_number or f"ID#{machine.id}"
+    desc = f"Machine Breakdown: {machine_label} - {payload.issue_category.strip()}"
+    if payload.custom_notes and payload.custom_notes.strip():
+        desc += f". Notes: {payload.custom_notes.strip()}"
+
+    activity = ActivityLog(
+        factory_id=int(factory_id),
+        event_type="machine_telemetry",
+        description=desc,
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    return _activity_to_dict(activity)
 

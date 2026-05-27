@@ -11,13 +11,15 @@ import {
   X, 
   Clock, 
   History,
-  AlertCircle
+  AlertCircle,
+  Wrench
 } from "lucide-react";
 import { 
   getOperationsSequence, 
   createManualActivityLog, 
   updateActivityLog, 
   deleteActivityLog, 
+  reportMachineBreakdown,
   type ActivityLog 
 } from "../lib/api";
 
@@ -43,6 +45,12 @@ export default function OperationsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState<ActivityLog["event_type"]>("production");
+
+  // Breakdown Modal State
+  const [isBreakdownOpen, setIsBreakdownOpen] = useState(false);
+  const [breakdownMachineId, setBreakdownMachineId] = useState("");
+  const [breakdownCategory, setBreakdownCategory] = useState("Mechanical fault");
+  const [breakdownNotes, setBreakdownNotes] = useState("");
 
   useEffect(() => {
     void fetchLogs();
@@ -124,6 +132,30 @@ export default function OperationsPage() {
     }
   }
 
+  async function handleBreakdownSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!breakdownMachineId) {
+      alert("Machine ID is required");
+      return;
+    }
+    try {
+      await reportMachineBreakdown({
+        machine_id: Number(breakdownMachineId),
+        issue_category: breakdownCategory,
+        custom_notes: breakdownNotes.trim() || undefined
+      });
+      showToast("Machine breakdown reported successfully");
+      setBreakdownMachineId("");
+      setBreakdownCategory("Mechanical fault");
+      setBreakdownNotes("");
+      setIsBreakdownOpen(false);
+      await fetchLogs();
+    } catch (err) {
+      console.error("Failed to report breakdown:", err);
+      showToast("Failed to report machine breakdown");
+    }
+  }
+
   // Visual helper configuration per Event Type
   const eventConfig = {
     production: {
@@ -191,6 +223,14 @@ export default function OperationsPage() {
           >
             <Plus className="h-4 w-4" />
             Log Floor Event
+          </button>
+
+          <button
+            onClick={() => setIsBreakdownOpen(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-rose-600 px-4 text-sm font-bold text-white shadow hover:bg-rose-700 transition"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            ⚠️ Report Machine Breakdown
           </button>
         </div>
       </header>
@@ -391,6 +431,82 @@ export default function OperationsPage() {
                   className="h-9 rounded-lg bg-purple-700 px-4 text-xs font-bold text-white hover:bg-purple-800"
                 >
                   Log Event
+                </button>
+              </footer>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Machine Breakdown Modal */}
+      {isBreakdownOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-zinc-100 bg-white shadow-2xl">
+            <header className="flex h-14 items-center justify-between border-b border-zinc-100 px-5 bg-rose-50">
+              <div className="flex items-center gap-2">
+                <Wrench className="h-4 w-4 text-rose-600" />
+                <h3 className="text-sm font-bold text-zinc-950">Report Machine Breakdown / Issue</h3>
+              </div>
+              <button onClick={() => setIsBreakdownOpen(false)} className="rounded-full p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700">
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+
+            <form onSubmit={handleBreakdownSubmit} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-600 mb-1">Machine ID</label>
+                <input
+                  type="number"
+                  value={breakdownMachineId}
+                  onChange={(e) => setBreakdownMachineId(e.target.value)}
+                  placeholder="Enter machine ID number"
+                  className="h-9 w-full rounded-lg border border-zinc-200 px-2.5 text-xs bg-white focus:border-rose-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-600 mb-1">Issue Category</label>
+                <select
+                  value={breakdownCategory}
+                  onChange={(e) => setBreakdownCategory(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-zinc-200 px-2.5 text-xs bg-white focus:border-rose-500"
+                >
+                  <option value="Mechanical fault">Mechanical fault</option>
+                  <option value="Heater failure">Heater failure</option>
+                  <option value="Electrical issue">Electrical issue</option>
+                  <option value="Paper jam">Paper jam</option>
+                  <option value="Bottom roll jam">Bottom roll jam</option>
+                  <option value="Mould damage">Mould damage</option>
+                  <option value="Sensor malfunction">Sensor malfunction</option>
+                  <option value="Lubrication needed">Lubrication needed</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-600 mb-1">Custom Notes (optional)</label>
+                <textarea
+                  rows={3}
+                  value={breakdownNotes}
+                  onChange={(e) => setBreakdownNotes(e.target.value)}
+                  placeholder="Describe the specific issue or observations..."
+                  className="w-full rounded-lg border border-zinc-200 p-2.5 text-xs focus:border-rose-500 outline-none resize-none"
+                />
+              </div>
+
+              <footer className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBreakdownOpen(false)}
+                  className="h-9 rounded-lg border border-zinc-200 px-4 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="h-9 rounded-lg bg-rose-600 px-4 text-xs font-bold text-white hover:bg-rose-700"
+                >
+                  Report Breakdown
                 </button>
               </footer>
             </form>

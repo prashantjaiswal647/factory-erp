@@ -1222,6 +1222,7 @@ class ActivityLog(TenantMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     event_type = Column(String(50), nullable=False, index=True)  # production, attendance, expense, payment, machine_telemetry
     description = Column(Text, nullable=False)
+    log_date = Column(Date, nullable=False, server_default=func.current_date(), index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
     __table_args__ = (

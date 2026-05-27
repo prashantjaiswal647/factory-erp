@@ -1,7 +1,7 @@
-import { Check, Edit, FileText, Search, UserRound } from "lucide-react";
+import { Check, Edit, FileText, Search, UserRound, Share2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { createSalesCustomer, searchCustomers } from "../lib/api";
+import { createSalesCustomer, searchCustomers, generateCustomerPortalLink } from "../lib/api";
 import type { CustomerCreate, CustomerSearchResult } from "../lib/api";
 
 const initialForm: CustomerCreate = {
@@ -22,6 +22,27 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<CustomerSearchResult[]>([]);
   const [listQuery, setListQuery] = useState("");
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
+
+  const [sharingCustomer, setSharingCustomer] = useState<CustomerSearchResult | null>(null);
+  const [generatedPortalLink, setGeneratedPortalLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+
+  async function handleSharePortal(customer: CustomerSearchResult) {
+    setSharingCustomer(customer);
+    setGeneratedPortalLink(null);
+    setCopied(false);
+    setIsGeneratingLink(true);
+    try {
+      const response = await generateCustomerPortalLink(customer.id);
+      const storefrontUrl = `${window.location.origin}/storefront/${response.data.portal_access_token}`;
+      setGeneratedPortalLink(storefrontUrl);
+    } catch (err) {
+      setToast("Failed to generate storefront link");
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  }
 
   async function loadCustomers() {
     setIsLoadingCustomers(true);
@@ -161,6 +182,14 @@ export default function CustomersPage() {
                       <td className="px-5 py-3 text-zinc-600">{customer.gst_number || "-"}</td>
                       <td className="px-5 py-3">
                         <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleSharePortal(customer)}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-bold text-brand-700 hover:bg-brand-50"
+                            type="button"
+                          >
+                            <Share2 className="h-3.5 w-3.5" />
+                            Portal
+                          </button>
                           <button className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" type="button">
                             <FileText className="h-3.5 w-3.5" />
                             View Ledger
@@ -179,6 +208,94 @@ export default function CustomersPage() {
           </div>
         </section>
       </div>
+
+      {sharingCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200 text-left">
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-950">Distributor Storefront</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">Private B2B ordering portal for customer</p>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setSharingCustomer(null)}
+                className="text-zinc-400 hover:text-zinc-600 font-semibold text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Customer Details</p>
+                <div className="mt-2 rounded-lg bg-zinc-50 border border-zinc-100 p-3 space-y-1 text-sm">
+                  <p className="font-semibold text-zinc-900">{sharingCustomer.name}</p>
+                  <p className="text-zinc-600">{sharingCustomer.company_name || "No Company Specified"}</p>
+                  <p className="text-zinc-500 text-xs">{sharingCustomer.place} | {sharingCustomer.phone_number}</p>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Storefront Link</p>
+                {isGeneratingLink ? (
+                  <div className="mt-2 flex h-11 items-center justify-center rounded-lg border border-dashed border-zinc-200 bg-zinc-50/50 text-xs text-zinc-500">
+                    <span className="animate-pulse">Generating secure link...</span>
+                  </div>
+                ) : generatedPortalLink ? (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      readOnly
+                      type="text"
+                      value={generatedPortalLink}
+                      className="h-11 flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 text-xs text-zinc-700 font-medium select-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(generatedPortalLink);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className={`px-4 rounded-lg text-xs font-bold transition-all duration-300 ${
+                        copied 
+                          ? "bg-emerald-600 text-white" 
+                          : "bg-brand-600 hover:bg-brand-700 text-white"
+                      }`}
+                    >
+                      {copied ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-red-500 mt-2">Failed to load link.</p>
+                )}
+              </div>
+
+              <div className="bg-emerald-50/80 border border-emerald-100 rounded-lg p-3.5 space-y-1.5 text-xs text-emerald-800">
+                <p className="font-bold flex items-center gap-1">
+                  <span>✨</span> B2B UPI Terms Enabled
+                </p>
+                <p className="font-medium text-emerald-700">
+                  Customers ordering through this link get access to live factory stock. Under "UPI / QR Advance" payment terms, they receive an instant discount configured inside their profile.
+                </p>
+              </div>
+
+              {generatedPortalLink && (
+                <a
+                  href={`https://wa.me/${sharingCustomer.phone_number.replace(/\D/g, "")}?text=${encodeURIComponent(
+                    `Hello ${sharingCustomer.name},\n\nHere is your private distributor storefront portal link for placing orders directly from our live stock:\n\n${generatedPortalLink}\n\nChoose 'UPI / QR Advance' at checkout to receive instant discounts on full advance payment!\n\nBest Regards,\nMunshi AI Factory Operations`
+                  )}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] text-white text-sm font-bold shadow-md hover:bg-[#20ba59] active:scale-[0.98] transition-all"
+                >
+                  Share on WhatsApp
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

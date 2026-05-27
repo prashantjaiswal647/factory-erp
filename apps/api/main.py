@@ -4,6 +4,7 @@ from enum import Enum
 import hmac
 import httpx
 import json
+import logging
 import os
 import re
 from typing import Dict, List, Optional, Tuple
@@ -71,7 +72,7 @@ from routers.onboarding import router as onboarding_router
 from routers.calculator import router as calculator_router
 from routers.automation import router as automation_router
 from routers.phase1 import router as phase1_router
-from routers.operations import router as operations_router
+from routers.operations import log_factory_operation, router as operations_router
 from routers import sales
 from routers import inventory
 from routers import payments
@@ -84,6 +85,8 @@ from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
 from routers import machine_templates
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AI ERP API", version="0.1.0")
 
@@ -712,8 +715,15 @@ def ensure_runtime_schema():
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_payment_verified BOOLEAN DEFAULT FALSE",
         "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_status",
         "ALTER TABLE orders ADD CONSTRAINT ck_orders_status CHECK (status IN ('pending_owner', 'confirmed', 'cancelled', 'adjusted_closed', 'Pending', 'Approved', 'Rejected', 'Received'))",
-        "CREATE TABLE IF NOT EXISTS activity_logs (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, event_type VARCHAR(50) NOT NULL, description TEXT NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
+        "CREATE TABLE IF NOT EXISTS activity_logs (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, event_type VARCHAR(50) NOT NULL, description TEXT NOT NULL, log_date DATE NOT NULL DEFAULT CURRENT_DATE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW())",
+        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS log_date DATE NOT NULL DEFAULT CURRENT_DATE",
+        "ALTER TABLE activity_logs ALTER COLUMN factory_id TYPE INTEGER USING factory_id::integer",
+        "ALTER TABLE activity_logs ALTER COLUMN factory_id SET NOT NULL",
+        "ALTER TABLE activity_logs ALTER COLUMN created_at TYPE TIMESTAMP WITH TIME ZONE USING created_at",
+        "ALTER TABLE activity_logs ALTER COLUMN created_at SET DEFAULT NOW()",
+        "ALTER TABLE activity_logs ALTER COLUMN created_at SET NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_created ON activity_logs (factory_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_log_date ON activity_logs (factory_id, log_date DESC)",
         "ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS ck_activity_logs_event_type",
         "ALTER TABLE activity_logs ADD CONSTRAINT ck_activity_logs_event_type CHECK (event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry'))"
     ]
@@ -758,10 +768,33 @@ def execute_production_entry(db: Session, factory_id: int, data: ProductionInten
     profile = db.query(PackagingProfile).filter(PackagingProfile.factory_id == str(factory_id)).first()
     stock = get_or_create_finished_goods_stock(db, factory_id, profile)
     stock.boxes_available += data.boxes_produced or 0
+    try:
+        wastage_percent = Decimal(str(data.wastage or 0))
+        log_factory_operation(
+            db,
+            factory_id=int(factory_id),
+            event_type="production",
+            description=f"📦 Production Update: Machine AI completed {data.boxes_produced or data.quantity or 0} boxes of {data.cup_size_ml or profile.cup_size_ml if profile else 'N/A'} cups (Wastage: {wastage_percent}%)",
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for AI production entry: %s", log_error)
     return BusinessExecutionResult(status="success", message="Production saved", finished_goods_boxes_available=stock.boxes_available)
 
 def execute_sales_entry(db: Session, factory_id: int, data: SalesIntentData):
     customer = get_or_create_customer(db, factory_id, data.customer_name)
+    boxes_sold = data.boxes_sold or data.quantity or 0
+    sale_value = Decimal(str(data.amount_received or 0))
+    if sale_value <= 0 and data.rate_per_box:
+        sale_value = Decimal(str(boxes_sold)) * Decimal(str(data.rate_per_box))
+    try:
+        log_factory_operation(
+            db,
+            factory_id=int(factory_id),
+            event_type="payment",
+            description=f"💰 Sale Logged: Sold {boxes_sold} boxes to {customer.name} - Value: ₹{sale_value:,.2f}",
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for AI sales entry: %s", log_error)
     return BusinessExecutionResult(status="success", message="Sales locked", customer_balance_amount=customer.balance_amount)
 
 def execute_factory_intent(db: Session, factory_id: int, intent: FactoryIntent) -> BusinessExecutionResult:
@@ -1027,13 +1060,16 @@ def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: S
         
     if payload.payment_method == "Normal_Credit":
         customer.balance_amount = previous_balance + total_final_amount
-
-    activity = ActivityLog(
-        factory_id=customer.factory_id,
-        event_type="payment",
-        description=f"Distributor storefront checkout: {customer.name} placed Order #{db_order.id} for ₹{total_final_amount:,.2f} ({payload.payment_method})"
-    )
-    db.add(activity)
+    customer_phone_number = customer.contact_number or customer.phone or customer.phone_number or ""
+    try:
+        log_factory_operation(
+            db,
+            factory_id=int(customer.factory_id),
+            event_type="payment",
+            description=f"💳 Storefront Order: Received order via {'UPI Advance' if payload.payment_method == 'Full_Advance_UPI' else 'Credit'} from phone {customer_phone_number}",
+        )
+    except Exception as log_error:
+        logger.exception("Suppressed activity log failure for storefront checkout: %s", log_error)
 
     db.commit()
     db.refresh(db_order)
@@ -1068,6 +1104,16 @@ def read_current_user(current_user: User = Depends(get_current_user)):
 def ask_ai(payload: AskAIRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Local context runtime processing abstraction block mapping logic sync indicators
     response = process_factory_message(message=payload.message, session_id=payload.session_id, factory_id=current_user.factory_id, db=db)
+    if response.action_taken and response.action_taken != 'unknown':
+        try:
+            log_factory_operation(
+                db,
+                factory_id=int(current_user.factory_id),
+                event_type='production' if response.action_taken in ('production_entry', 'inventory_update') else 'attendance' if response.action_taken == 'attendance' else 'expense' if response.action_taken == 'expense' else 'payment',
+                description=f"AI Supervisor parsed command: '{payload.message[:100]}' -> Action: {response.action_taken}",
+            )
+        except Exception as log_error:
+            logger.exception("Suppressed activity log failure for ask-ai parser: %s", log_error)
     db.add(AppUsageLog(factory_id=current_user.factory_id, user_id=current_user.id, event_type="ai_supervisor_call", route_or_module="ai-supervisor", method="POST", meta={"status": "processed"}))
     db.commit()
     return response
