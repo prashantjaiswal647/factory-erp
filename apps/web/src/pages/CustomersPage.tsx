@@ -1,7 +1,7 @@
-import { Check, Edit, FileText, Search, UserRound, Share2 } from "lucide-react";
+import { Check, Edit, FileText, Search, UserRound, Share2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { createSalesCustomer, searchCustomers, generateCustomerPortalLink } from "../lib/api";
+import { createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer } from "../lib/api";
 import type { CustomerCreate, CustomerSearchResult } from "../lib/api";
 
 const initialForm: CustomerCreate = {
@@ -41,6 +41,19 @@ export default function CustomersPage() {
       setToast("Failed to generate storefront link");
     } finally {
       setIsGeneratingLink(false);
+    }
+  }
+
+  async function handleDeleteCustomer(customer: CustomerSearchResult) {
+    if (!window.confirm(`Are you sure you want to delete customer "${customer.name}"? This will permanently remove their records.`)) {
+      return;
+    }
+    try {
+      await deleteDashboardCustomer(customer.id);
+      setToast(`Customer "${customer.name}" deleted successfully.`);
+      void loadCustomers();
+    } catch (err) {
+      setToast("Failed to delete customer. They might have active sales or invoices associated.");
     }
   }
 
@@ -197,6 +210,14 @@ export default function CustomersPage() {
                           <button className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" type="button">
                             <Edit className="h-3.5 w-3.5" />
                             Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomer(customer)}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 bg-red-50/50 px-2 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300"
+                            type="button"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
                           </button>
                         </div>
                       </td>
