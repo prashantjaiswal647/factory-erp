@@ -921,7 +921,7 @@ def get_storefront_details(storeToken: str, db: Session = Depends(get_db)):
     if not customer:
         raise HTTPException(status_code=404, detail="Storefront not found")
         
-    factory = db.query(Factory).filter(Factory.id == customer.factory_id).first()
+    factory = db.query(Factory).filter(Factory.id == int(customer.factory_id)).first()
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
         
@@ -972,7 +972,7 @@ def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: S
     if not customer:
         raise HTTPException(status_code=404, detail="Storefront not found")
         
-    factory = db.query(Factory).filter(Factory.id == customer.factory_id).first()
+    factory = db.query(Factory).filter(Factory.id == int(customer.factory_id)).first()
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
         
