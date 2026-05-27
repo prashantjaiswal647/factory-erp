@@ -41,6 +41,7 @@ from models import (
     BottomStock,
     ActivityLog,
     BoxStock,
+    CostingOutputMaster,
     Customer,
     CustomerActivity,
     DailyProduction,
