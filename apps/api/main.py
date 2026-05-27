@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func as sql_func, text
+from sqlalchemy import func as sql_func, text, or_
 from sqlalchemy.orm import Session
 
 from ai_agent import build_ai_tool_context, parse_factory_intent_with_agent, save_agent_context
