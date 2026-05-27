@@ -639,6 +639,7 @@ class CustomerCreate(BaseModel):
     phone_number: str = Field(..., min_length=1, max_length=50)
     place: str = Field(..., min_length=1, max_length=255)
     gst_number: Optional[str] = Field(default=None, max_length=50)
+    company_name: Optional[str] = Field(default=None, max_length=255)
     address: Optional[str] = None
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_due: Decimal = Field(default=Decimal("0.00"), ge=0)

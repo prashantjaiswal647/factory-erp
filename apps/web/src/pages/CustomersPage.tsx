@@ -1,8 +1,9 @@
-import { Check, Edit, FileText, Search, UserRound, Share2, Trash2 } from "lucide-react";
+import { Check, Edit, FileText, Search, UserRound, Share2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-import { createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer } from "../lib/api";
-import type { CustomerCreate, CustomerSearchResult } from "../lib/api";
+import { createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, updateSalesCustomer } from "../lib/api";
+import type { CustomerCreate, CustomerSearchResult, CustomerUpdate } from "../lib/api";
 
 const initialForm: CustomerCreate = {
   phone_number: "",
@@ -15,6 +16,7 @@ const initialForm: CustomerCreate = {
 };
 
 export default function CustomersPage() {
+  const navigate = useNavigate();
   const [form, setForm] = useState<CustomerCreate>(initialForm);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -27,6 +29,11 @@ export default function CustomersPage() {
   const [generatedPortalLink, setGeneratedPortalLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+
+  const [editingCustomer, setEditingCustomer] = useState<CustomerSearchResult | null>(null);
+  const [editForm, setEditForm] = useState<CustomerUpdate>({});
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [editError, setEditError] = useState("");
 
   async function handleSharePortal(customer: CustomerSearchResult) {
     setSharingCustomer(customer);
@@ -54,6 +61,38 @@ export default function CustomersPage() {
       void loadCustomers();
     } catch (err) {
       setToast("Failed to delete customer. They might have active sales or invoices associated.");
+    }
+  }
+
+  function openEditModal(customer: CustomerSearchResult) {
+    setEditingCustomer(customer);
+    setEditForm({
+      name: customer.name,
+      phone_number: customer.phone_number,
+      place: customer.place,
+      gst_number: customer.gst_number || "",
+      company_name: customer.company_name || "",
+    });
+    setEditError("");
+  }
+
+  async function submitEdit() {
+    if (!editingCustomer) return;
+    if (!editForm.name?.trim() || !editForm.phone_number?.trim()) {
+      setEditError("Name and Phone Number are required.");
+      return;
+    }
+    setIsUpdating(true);
+    setEditError("");
+    try {
+      await updateSalesCustomer(editingCustomer.id, editForm);
+      setToast(`Customer "${editForm.name}" updated successfully.`);
+      setEditingCustomer(null);
+      await loadCustomers();
+    } catch {
+      setEditError("Update failed. Phone number might already be in use.");
+    } finally {
+      setIsUpdating(false);
     }
   }
 
@@ -203,11 +242,19 @@ export default function CustomersPage() {
                             <Share2 className="h-3.5 w-3.5" />
                             Portal
                           </button>
-                          <button className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" type="button">
+                          <button
+                            onClick={() => navigate("/outstanding")}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                            type="button"
+                          >
                             <FileText className="h-3.5 w-3.5" />
                             View Ledger
                           </button>
-                          <button className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" type="button">
+                          <button
+                            onClick={() => openEditModal(customer)}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                            type="button"
+                          >
                             <Edit className="h-3.5 w-3.5" />
                             Edit
                           </button>
@@ -313,6 +360,54 @@ export default function CustomersPage() {
                   Share on WhatsApp
                 </a>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200 text-left">
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-950">Edit Customer</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">Update customer details</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCustomer(null)}
+                className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-4">
+              <TextField label="Customer Name" value={editForm.name || ""} onChange={(name) => setEditForm({ ...editForm, name })} />
+              <NumberTextField label="Phone Number" value={editForm.phone_number || ""} onChange={(phone_number) => setEditForm({ ...editForm, phone_number })} />
+              <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
+              <TextField label="Place / City" value={editForm.place || ""} onChange={(place) => setEditForm({ ...editForm, place })} />
+              <TextField label="GST Number" value={editForm.gst_number || ""} onChange={(gst_number) => setEditForm({ ...editForm, gst_number })} />
+            </div>
+
+            {editError ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{editError}</p> : null}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+                type="button"
+                onClick={() => setEditingCustomer(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+                type="button"
+                disabled={isUpdating}
+                onClick={submitEdit}
+              >
+                {isUpdating ? "Updating..." : "Save Changes"}
+              </button>
             </div>
           </div>
         </div>

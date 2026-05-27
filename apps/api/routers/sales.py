@@ -178,6 +178,7 @@ class CustomerSearchResponse(BaseModel):
     place: str
     phone_number: str
     gst_number: str | None = None
+    company_name: str | None = None
 
 
 class BillCustomerOption(BaseModel):
@@ -1050,6 +1051,7 @@ def create_sales_customer(
         phone_number=phone_number,
         place=payload.place.strip(),
         gst_number=payload.gst_number.strip() if payload.gst_number else None,
+        firm_name=payload.company_name.strip() if payload.company_name else None,
         address=payload.address or payload.place.strip(),
         phone=phone_number,
         contact_number=phone_number,
@@ -1063,6 +1065,67 @@ def create_sales_customer(
     db.commit()
     db.refresh(customer)
     return customer
+
+
+class CustomerUpdatePayload(BaseModel):
+    name: str | None = None
+    phone_number: str | None = None
+    place: str | None = None
+    gst_number: str | None = None
+    company_name: str | None = None
+
+
+@router.patch("/customers/{customer_id}", response_model=CustomerSearchResponse)
+def update_sales_customer(
+    customer_id: int,
+    payload: CustomerUpdatePayload,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = (
+        db.query(Customer)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .filter(Customer.id == customer_id)
+        .first()
+    )
+    if customer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    if payload.name is not None:
+        customer.name = payload.name.strip()
+    if payload.phone_number is not None:
+        new_phone = payload.phone_number.strip()
+        if new_phone != (customer.phone_number or ""):
+            existing = (
+                db.query(Customer)
+                .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+                .filter(Customer.phone_number == new_phone)
+                .filter(Customer.id != customer_id)
+                .first()
+            )
+            if existing is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already in use by another customer")
+            customer.phone_number = new_phone
+            customer.phone = new_phone
+            customer.contact_number = new_phone
+    if payload.place is not None:
+        customer.place = payload.place.strip()
+        customer.address = payload.place.strip()
+    if payload.gst_number is not None:
+        customer.gst_number = payload.gst_number.strip() or None
+    if payload.company_name is not None:
+        customer.firm_name = payload.company_name.strip() or None
+
+    db.commit()
+    db.refresh(customer)
+    return CustomerSearchResponse(
+        id=customer.id,
+        name=customer.name,
+        place=customer.place or customer.address or "",
+        phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
+        gst_number=customer.gst_number,
+        company_name=customer.firm_name,
+    )
 
 
 @router.get("/customers/search", response_model=list[CustomerSearchResponse])
@@ -1091,6 +1154,7 @@ def search_customers(
             place=customer.place or customer.address or "",
             phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
             gst_number=customer.gst_number,
+            company_name=customer.firm_name,
         )
         for customer in customers
     ]

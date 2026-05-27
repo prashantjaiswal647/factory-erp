@@ -850,6 +850,18 @@ export function searchCustomers(q: string) {
   return api.get<CustomerSearchResult[]>("/api/customers/search", { params: { q } });
 }
 
+export type CustomerUpdate = {
+  name?: string;
+  phone_number?: string;
+  place?: string;
+  gst_number?: string;
+  company_name?: string;
+};
+
+export function updateSalesCustomer(customerId: number, payload: CustomerUpdate) {
+  return api.patch<CustomerSearchResult>(`/api/sales/customers/${customerId}`, payload);
+}
+
 export function getBillCustomers() {
   return api.get<BillCustomerOption[]>("/api/sales/bill-customers");
 }
