@@ -1749,15 +1749,29 @@ def clear_outstanding_order(
     if not confirm:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation required to clear outstanding balance")
 
+    return_order_id: int | None = None
+    return_status = "adjusted_closed"
+    legacy_order_id = bill_id
+
     try:
-        ledger_bill = (
-            db.query(OutstandingBill)
-            .options(joinedload(OutstandingBill.customer), joinedload(OutstandingBill.order))
-            .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
-            .filter(OutstandingBill.id == bill_id)
-            .with_for_update()
-            .first()
-        )
+        ledger_bill = None
+        try:
+            ledger_bill = (
+                db.query(OutstandingBill)
+                .options(joinedload(OutstandingBill.customer), joinedload(OutstandingBill.order))
+                .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
+                .filter(OutstandingBill.id == bill_id)
+                .with_for_update()
+                .first()
+            )
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception(
+                "Outstanding ledger lookup failed; falling back to legacy order clear: bill_id=%s factory_id=%s",
+                bill_id,
+                current_user.factory_id,
+            )
+
         if ledger_bill is not None:
             previous_balance = to_money(ledger_bill.balance_amount)
             ledger_bill.balance_amount = Decimal("0.00")
@@ -1765,6 +1779,8 @@ def clear_outstanding_order(
             ledger_bill.status = "adjusted_closed"
 
             order = ledger_bill.order
+            if ledger_bill.order_id is not None:
+                legacy_order_id = ledger_bill.order_id
             if order is not None:
                 order.balance_amount = Decimal("0.00")
                 order.pending_amount = Decimal("0.00")
@@ -1772,7 +1788,17 @@ def clear_outstanding_order(
                 order.status = "adjusted_closed"
 
             if ledger_bill.customer is not None and previous_balance > 0:
-                sync_customer_balance_from_bills(db, current_user.factory_id, ledger_bill.customer)
+                try:
+                    sync_customer_balance_from_bills(db, current_user.factory_id, ledger_bill.customer)
+                except SQLAlchemyError:
+                    db.rollback()
+                    ledger_bill = None
+                    logger.exception(
+                        "Outstanding ledger balance sync failed; falling back to legacy order clear: bill_id=%s factory_id=%s",
+                        bill_id,
+                        current_user.factory_id,
+                    )
+                    raise
 
             db.commit()
             return_order_id = ledger_bill.order_id
@@ -1813,18 +1839,88 @@ def clear_outstanding_order(
         raise
     except IntegrityError as exc:
         db.rollback()
-        logger.exception("Outstanding bill delete blocked by integrity constraints: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
-        ) from exc
+        try:
+            order = (
+                db.query(Order)
+                .options(joinedload(Order.customer))
+                .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+                .filter(Order.id == legacy_order_id)
+                .with_for_update()
+                .first()
+            )
+            if order is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found") from exc
+
+            previous_balance = to_money(order.balance_amount)
+            order.balance_amount = Decimal("0.00")
+            order.pending_amount = Decimal("0.00")
+            order.payment_status = "Adjusted"
+            order.status = "adjusted_closed"
+            if order.customer is not None and previous_balance > 0:
+                remaining_customer_balance = max(
+                    to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
+                    Decimal("0.00"),
+                )
+                order.customer.total_due = remaining_customer_balance
+                order.customer.balance_amount = remaining_customer_balance
+                order.customer.pending_balance = remaining_customer_balance
+                order.customer.pending_dues = float(remaining_customer_balance)
+
+            db.commit()
+            return_order_id = order.id
+            return_status = order.status
+        except HTTPException:
+            db.rollback()
+            raise
+        except SQLAlchemyError as fallback_exc:
+            db.rollback()
+            logger.exception("Outstanding bill delete blocked by integrity constraints: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
+            ) from fallback_exc
     except (OperationalError, SQLAlchemyError) as exc:
         db.rollback()
-        logger.exception("Outstanding bill delete database failure: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
-        ) from exc
+        try:
+            order = (
+                db.query(Order)
+                .options(joinedload(Order.customer))
+                .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+                .filter(Order.id == legacy_order_id)
+                .with_for_update()
+                .first()
+            )
+            if order is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found") from exc
+
+            previous_balance = to_money(order.balance_amount)
+            order.balance_amount = Decimal("0.00")
+            order.pending_amount = Decimal("0.00")
+            order.payment_status = "Adjusted"
+            order.status = "adjusted_closed"
+            if order.customer is not None and previous_balance > 0:
+                remaining_customer_balance = max(
+                    to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
+                    Decimal("0.00"),
+                )
+                order.customer.total_due = remaining_customer_balance
+                order.customer.balance_amount = remaining_customer_balance
+                order.customer.pending_balance = remaining_customer_balance
+                order.customer.pending_dues = float(remaining_customer_balance)
+
+            db.commit()
+            return_order_id = order.id
+            return_status = order.status
+        except HTTPException:
+            db.rollback()
+            raise
+        except SQLAlchemyError as fallback_exc:
+            db.rollback()
+            logger.exception("Outstanding bill delete database failure: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
+            ) from fallback_exc
 
     background_tasks.add_task(
         sync_data_to_n8n_bg,
