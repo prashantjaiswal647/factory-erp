@@ -921,8 +921,8 @@ export function recordPayment(payload: PaymentCreate) {
   return api.post("/api/accounts/payments", payload);
 }
 
-export function clearOutstandingBill(billId: number) {
-  return api.delete(`/api/sales/outstanding/${billId}`, { params: { confirm: true } });
+export function clearOutstandingBill(billId: number, reason?: string) {
+  return api.delete(`/api/sales/outstanding/${billId}`, { params: { confirm: true, reason } });
 }
 
 export function sendOutstandingReminder(customerId: number) {

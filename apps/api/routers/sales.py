@@ -1738,6 +1738,7 @@ def clear_outstanding_order(
     bill_id: int,
     background_tasks: BackgroundTasks,
     confirm: bool = Query(default=False),
+    reason: str = Query(default="paid"),  # 'mistake' or 'paid'
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
@@ -1752,6 +1753,10 @@ def clear_outstanding_order(
     factory_id = int(current_user.factory_id)
     return_order_id = bill_id
     return_status = "adjusted_closed"
+
+    # Enforce atomic transaction
+    if not db.in_transaction():
+        db.begin()
 
     try:
         # 1. Look up the OutstandingBill
@@ -1769,6 +1774,34 @@ def clear_outstanding_order(
             order_id = ledger_bill.order_id
             if order_id is not None:
                 return_order_id = order_id
+            else:
+                # Fallback to invoice document if order_id is not directly set
+                if ledger_bill.invoice_document_id is not None:
+                    invoice_doc = db.query(InvoiceDocument).filter(InvoiceDocument.id == ledger_bill.invoice_document_id).first()
+                    if invoice_doc is not None and invoice_doc.order_id is not None:
+                        order_id = invoice_doc.order_id
+                        return_order_id = order_id
+
+            # Fetch active line items and quantities associated with this bill/invoice before dropping it
+            order_items = []
+            if order_id is not None:
+                order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
+
+            # Dynamic stock restoration based on deletion reason
+            if reason == "mistake":
+                for item in order_items:
+                    if item.product_id is not None:
+                        qty_to_restore = item.quantity or item.boxes_sold or 0
+                        if qty_to_restore > 0:
+                            stock = db.query(FinishedGoodsStock).filter(
+                                FinishedGoodsStock.factory_id == str(factory_id),
+                                FinishedGoodsStock.id == item.product_id
+                            ).with_for_update().first()
+                            if stock is not None:
+                                stock.boxes_available += qty_to_restore
+            elif reason == "paid":
+                # Do NOT alter the inventory stock metrics (keep it deducted since goods are sold)
+                pass
 
             # 2. Hard delete dependent payment collections first to prevent FK constraint violations
             db.query(PaymentCollection).filter(
@@ -1787,7 +1820,7 @@ def clear_outstanding_order(
                 if order is not None:
                     order.balance_amount = Decimal("0.00")
                     order.pending_amount = Decimal("0.00")
-                    order.payment_status = "Adjusted"
+                    order.payment_status = "Paid" if reason == "paid" else "Adjusted"
                     order.status = "adjusted_closed"
 
             # 5. Safely recalculate and sync remaining active customer dues
@@ -1825,10 +1858,24 @@ def clear_outstanding_order(
             db.query(PaymentCollection).filter(PaymentCollection.factory_id == factory_id, PaymentCollection.customer_id == order.customer_id).delete()
             db.flush()
 
+            # Dynamic stock restoration for legacy fallback
+            if reason == "mistake":
+                order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+                for item in order_items:
+                    if item.product_id is not None:
+                        qty_to_restore = item.quantity or item.boxes_sold or 0
+                        if qty_to_restore > 0:
+                            stock = db.query(FinishedGoodsStock).filter(
+                                FinishedGoodsStock.factory_id == str(factory_id),
+                                FinishedGoodsStock.id == item.product_id
+                            ).with_for_update().first()
+                            if stock is not None:
+                                stock.boxes_available += qty_to_restore
+
             previous_balance = to_money(order.balance_amount)
             order.balance_amount = Decimal("0.00")
             order.pending_amount = Decimal("0.00")
-            order.payment_status = "Adjusted"
+            order.payment_status = "Paid" if reason == "paid" else "Adjusted"
             order.status = "adjusted_closed"
 
             if order.customer is not None:
@@ -1851,12 +1898,28 @@ def clear_outstanding_order(
             # Force hard-deletion and state reset via direct raw SQL updates to bypass any complex ORM constraint blocks
             factory_id_val = int(current_user.factory_id)
             
-            # Fetch customer_id to update balances afterwards
+            # Fetch customer_id and order_id to update balances and handle stock if reason == mistake
             cust_id_res = db.execute(
                 text("SELECT customer_id, order_id FROM outstanding_bills WHERE factory_id = :fid AND id = :bid"),
                 {"fid": factory_id_val, "bid": bill_id}
             ).first()
             
+            # If reason == mistake, reverse stock via raw SQL
+            if reason == "mistake" and cust_id_res and cust_id_res[1] is not None:
+                oid = cust_id_res[1]
+                items_res = db.execute(
+                    text("SELECT product_id, quantity, boxes_sold FROM order_items WHERE order_id = :oid"),
+                    {"oid": oid}
+                ).all()
+                for item in items_res:
+                    if item[0] is not None:
+                        qty = item[1] or item[2] or 0
+                        if qty > 0:
+                            db.execute(
+                                text("UPDATE finished_goods_stock SET boxes_available = boxes_available + :qty WHERE factory_id = :fid AND id = :pid"),
+                                {"qty": qty, "fid": str(factory_id_val), "pid": item[0]}
+                            )
+
             db.execute(
                 text("DELETE FROM payment_collections WHERE outstanding_bill_id = :bid"),
                 {"bid": bill_id}
@@ -1865,9 +1928,11 @@ def clear_outstanding_order(
                 text("DELETE FROM outstanding_bills WHERE factory_id = :fid AND id = :bid"),
                 {"fid": factory_id_val, "bid": bill_id}
             )
+            
+            payment_status_val = "Paid" if reason == "paid" else "Adjusted"
             db.execute(
-                text("UPDATE orders SET balance_amount = 0, pending_amount = 0, payment_status = 'Adjusted', status = 'adjusted_closed' WHERE factory_id = :fid AND (id = :bid OR id = (SELECT order_id FROM outstanding_bills WHERE id = :bid))"),
-                {"fid": factory_id_val, "bid": bill_id}
+                text("UPDATE orders SET balance_amount = 0, pending_amount = 0, payment_status = :pstatus, status = 'adjusted_closed' WHERE factory_id = :fid AND (id = :bid OR id = :oid)"),
+                {"fid": factory_id_val, "bid": bill_id, "oid": cust_id_res[1] if cust_id_res and cust_id_res[1] is not None else -1, "pstatus": payment_status_val}
             )
             
             # Recalculate customer due
@@ -1901,6 +1966,7 @@ def clear_outstanding_order(
     )
 
     return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=return_order_id, status=return_status)
+
 
 
 

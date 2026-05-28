@@ -32,6 +32,8 @@ function Summary({ label, value, strong = false }: { label: string; value: strin
 }
 
 export default function OutstandingPage() {
+
+export default function OutstandingPage() {
   const [rows, setRows] = useState<OutstandingCustomer[]>([]);
   const [grandTotal, setGrandTotal] = useState("0");
   const [query, setQuery] = useState("");
@@ -43,6 +45,7 @@ export default function OutstandingPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const [deleteModalData, setDeleteModalData] = useState<{ row: OutstandingCustomer; bill: OutstandingBill } | null>(null);
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
   const canDeleteOutstanding = user?.role === "Owner";
@@ -122,18 +125,23 @@ export default function OutstandingPage() {
     }
   }
 
-  async function clearBill(row: OutstandingCustomer, bill: OutstandingBill) {
+  function initiateDeleteBill(row: OutstandingCustomer, bill: OutstandingBill) {
     if (!canDeleteOutstanding) {
       setError("Access Denied: Only the Factory Owner is authorized to delete entries.");
       return;
     }
-    const confirmed = window.confirm("Warning: This will manually clear the outstanding balance for this bill. This action cannot be undone. Proceed?");
-    if (!confirmed) return;
+    setDeleteModalData({ row, bill });
+  }
 
+  async function handleConfirmDelete(reason: "mistake" | "paid") {
+    if (!deleteModalData) return;
+    const { row, bill } = deleteModalData;
+    setIsSaving(true);
     setError("");
     try {
-      await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0);
-      setToast("Outstanding bill manually cleared");
+      await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0, reason);
+      setToast(`Outstanding bill manually cleared (${reason === "mistake" ? "Stock reversed" : "Stock kept deducted"})`);
+      setDeleteModalData(null);
       triggerDataRefresh();
       await load();
       if (expandedCustomerId === row.customer_id && row.bills?.length === 1) {
@@ -141,6 +149,8 @@ export default function OutstandingPage() {
       }
     } catch {
       setError("Outstanding bill clear nahi ho paaya.");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -244,7 +254,7 @@ export default function OutstandingPage() {
                                         Pay Bill
                                       </button>
                                       {canDeleteOutstanding ? (
-                                        <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => clearBill(row, bill)}>
+                                        <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => initiateDeleteBill(row, bill)}>
                                           <Trash2 className="h-4 w-4" />
                                         </button>
                                       ) : null}
@@ -310,6 +320,73 @@ export default function OutstandingPage() {
               </button>
               <button className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" type="button" disabled={isSaving} onClick={submitPayment}>
                 {isSaving ? "Saving..." : "Save Payment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteModalData ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-zinc-950/60 backdrop-blur-sm px-4">
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl border border-zinc-100">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-zinc-950 flex items-center gap-2">
+                  <Trash2 className="h-5 w-5 text-red-600 animate-pulse" />
+                  Delete Outstanding Bill
+                </h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Customer: <span className="font-semibold text-zinc-800">{deleteModalData.row.customer_name}</span> · Bill ID: <span className="font-semibold text-zinc-800">#{deleteModalData.bill.bill_id ?? deleteModalData.bill.order_id}</span>
+                </p>
+              </div>
+              <button className="grid h-8 w-8 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 transition" type="button" onClick={() => setDeleteModalData(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-6">
+              <p className="text-sm font-medium text-zinc-700">Why are you deleting this bill?</p>
+              <p className="text-xs text-zinc-400 mt-1">Please select the reason for deletion to correctly update your inventory stock.</p>
+              
+              <div className="mt-4 grid gap-3">
+                <button
+                  type="button"
+                  className="flex flex-col text-left w-full p-4 rounded-lg border border-amber-200 bg-amber-50/50 hover:bg-amber-50 hover:border-amber-300 transition-all shadow-sm"
+                  onClick={() => handleConfirmDelete("mistake")}
+                  disabled={isSaving}
+                >
+                  <span className="font-semibold text-amber-900 text-sm flex items-center gap-1.5">
+                    Generated by mistake (Reverse Stock)
+                  </span>
+                  <span className="text-xs text-amber-700 mt-1">
+                    Select this if the bill was created in error. The system will automatically restore the ordered item quantities back into your finished goods stock.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex flex-col text-left w-full p-4 rounded-lg border border-zinc-200 bg-zinc-50/50 hover:bg-zinc-50 hover:border-zinc-300 transition-all shadow-sm"
+                  onClick={() => handleConfirmDelete("paid")}
+                  disabled={isSaving}
+                >
+                  <span className="font-semibold text-zinc-900 text-sm">
+                    Customer Paid the Bill (Keep Stock Deducted)
+                  </span>
+                  <span className="text-xs text-zinc-600 mt-1">
+                    Select this if the customer has settled this bill. Stock is already delivered and will not be altered. The bill is closed and archived.
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 border-t border-zinc-100 pt-4">
+              <button
+                className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-600 hover:bg-zinc-50 transition"
+                type="button"
+                onClick={() => setDeleteModalData(null)}
+                disabled={isSaving}
+              >
+                Cancel
               </button>
             </div>
           </div>
