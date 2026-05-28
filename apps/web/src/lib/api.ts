@@ -641,6 +641,14 @@ export type OutstandingCustomer = {
   bills?: OutstandingBill[];
 };
 
+export type BillPaymentLog = {
+  id: number;
+  amount_allocated: string;
+  payment_date: string;
+  received_by_name?: string | null;
+  received_by_role?: string | null;
+};
+
 export type OutstandingBill = {
   bill_id?: number | null;
   order_id?: number | null;
@@ -649,6 +657,7 @@ export type OutstandingBill = {
   amount_paid: string;
   remaining_balance: string;
   status: string;
+  payments?: BillPaymentLog[];
 };
 
 export type OutstandingResponse = {

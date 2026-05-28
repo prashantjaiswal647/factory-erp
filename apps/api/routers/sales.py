@@ -246,6 +246,14 @@ class PendingSaleResponse(BaseModel):
     items: list[PendingSaleItemResponse]
 
 
+class BillPaymentLogResponse(BaseModel):
+    id: int
+    amount_allocated: Decimal
+    payment_date: str
+    received_by_name: str | None = None
+    received_by_role: str | None = None
+
+
 class OutstandingBillResponse(BaseModel):
     bill_id: int | None = None
     order_id: int | None = None
@@ -254,6 +262,7 @@ class OutstandingBillResponse(BaseModel):
     amount_paid: Decimal
     remaining_balance: Decimal
     status: str
+    payments: list[BillPaymentLogResponse] = []
 
 
 class OutstandingCustomerBillsResponse(BaseModel):
@@ -1626,7 +1635,7 @@ def get_sales_outstanding(
 ):
     ledger_bills = (
         db.query(OutstandingBill)
-        .options(joinedload(OutstandingBill.customer))
+        .options(joinedload(OutstandingBill.customer), joinedload(OutstandingBill.payments))
         .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
         .filter(OutstandingBill.balance_amount > 0)
         .filter(OutstandingBill.status.in_(["active", "partial"]))
@@ -1664,6 +1673,16 @@ def get_sales_outstanding(
                     amount_paid=to_money(bill.amount_paid),
                     remaining_balance=to_money(bill.balance_amount),
                     status=bill.status,
+                    payments=[
+                        BillPaymentLogResponse(
+                            id=p.id,
+                            amount_allocated=to_money(p.amount_allocated),
+                            payment_date=p.payment_date.isoformat() if p.payment_date else "",
+                            received_by_name=p.received_by_name,
+                            received_by_role=p.received_by_role,
+                        )
+                        for p in (bill.payments or [])
+                    ]
                 )
             )
             grand_total = to_money(grand_total + to_money(bill.balance_amount))

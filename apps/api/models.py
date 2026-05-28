@@ -1027,6 +1027,7 @@ class OutstandingBill(TenantMixin, Base):
     customer = relationship("Customer")
     order = relationship("Order")
     invoice_document = relationship("InvoiceDocument")
+    payments = relationship("BillPayment", back_populates="bill", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("bill_amount >= 0", name="ck_outstanding_bills_bill_amount_non_negative"),
@@ -1284,4 +1285,22 @@ class ActivityLog(TenantMixin, Base):
             "event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry')",
             name="ck_activity_logs_event_type",
         ),
+    )
+
+
+class BillPayment(TenantMixin, Base):
+    __tablename__ = "bill_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bill_id = Column(Integer, ForeignKey("outstanding_bills.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_allocated = Column(Numeric(14, 2), nullable=False)
+    payment_date = Column(Date, nullable=False, index=True)
+    received_by_name = Column(String(100), nullable=True)
+    received_by_role = Column(String(50), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    bill = relationship("OutstandingBill", back_populates="payments")
+
+    __table_args__ = (
+        CheckConstraint("amount_allocated > 0", name="ck_bill_payments_amount_allocated_positive"),
     )

@@ -720,6 +720,8 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS idx_payment_collections_factory_customer ON payment_collections(factory_id, customer_id)",
         "CREATE INDEX IF NOT EXISTS idx_payment_collections_bill_id ON payment_collections(outstanding_bill_id)",
         "CREATE INDEX IF NOT EXISTS idx_payment_collections_payment_id ON payment_collections(payment_id)",
+        "CREATE TABLE IF NOT EXISTS bill_payments (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, bill_id INTEGER NOT NULL REFERENCES outstanding_bills(id) ON DELETE CASCADE, amount_allocated NUMERIC(14,2) NOT NULL, payment_date DATE NOT NULL DEFAULT CURRENT_DATE, received_by_name VARCHAR(100) NULL, received_by_role VARCHAR(50) NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT ck_bill_payments_amount_allocated_positive CHECK (amount_allocated > 0))",
+        "CREATE INDEX IF NOT EXISTS idx_bill_payments_bill_id ON bill_payments(bill_id)",
         "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
         "ALTER TABLE attendance_logs DROP CONSTRAINT IF EXISTS ck_attendance_logs_duty_hours_positive",
         "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_duty_hours_positive CHECK (duty_hours > 0)",

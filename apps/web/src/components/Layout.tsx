@@ -29,7 +29,7 @@ const navigation: NavigationItem[] = [
   { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Invoices", href: "/invoices", icon: FileText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
-  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner"], section: "Admin" },
   { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },

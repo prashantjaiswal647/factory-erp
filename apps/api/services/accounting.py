@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from models import Customer, OutstandingBill, PaymentCollection
+from models import Customer, OutstandingBill, PaymentCollection, BillPayment, User
 
 
 MONEY_QUANT = Decimal("0.01")
@@ -103,25 +103,98 @@ def apply_payment_to_outstanding_bills(
     if selected_order_id is not None and bills and remaining > to_money(bills[0].balance_amount):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment amount exceeds selected bill balance")
 
-    for bill in bills:
-        if remaining <= 0:
-            break
-        applied = min(remaining, to_money(bill.balance_amount))
-        bill.amount_paid = to_money(bill.amount_paid) + applied
-        bill.balance_amount = max(to_money(bill.balance_amount) - applied, Decimal("0.00"))
-        bill.status = "closed" if bill.balance_amount <= 0 else "partial"
-        db.add(
-            PaymentCollection(
-                factory_id=int(factory_id),
-                customer_id=customer_id,
-                payment_id=payment_id,
-                outstanding_bill_id=bill.id,
-                amount_collected=applied,
-                payment_mode=payment_mode,
-                collection_date=collection_date,
-                created_by_user_id=created_by_user_id,
-            )
-        )
-        remaining = to_money(remaining - applied)
+    # Wrap operations inside an isolated database transactional block
+    if not db.in_transaction():
+        db.begin()
+
+    try:
+        # Retrieve received by auditor staff context details
+        staff_name = "System"
+        staff_role = "System"
+        if created_by_user_id is not None:
+            user_rec = db.query(User).filter(User.id == created_by_user_id).first()
+            if user_rec is not None:
+                staff_name = user_rec.username
+                staff_role = user_rec.role
+
+        for bill in bills:
+            if remaining <= 0:
+                break
+            
+            remaining_amount = to_money(bill.balance_amount)
+            if remaining >= remaining_amount:
+                # Deduct the remaining amount to change bill status to "Paid", subtract portion from remaining
+                bill.amount_paid = to_money(bill.amount_paid) + remaining_amount
+                bill.balance_amount = Decimal("0.00")
+                bill.status = "Paid"  # changed bill status to "Paid"
+                
+                # Add child log audit record
+                db.add(
+                    BillPayment(
+                        factory_id=int(factory_id),
+                        bill_id=bill.id,
+                        amount_allocated=remaining_amount,
+                        payment_date=collection_date,
+                        received_by_name=staff_name,
+                        received_by_role=staff_role,
+                    )
+                )
+
+                # payment_collections compatibility record
+                db.add(
+                    PaymentCollection(
+                        factory_id=int(factory_id),
+                        customer_id=customer_id,
+                        payment_id=payment_id,
+                        outstanding_bill_id=bill.id,
+                        amount_collected=remaining_amount,
+                        payment_mode=payment_mode,
+                        collection_date=collection_date,
+                        created_by_user_id=created_by_user_id,
+                    )
+                )
+                
+                remaining = to_money(remaining - remaining_amount)
+            else:
+                # Deduct entire remaining amount from this bill's outstanding balance, and set remaining = 0 to break
+                bill.amount_paid = to_money(bill.amount_paid) + remaining
+                bill.balance_amount = max(to_money(bill.balance_amount) - remaining, Decimal("0.00"))
+                bill.status = "partial"
+
+                # Add child log audit record
+                db.add(
+                    BillPayment(
+                        factory_id=int(factory_id),
+                        bill_id=bill.id,
+                        amount_allocated=remaining,
+                        payment_date=collection_date,
+                        received_by_name=staff_name,
+                        received_by_role=staff_role,
+                    )
+                )
+
+                # payment_collections compatibility record
+                db.add(
+                    PaymentCollection(
+                        factory_id=int(factory_id),
+                        customer_id=customer_id,
+                        payment_id=payment_id,
+                        outstanding_bill_id=bill.id,
+                        amount_collected=remaining,
+                        payment_mode=payment_mode,
+                        collection_date=collection_date,
+                        created_by_user_id=created_by_user_id,
+                    )
+                )
+                
+                remaining = Decimal("0.00")
+                break
+        db.flush()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Isolated payment transaction collection failed: {exc}"
+        ) from exc
 
     return remaining

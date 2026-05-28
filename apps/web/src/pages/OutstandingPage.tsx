@@ -32,8 +32,6 @@ function Summary({ label, value, strong = false }: { label: string; value: strin
 }
 
 export default function OutstandingPage() {
-
-export default function OutstandingPage() {
   const [rows, setRows] = useState<OutstandingCustomer[]>([]);
   const [grandTotal, setGrandTotal] = useState("0");
   const [query, setQuery] = useState("");
@@ -46,6 +44,7 @@ export default function OutstandingPage() {
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [deleteModalData, setDeleteModalData] = useState<{ row: OutstandingCustomer; bill: OutstandingBill } | null>(null);
+  const [expandedBillHistoryId, setExpandedBillHistoryId] = useState<number | null>(null);
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
   const canDeleteOutstanding = user?.role === "Owner";
@@ -242,26 +241,81 @@ export default function OutstandingPage() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-zinc-100">
-                              {(row.bills || []).map((bill) => (
-                                <tr key={bill.bill_id ?? bill.order_id}>
-                                  <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id ?? bill.bill_id}</td>
-                                  <td className="px-4 py-3 text-zinc-600">{formatDateTime(bill.order_date)}</td>
-                                  <td className="px-4 py-3 text-right text-zinc-700">{money(bill.bill_amount)}</td>
-                                  <td className="px-4 py-3 text-right font-semibold text-red-700">{money(bill.remaining_balance)}</td>
-                                  <td className="px-4 py-3 text-right">
-                                    <div className="flex justify-end gap-2">
-                                      <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row, bill)}>
-                                        Pay Bill
-                                      </button>
-                                      {canDeleteOutstanding ? (
-                                        <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => initiateDeleteBill(row, bill)}>
-                                          <Trash2 className="h-4 w-4" />
-                                        </button>
-                                      ) : null}
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
+                              {(row.bills || []).map((bill) => {
+                                const isHistoryExpanded = expandedBillHistoryId === (bill.bill_id ?? bill.order_id);
+                                return (
+                                  <div key={bill.bill_id ?? bill.order_id} style={{ display: "contents" }}>
+                                    <tr className={isHistoryExpanded ? "bg-zinc-50/30" : ""}>
+                                      <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id ?? bill.bill_id}</td>
+                                      <td className="px-4 py-3 text-zinc-600">{formatDateTime(bill.order_date)}</td>
+                                      <td className="px-4 py-3 text-right text-zinc-700">{money(bill.bill_amount)}</td>
+                                      <td className="px-4 py-3 text-right font-semibold text-red-700">{money(bill.remaining_balance)}</td>
+                                      <td className="px-4 py-3 text-right">
+                                        <div className="flex justify-end gap-2">
+                                          <button
+                                            className={`rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                                              isHistoryExpanded
+                                                ? "border-zinc-300 bg-zinc-100 text-zinc-800"
+                                                : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                                            }`}
+                                            type="button"
+                                            onClick={() => setExpandedBillHistoryId(isHistoryExpanded ? null : (bill.bill_id ?? bill.order_id ?? null))}
+                                          >
+                                            {isHistoryExpanded ? "Hide History" : "History"}
+                                          </button>
+                                          <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row, bill)}>
+                                            Pay Bill
+                                          </button>
+                                          {canDeleteOutstanding ? (
+                                            <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => initiateDeleteBill(row, bill)}>
+                                              <Trash2 className="h-4 w-4" />
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                      </td>
+                                    </tr>
+
+                                    {isHistoryExpanded ? (
+                                      <tr className="bg-zinc-50/50">
+                                        <td colSpan={5} className="px-4 py-3">
+                                          <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+                                            <p className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Payment History Log</p>
+                                            {(!bill.payments || bill.payments.length === 0) ? (
+                                              <p className="text-xs text-zinc-500 py-1">No payment transactions recorded for this bill.</p>
+                                            ) : (
+                                              <div className="overflow-x-auto">
+                                                <table className="min-w-full divide-y divide-zinc-200 text-xs">
+                                                  <thead className="bg-zinc-50 text-left font-semibold uppercase text-zinc-500">
+                                                    <tr>
+                                                      <th className="px-3 py-2">Date of Payment</th>
+                                                      <th className="px-3 py-2 text-right">Amount Paid</th>
+                                                      <th className="px-3 py-2">Received By (Staff Role/Name)</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody className="divide-y divide-zinc-100">
+                                                    {bill.payments.map((p) => (
+                                                      <tr key={p.id}>
+                                                        <td className="px-3 py-2 text-zinc-600">{formatDateTime(p.payment_date)}</td>
+                                                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{money(p.amount_allocated)}</td>
+                                                        <td className="px-3 py-2 text-zinc-700">
+                                                          <span className="inline-flex items-center gap-1 rounded bg-brand-50 px-2 py-0.5 font-medium text-brand-700 text-[10px]">
+                                                            {p.received_by_role || "System"}
+                                                          </span>{" "}
+                                                          {p.received_by_name || "Unknown"}
+                                                        </td>
+                                                      </tr>
+                                                    ))}
+                                                  </tbody>
+                                                </table>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
