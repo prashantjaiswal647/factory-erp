@@ -837,8 +837,11 @@ export function getInvoiceDocuments() {
   return api.get<InvoiceDashboardResponse>("/api/sales/invoices");
 }
 
-export function downloadInvoicePdf(invoiceId: number) {
-  return api.get<Blob>(`/api/sales/invoices/${invoiceId}/pdf`, { responseType: "blob" });
+export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
+  return api.get<Blob>(`/api/sales/invoices/${invoiceId}/pdf`, { 
+    responseType: "blob", 
+    params: inline ? { inline: true } : undefined 
+  });
 }
 
 export function createPendingSaleOrder(payload: DailySaleCreate) {

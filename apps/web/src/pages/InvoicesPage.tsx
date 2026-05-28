@@ -1,4 +1,4 @@
-import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound } from "lucide-react";
+import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { downloadInvoicePdf, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, api } from "../lib/api";
@@ -73,6 +73,7 @@ export default function InvoicesPage() {
   const [data, setData] = useState<InvoiceDashboardResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [viewingId, setViewingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   
   // Custom Invoice Form state
@@ -156,6 +157,22 @@ export default function InvoicesPage() {
       setMessage(apiErrorMessage(error));
     } finally {
       setDownloadingId(null);
+    }
+  }
+
+  async function preview(invoice: InvoiceDocumentSummary) {
+    setViewingId(invoice.id);
+    try {
+      const response = await downloadInvoicePdf(invoice.id, true);
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setMessage("Invoice PDF opened in a new tab.");
+      void loadInvoices();
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setViewingId(null);
     }
   }
 
@@ -518,15 +535,26 @@ export default function InvoicesPage() {
                       <td className="px-4 py-3 text-right">{money(invoice.amount_paid)}</td>
                       <td className="px-4 py-3 text-right">{money(invoice.customer_total_due)}</td>
                       <td className="px-4 py-3 text-right">
-                        <button 
-                          className="inline-flex h-9 items-center gap-2 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300 shadow-sm" 
-                          type="button" 
-                          disabled={downloadingId === invoice.id} 
-                          onClick={() => download(invoice)}
-                        >
-                          <Download className="h-4 w-4" />
-                          {downloadingId === invoice.id ? "Preparing" : "Download"}
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button 
+                            className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-200 disabled:bg-zinc-150 shadow-sm transition" 
+                            type="button" 
+                            disabled={viewingId === invoice.id} 
+                            onClick={() => preview(invoice)}
+                          >
+                            <Eye className="h-4 w-4 text-zinc-500" />
+                            {viewingId === invoice.id ? "Opening" : "View"}
+                          </button>
+                          <button 
+                            className="inline-flex h-9 items-center gap-2 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300 shadow-sm transition" 
+                            type="button" 
+                            disabled={downloadingId === invoice.id} 
+                            onClick={() => download(invoice)}
+                          >
+                            <Download className="h-4 w-4" />
+                            {downloadingId === invoice.id ? "Preparing" : "Download"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

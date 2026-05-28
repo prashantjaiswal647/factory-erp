@@ -13,14 +13,14 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import String, cast, or_, func as sql_func
+from sqlalchemy import String, cast, or_, func as sql_func, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog, OutstandingBill
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
@@ -1376,6 +1376,7 @@ def list_invoice_documents(
 @router.get("/invoices/{invoice_document_id}/pdf")
 def download_invoice_pdf(
     invoice_document_id: int,
+    inline: bool = Query(False, description="If true, serve PDF inline in browser"),
     current_user: User = Depends(check_permissions(SALES_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -1395,10 +1396,11 @@ def download_invoice_pdf(
     db.commit()
 
     filename = f"invoice_{factory_id}_{invoice.invoice_number}.pdf".replace("/", "_").replace("\\", "_")
+    disposition = "inline" if inline else "attachment"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
     )
 
 
@@ -1812,16 +1814,99 @@ def clear_outstanding_order(
 
             # Dynamic stock restoration based on deletion reason
             if reason == "mistake":
-                for item in order_items:
-                    if item.product_id is not None:
-                        qty_to_restore = item.quantity or item.boxes_sold or 0
-                        if qty_to_restore > 0:
-                            stock = db.query(FinishedGoodsStock).filter(
-                                FinishedGoodsStock.factory_id == str(factory_id),
-                                FinishedGoodsStock.id == item.product_id
+                # Find sale_ids and items from invoice document if order_id is not set or order_items is empty
+                sale_ids = []
+                invoice_items_data = []
+                if ledger_bill.invoice_document_id is not None:
+                    invoice_doc = db.query(InvoiceDocument).filter(InvoiceDocument.id == ledger_bill.invoice_document_id).first()
+                    if invoice_doc and invoice_doc.payload_json:
+                        invoice_data = invoice_doc.payload_json.get("invoice", {})
+                        sale_ids = invoice_data.get("sale_ids", [])
+                        invoice_items_data = invoice_doc.payload_json.get("items", [])
+
+                # 1. Delete daily sales from database so they don't count towards live stock calculations
+                if sale_ids:
+                    db.query(DailySale).filter(DailySale.id.in_(sale_ids)).delete(synchronize_session=False)
+                elif ledger_bill.customer_id is not None:
+                    db.query(DailySale).filter(
+                        DailySale.factory_id == str(factory_id),
+                        DailySale.customer_id == ledger_bill.customer_id,
+                        DailySale.date == ledger_bill.bill_date
+                    ).delete(synchronize_session=False)
+
+                # 2. Sequential Stock = Stock + Order_Quantity increment on FinishedGoodsStock and FinalProductStock
+                if order_items:
+                    for item in order_items:
+                        qty = item.boxes_sold or item.quantity or 0
+                        if qty > 0:
+                            # Update FinishedGoodsStock if product_id is set
+                            if item.product_id is not None:
+                                fg_stock = db.query(FinishedGoodsStock).filter(
+                                    FinishedGoodsStock.factory_id == str(factory_id),
+                                    FinishedGoodsStock.id == item.product_id
+                                ).with_for_update().first()
+                                if fg_stock is not None:
+                                    fg_stock.boxes_available += qty
+                                    db.add(fg_stock)
+                            
+                            # Sequential lookup on FinalProductStock by product attributes
+                            if item.product_size_ml and item.packaging_size_name:
+                                variety_val = item.variety or "Standard/White"
+                                final_stock = db.query(FinalProductStock).filter(
+                                    FinalProductStock.factory_id == str(factory_id),
+                                    FinalProductStock.product_size_ml == item.product_size_ml,
+                                    sql_func.lower(FinalProductStock.variety) == variety_val.strip().lower(),
+                                    sql_func.lower(FinalProductStock.packaging_size_name) == item.packaging_size_name.strip().lower()
+                                ).with_for_update().first()
+                                if final_stock is not None:
+                                    final_stock.current_quantity += qty
+                                    db.add(final_stock)
+                                    
+                                    # Cross-sync FinishedGoodsStock by profile
+                                    profile = db.query(PackagingProfile).filter(
+                                        PackagingProfile.factory_id == str(factory_id),
+                                        PackagingProfile.cup_size_ml == item.product_size_ml,
+                                        sql_func.lower(PackagingProfile.profile_name) == item.packaging_size_name.strip().lower()
+                                    ).first()
+                                    if profile:
+                                        fg_stock2 = db.query(FinishedGoodsStock).filter(
+                                            FinishedGoodsStock.factory_id == str(factory_id),
+                                            FinishedGoodsStock.packaging_profile_id == profile.id
+                                        ).with_for_update().first()
+                                        if fg_stock2 is not None:
+                                            fg_stock2.boxes_available += qty
+                                            db.add(fg_stock2)
+                elif invoice_items_data:
+                    for item_data in invoice_items_data:
+                        qty = item_data.get("boxes_sold") or 0
+                        product_size_ml = item_data.get("product_size_ml")
+                        packaging_size_name = item_data.get("packaging_size_name")
+                        variety_val = item_data.get("variety") or "Standard/White"
+                        
+                        if qty > 0 and product_size_ml and packaging_size_name:
+                            final_stock = db.query(FinalProductStock).filter(
+                                FinalProductStock.factory_id == str(factory_id),
+                                FinalProductStock.product_size_ml == product_size_ml,
+                                sql_func.lower(FinalProductStock.variety) == variety_val.strip().lower(),
+                                sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.strip().lower()
                             ).with_for_update().first()
-                            if stock is not None:
-                                stock.boxes_available += qty_to_restore
+                            if final_stock is not None:
+                                final_stock.current_quantity += qty
+                                db.add(final_stock)
+                                
+                            profile = db.query(PackagingProfile).filter(
+                                PackagingProfile.factory_id == str(factory_id),
+                                PackagingProfile.cup_size_ml == product_size_ml,
+                                sql_func.lower(PackagingProfile.profile_name) == packaging_size_name.strip().lower()
+                            ).first()
+                            if profile:
+                                fg_stock = db.query(FinishedGoodsStock).filter(
+                                    FinishedGoodsStock.factory_id == str(factory_id),
+                                    FinishedGoodsStock.packaging_profile_id == profile.id
+                                ).with_for_update().first()
+                                if fg_stock is not None:
+                                    fg_stock.boxes_available += qty
+                                    db.add(fg_stock)
             elif reason == "paid":
                 # Do NOT alter the inventory stock metrics (keep it deducted since goods are sold)
                 pass
@@ -1883,17 +1968,52 @@ def clear_outstanding_order(
 
             # Dynamic stock restoration for legacy fallback
             if reason == "mistake":
+                # Delete daily sales for this customer on this date
+                if order.customer_id is not None:
+                    db.query(DailySale).filter(
+                        DailySale.factory_id == str(factory_id),
+                        DailySale.customer_id == order.customer_id,
+                        DailySale.date == (order.order_date.date() if order.order_date else datetime.now(timezone.utc).date())
+                    ).delete(synchronize_session=False)
+
                 order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
                 for item in order_items:
-                    if item.product_id is not None:
-                        qty_to_restore = item.quantity or item.boxes_sold or 0
-                        if qty_to_restore > 0:
-                            stock = db.query(FinishedGoodsStock).filter(
+                    qty = item.boxes_sold or item.quantity or 0
+                    if qty > 0:
+                        if item.product_id is not None:
+                            fg_stock = db.query(FinishedGoodsStock).filter(
                                 FinishedGoodsStock.factory_id == str(factory_id),
                                 FinishedGoodsStock.id == item.product_id
                             ).with_for_update().first()
-                            if stock is not None:
-                                stock.boxes_available += qty_to_restore
+                            if fg_stock is not None:
+                                fg_stock.boxes_available += qty
+                                db.add(fg_stock)
+                        
+                        if item.product_size_ml and item.packaging_size_name:
+                            variety_val = item.variety or "Standard/White"
+                            final_stock = db.query(FinalProductStock).filter(
+                                FinalProductStock.factory_id == str(factory_id),
+                                FinalProductStock.product_size_ml == item.product_size_ml,
+                                sql_func.lower(FinalProductStock.variety) == variety_val.strip().lower(),
+                                sql_func.lower(FinalProductStock.packaging_size_name) == item.packaging_size_name.strip().lower()
+                            ).with_for_update().first()
+                            if final_stock is not None:
+                                final_stock.current_quantity += qty
+                                db.add(final_stock)
+
+                            profile = db.query(PackagingProfile).filter(
+                                PackagingProfile.factory_id == str(factory_id),
+                                PackagingProfile.cup_size_ml == item.product_size_ml,
+                                sql_func.lower(PackagingProfile.profile_name) == item.packaging_size_name.strip().lower()
+                            ).first()
+                            if profile:
+                                fg_stock2 = db.query(FinishedGoodsStock).filter(
+                                    FinishedGoodsStock.factory_id == str(factory_id),
+                                    FinishedGoodsStock.packaging_profile_id == profile.id
+                                ).with_for_update().first()
+                                if fg_stock2 is not None:
+                                    fg_stock2.boxes_available += qty
+                                    db.add(fg_stock2)
 
             previous_balance = to_money(order.balance_amount)
             order.balance_amount = Decimal("0.00")
@@ -1942,20 +2062,36 @@ def clear_outstanding_order(
             ).first()
             
             # If reason == mistake, reverse stock via raw SQL
-            if reason == "mistake" and cust_id_res and cust_id_res[1] is not None:
-                oid = cust_id_res[1]
-                items_res = db.execute(
-                    text("SELECT product_id, quantity, boxes_sold FROM order_items WHERE order_id = :oid"),
-                    {"oid": oid}
-                ).all()
-                for item in items_res:
-                    if item[0] is not None:
-                        qty = item[1] or item[2] or 0
+            if reason == "mistake":
+                # Find sale ids and delete daily sales via raw SQL
+                db.execute(
+                    text("DELETE FROM daily_sales WHERE customer_id = :cid AND date = (SELECT bill_date FROM outstanding_bills WHERE id = :bid)"),
+                    {"cid": cust_id_res[0] if cust_id_res else -1, "bid": bill_id}
+                )
+                if cust_id_res and cust_id_res[1] is not None:
+                    oid = cust_id_res[1]
+                    items_res = db.execute(
+                        text("SELECT product_id, quantity, boxes_sold, product_size_ml, variety, packaging_size_name FROM order_items WHERE order_id = :oid"),
+                        {"oid": oid}
+                    ).all()
+                    for item in items_res:
+                        qty = item[2] or item[1] or 0
                         if qty > 0:
-                            db.execute(
-                                text("UPDATE finished_goods_stock SET boxes_available = boxes_available + :qty WHERE factory_id = :fid AND id = :pid"),
-                                {"qty": qty, "fid": str(factory_id_val), "pid": item[0]}
-                            )
+                            if item[0] is not None:
+                                db.execute(
+                                    text("UPDATE finished_goods_stock SET boxes_available = boxes_available + :qty WHERE factory_id = :fid AND id = :pid"),
+                                    {"qty": qty, "fid": str(factory_id_val), "pid": item[0]}
+                                )
+                            if item[3] is not None and item[5] is not None:
+                                db.execute(
+                                    text("UPDATE final_product_stock SET current_quantity = current_quantity + :qty WHERE factory_id = :fid AND product_size_ml = :size AND LOWER(variety) = LOWER(:variety) AND LOWER(packaging_size_name) = LOWER(:pack)"),
+                                    {"qty": qty, "fid": str(factory_id_val), "size": item[3], "variety": item[4] or "Standard/White", "pack": item[5]}
+                                )
+                                # Also update finished goods stock matching that profile
+                                db.execute(
+                                    text("UPDATE finished_goods_stock SET boxes_available = boxes_available + :qty WHERE factory_id = :fid AND packaging_profile_id = (SELECT id FROM packaging_profiles WHERE factory_id = :fid AND cup_size_ml = :size AND LOWER(profile_name) = LOWER(:pack))"),
+                                    {"qty": qty, "fid": str(factory_id_val), "size": item[3], "pack": item[5]}
+                                )
 
             db.execute(
                 text("DELETE FROM payment_collections WHERE outstanding_bill_id = :bid"),

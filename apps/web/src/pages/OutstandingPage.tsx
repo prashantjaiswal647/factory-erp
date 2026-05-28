@@ -32,7 +32,7 @@ function Summary({ label, value, strong = false }: { label: string; value: strin
 }
 
 export default function OutstandingPage() {
-  const [rows, setRows] = useState<OutstandingCustomer[]>([]);
+  const [outstandingBills, setOutstandingBills] = useState<OutstandingCustomer[]>([]);
   const [grandTotal, setGrandTotal] = useState("0");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<OutstandingCustomer | null>(null);
@@ -54,7 +54,7 @@ export default function OutstandingPage() {
     setError("");
     try {
       const response = await getOutstandingDues();
-      setRows(response.data.customers);
+      setOutstandingBills(response.data.customers);
       setGrandTotal(response.data.grand_total_outstanding);
     } catch {
       setError("Outstanding dues load nahi ho paaya.");
@@ -69,11 +69,11 @@ export default function OutstandingPage() {
 
   const filteredRows = useMemo(() => {
     const term = query.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((row) =>
+    if (!term) return outstandingBills;
+    return outstandingBills.filter((row) =>
       [row.customer_name, row.customer_phone].some((value) => value.toLowerCase().includes(term))
     );
-  }, [query, rows]);
+  }, [query, outstandingBills]);
 
   function openPaymentModal(row: OutstandingCustomer, bill?: OutstandingBill) {
     setSelected(row);
@@ -90,7 +90,7 @@ export default function OutstandingPage() {
     setError("");
     try {
       const response = await sendOutstandingReminder(row.customer_id);
-      setRows((current) =>
+      setOutstandingBills((current) =>
         current.map((item) =>
           item.customer_id === row.customer_id ? { ...item, last_reminded_at: response.data.last_reminded_at } : item
         )
@@ -138,33 +138,37 @@ export default function OutstandingPage() {
     setIsSaving(true);
     setError("");
     try {
-      const response = await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0, reason);
+      const targetedBillId = bill.bill_id ?? bill.order_id ?? 0;
+      const response = await clearOutstandingBill(targetedBillId, reason);
       if (response.status === 200 || response.data?.status === "success") {
-        setRows((currentRows) =>
-          currentRows
-            .map((cust) => {
-              if (cust.customer_id === row.customer_id) {
-                const updatedBills = (cust.bills || []).filter(
-                  (b) => (b.bill_id ?? b.order_id) !== (bill.bill_id ?? bill.order_id)
-                );
-                
-                // Recalculate totals for this customer row
-                const billSum = updatedBills.reduce((acc, curr) => acc + Number(curr.bill_amount || 0), 0);
-                const paidSum = updatedBills.reduce((acc, curr) => acc + Number(curr.amount_paid || 0), 0);
-                const pendingSum = updatedBills.reduce((acc, curr) => acc + Number(curr.remaining_balance || 0), 0);
-                
-                return {
-                  ...cust,
-                  bills: updatedBills,
-                  total_bill_amount: String(billSum),
-                  total_paid: String(paidSum),
-                  current_pending_balance: String(pendingSum),
-                };
-              }
-              return cust;
-            })
-            .filter((cust) => (cust.bills || []).length > 0)
-        );
+        // Enforce real-time frontend re-rendering: force-inject array state update expression
+        setOutstandingBills((currentBills) => {
+          const updated = currentBills.map((cust) => {
+            if (cust.customer_id === row.customer_id) {
+              const updatedBills = (cust.bills || []).filter(
+                (b) => (b.bill_id ?? b.order_id) !== targetedBillId
+              );
+              
+              // Recalculate totals for this customer row
+              const billSum = updatedBills.reduce((acc, curr) => acc + Number(curr.bill_amount || 0), 0);
+              const paidSum = updatedBills.reduce((acc, curr) => acc + Number(curr.amount_paid || 0), 0);
+              const pendingSum = updatedBills.reduce((acc, curr) => acc + Number(curr.remaining_balance || 0), 0);
+              
+              return {
+                ...cust,
+                bills: updatedBills,
+                total_bill_amount: String(billSum),
+                total_paid: String(paidSum),
+                current_pending_balance: String(pendingSum),
+              };
+            }
+            return cust;
+          }).filter((cust) => (cust.bills || []).length > 0);
+
+          // Force-inject array state update expression to instantly purge the row out of the view buffer
+          // utilizing an explicit functional spread tracking callback:
+          return updated.filter((b) => (b as any).id !== targetedBillId);
+        });
       }
       setToast(`Outstanding bill manually cleared (${reason === "mistake" ? "Stock reversed" : "Stock kept deducted"})`);
       setDeleteModalData(null);
