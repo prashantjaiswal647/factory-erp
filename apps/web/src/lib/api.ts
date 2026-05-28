@@ -642,7 +642,8 @@ export type OutstandingCustomer = {
 };
 
 export type OutstandingBill = {
-  order_id: number;
+  bill_id?: number | null;
+  order_id?: number | null;
   order_date: string;
   bill_amount: string;
   amount_paid: string;
@@ -920,8 +921,8 @@ export function recordPayment(payload: PaymentCreate) {
   return api.post("/api/accounts/payments", payload);
 }
 
-export function clearOutstandingBill(orderId: number) {
-  return api.delete(`/api/sales/outstanding/${orderId}`, { params: { confirm: true } });
+export function clearOutstandingBill(billId: number) {
+  return api.delete(`/api/sales/outstanding/${billId}`, { params: { confirm: true } });
 }
 
 export function sendOutstandingReminder(customerId: number) {

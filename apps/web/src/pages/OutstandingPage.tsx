@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { clearOutstandingBill, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
+import { useAuth } from "../context/AuthContext";
 import type { OutstandingBill, OutstandingCustomer, PaymentCreate } from "../lib/api";
 
 const initialPayment: PaymentCreate = {
@@ -43,6 +44,8 @@ export default function OutstandingPage() {
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
+  const { user } = useAuth();
+  const canDeleteOutstanding = user?.role === "Owner";
 
   async function load() {
     setIsLoading(true);
@@ -76,7 +79,7 @@ export default function OutstandingPage() {
     setPayment({
       ...initialPayment,
       customer_phone: row.customer_phone,
-      sale_id: bill?.order_id,
+      sale_id: bill?.order_id ?? undefined,
       amount_paid: Number(bill?.remaining_balance ?? row.current_pending_balance)
     });
   }
@@ -120,12 +123,16 @@ export default function OutstandingPage() {
   }
 
   async function clearBill(row: OutstandingCustomer, bill: OutstandingBill) {
+    if (!canDeleteOutstanding) {
+      setError("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      return;
+    }
     const confirmed = window.confirm("Warning: This will manually clear the outstanding balance for this bill. This action cannot be undone. Proceed?");
     if (!confirmed) return;
 
     setError("");
     try {
-      await clearOutstandingBill(bill.order_id);
+      await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0);
       setToast("Outstanding bill manually cleared");
       triggerDataRefresh();
       await load();
@@ -226,8 +233,8 @@ export default function OutstandingPage() {
                             </thead>
                             <tbody className="divide-y divide-zinc-100">
                               {(row.bills || []).map((bill) => (
-                                <tr key={bill.order_id}>
-                                  <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id}</td>
+                                <tr key={bill.bill_id ?? bill.order_id}>
+                                  <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id ?? bill.bill_id}</td>
                                   <td className="px-4 py-3 text-zinc-600">{formatDateTime(bill.order_date)}</td>
                                   <td className="px-4 py-3 text-right text-zinc-700">{money(bill.bill_amount)}</td>
                                   <td className="px-4 py-3 text-right font-semibold text-red-700">{money(bill.remaining_balance)}</td>
@@ -236,9 +243,11 @@ export default function OutstandingPage() {
                                       <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row, bill)}>
                                         Pay Bill
                                       </button>
-                                      <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => clearBill(row, bill)}>
-                                        <Trash2 className="h-4 w-4" />
-                                      </button>
+                                      {canDeleteOutstanding ? (
+                                        <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => clearBill(row, bill)}>
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      ) : null}
                                     </div>
                                   </td>
                                 </tr>
@@ -269,7 +278,7 @@ export default function OutstandingPage() {
               <div>
                 <h2 className="text-lg font-semibold text-zinc-950">Record Payment</h2>
                 <p className="text-sm text-zinc-500">{selected.customer_name} - {selected.customer_phone}</p>
-                {selectedBill ? <p className="mt-1 text-xs font-medium text-brand-700">Order #{selectedBill.order_id}</p> : null}
+                {selectedBill ? <p className="mt-1 text-xs font-medium text-brand-700">Bill #{selectedBill.order_id ?? selectedBill.bill_id}</p> : null}
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600" type="button" onClick={() => setSelected(null)}>
                 <X className="h-4 w-4" />

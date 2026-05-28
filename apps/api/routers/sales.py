@@ -247,6 +247,7 @@ class PendingSaleResponse(BaseModel):
 
 
 class OutstandingBillResponse(BaseModel):
+    bill_id: int | None = None
     order_id: int | None = None
     order_date: str
     bill_amount: Decimal
@@ -283,7 +284,7 @@ class PendingDueResponse(BaseModel):
 
 class SalesOrderActionResponse(BaseModel):
     message: str
-    order_id: int
+    order_id: int | None = None
     status: str
 
 
@@ -1656,6 +1657,7 @@ def get_sales_outstanding(
             row.current_pending_balance = to_money(row.current_pending_balance + to_money(bill.balance_amount))
             row.bills.append(
                 OutstandingBillResponse(
+                    bill_id=bill.id,
                     order_id=bill.order_id,
                     order_date=bill.bill_date.isoformat() if bill.bill_date else "",
                     bill_amount=to_money(bill.bill_amount),
@@ -1704,6 +1706,7 @@ def get_sales_outstanding(
         row.current_pending_balance = to_money(row.current_pending_balance + balance)
         row.bills.append(
             OutstandingBillResponse(
+                bill_id=None,
                 order_id=order.id,
                 order_date=order.order_date.isoformat() if order.order_date else "",
                 bill_amount=bill_amount,
@@ -1730,9 +1733,9 @@ def get_pending_payment_dues(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Pending dues fetch failed: {exc}") from exc
 
 
-@router.delete("/outstanding/{order_id}", response_model=SalesOrderActionResponse)
+@router.delete("/outstanding/{bill_id}", response_model=SalesOrderActionResponse)
 def clear_outstanding_order(
-    order_id: int,
+    bill_id: int,
     background_tasks: BackgroundTasks,
     confirm: bool = Query(default=False),
     current_user: User = Depends(check_permissions(["Owner"])),
@@ -1747,51 +1750,77 @@ def clear_outstanding_order(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation required to clear outstanding balance")
 
     try:
-        order = (
-            db.query(Order)
-            .options(joinedload(Order.customer))
-            .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
-            .filter(Order.id == order_id)
+        ledger_bill = (
+            db.query(OutstandingBill)
+            .options(joinedload(OutstandingBill.customer), joinedload(OutstandingBill.order))
+            .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
+            .filter(OutstandingBill.id == bill_id)
             .with_for_update()
             .first()
         )
-        if order is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+        if ledger_bill is not None:
+            previous_balance = to_money(ledger_bill.balance_amount)
+            ledger_bill.balance_amount = Decimal("0.00")
+            ledger_bill.amount_paid = to_money(ledger_bill.bill_amount)
+            ledger_bill.status = "adjusted_closed"
 
-        previous_balance = to_money(order.balance_amount)
+            order = ledger_bill.order
+            if order is not None:
+                order.balance_amount = Decimal("0.00")
+                order.pending_amount = Decimal("0.00")
+                order.payment_status = "Adjusted"
+                order.status = "adjusted_closed"
 
-        # Soft-delete/close linked bills instead of hard-deleting rows that may be referenced
-        # by invoice documents, order items, storefront ledgers, or audit exports.
-        order.balance_amount = Decimal("0.00")
-        order.pending_amount = Decimal("0.00")
-        order.payment_status = "Adjusted"
-        order.status = "adjusted_closed"
+            if ledger_bill.customer is not None and previous_balance > 0:
+                sync_customer_balance_from_bills(db, current_user.factory_id, ledger_bill.customer)
 
-        if order.customer is not None and previous_balance > 0:
-            remaining_customer_balance = max(
-                to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
-                Decimal("0.00"),
+            db.commit()
+            return_order_id = ledger_bill.order_id
+            return_status = ledger_bill.status
+        else:
+            order = (
+                db.query(Order)
+                .options(joinedload(Order.customer))
+                .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+                .filter(Order.id == bill_id)
+                .with_for_update()
+                .first()
             )
-            order.customer.total_due = remaining_customer_balance
-            order.customer.balance_amount = remaining_customer_balance
-            order.customer.pending_balance = remaining_customer_balance
-            order.customer.pending_dues = float(remaining_customer_balance)
+            if order is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found")
 
-        db.commit()
-        db.refresh(order)
+            previous_balance = to_money(order.balance_amount)
+            order.balance_amount = Decimal("0.00")
+            order.pending_amount = Decimal("0.00")
+            order.payment_status = "Adjusted"
+            order.status = "adjusted_closed"
+
+            if order.customer is not None and previous_balance > 0:
+                remaining_customer_balance = max(
+                    to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
+                    Decimal("0.00"),
+                )
+                order.customer.total_due = remaining_customer_balance
+                order.customer.balance_amount = remaining_customer_balance
+                order.customer.pending_balance = remaining_customer_balance
+                order.customer.pending_dues = float(remaining_customer_balance)
+
+            db.commit()
+            return_order_id = order.id
+            return_status = order.status
     except HTTPException:
         db.rollback()
         raise
     except IntegrityError as exc:
         db.rollback()
-        logger.exception("Outstanding bill delete blocked by integrity constraints: order_id=%s factory_id=%s", order_id, current_user.factory_id)
+        logger.exception("Outstanding bill delete blocked by integrity constraints: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
         ) from exc
     except (OperationalError, SQLAlchemyError) as exc:
         db.rollback()
-        logger.exception("Outstanding bill delete database failure: order_id=%s factory_id=%s", order_id, current_user.factory_id)
+        logger.exception("Outstanding bill delete database failure: bill_id=%s factory_id=%s", bill_id, current_user.factory_id)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
@@ -1802,10 +1831,10 @@ def clear_outstanding_order(
         factory_id=str(current_user.factory_id),
         sync_type="sales",
         action="delete",
-        data={"order_id": order_id}
+        data={"bill_id": bill_id, "order_id": return_order_id}
     )
 
-    return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=order.id, status=order.status)
+    return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=return_order_id, status=return_status)
 
 
 @router.get("/customers/{customer_id}/balance", response_model=CustomerBalanceResponse)
