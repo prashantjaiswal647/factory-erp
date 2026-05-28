@@ -1756,22 +1756,26 @@ def get_pending_payment_dues(
 def clear_outstanding_order(
     bill_id: int,
     background_tasks: BackgroundTasks,
-    confirm: bool = Query(default=False),
-    reason: str | None = Query(default=None),  # 'mistake' or 'paid'
+    confirm: bool = Query(default=True),
+    reason: str = Query(None, description="Reason for deleting the bill: mistake or paid"),
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
     if current_user.role != "Owner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access Denied: Only the Factory Owner is authorized to delete entries.",
+        return SalesOrderActionResponse(
+            status="error",
+            message="Access Denied: Only the Factory Owner is authorized to delete entries.",
+            order_id=bill_id
         )
     if not confirm:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation required to clear outstanding balance")
+        return SalesOrderActionResponse(
+            status="error",
+            message="Confirmation required to clear outstanding balance",
+            order_id=bill_id
+        )
 
     factory_id = int(current_user.factory_id)
     return_order_id = bill_id
-    return_status = "adjusted_closed"
 
     # Enforce atomic transaction
     if not db.in_transaction():
@@ -1859,7 +1863,6 @@ def clear_outstanding_order(
                     customer.pending_dues = float(customer.total_due)
 
             db.commit()
-            return_status = "adjusted_closed"
         else:
             # Fallback legacy order adjustment if ledger bill was not found
             order = (
@@ -1871,7 +1874,8 @@ def clear_outstanding_order(
                 .first()
             )
             if order is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found")
+                db.rollback()
+                return SalesOrderActionResponse(status="error", message="Outstanding bill not found", order_id=bill_id)
 
             # Clean any collections mapped to this legacy order
             db.query(PaymentCollection).filter(PaymentCollection.factory_id == factory_id, PaymentCollection.customer_id == order.customer_id).delete()
@@ -1909,7 +1913,21 @@ def clear_outstanding_order(
 
             db.commit()
             return_order_id = order.id
-            return_status = order.status
+
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(current_user.factory_id),
+            sync_type="sales",
+            action="delete",
+            data={"bill_id": bill_id, "order_id": return_order_id}
+        )
+
+        return SalesOrderActionResponse(
+            status="success",
+            message="Bill processed and cleared successfully.",
+            order_id=return_order_id
+        )
+
     except Exception as exc:
         db.rollback()
         logger.exception("Outstanding bill hard-delete operation failed; attempting raw SQL force-deletion: bill_id=%s", bill_id)
@@ -1968,23 +1986,29 @@ def clear_outstanding_order(
                 )
                 
             db.commit()
+
+            background_tasks.add_task(
+                sync_data_to_n8n_bg,
+                factory_id=str(current_user.factory_id),
+                sync_type="sales",
+                action="delete",
+                data={"bill_id": bill_id, "order_id": return_order_id}
+            )
+
+            return SalesOrderActionResponse(
+                status="success",
+                message="Bill processed and cleared successfully.",
+                order_id=return_order_id
+            )
+
         except Exception as inner_exc:
             db.rollback()
             logger.exception("Force SQL adjustment failed: %s", inner_exc)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot clear outstanding bill due to database constraints: {inner_exc}"
+            return SalesOrderActionResponse(
+                status="error",
+                message=f"Outstanding bill deletion failed completely: {inner_exc}",
+                order_id=bill_id
             )
-
-    background_tasks.add_task(
-        sync_data_to_n8n_bg,
-        factory_id=str(current_user.factory_id),
-        sync_type="sales",
-        action="delete",
-        data={"bill_id": bill_id, "order_id": return_order_id}
-    )
-
-    return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=return_order_id, status=return_status)
 
 
 
