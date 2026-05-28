@@ -1757,7 +1757,7 @@ def clear_outstanding_order(
     bill_id: int,
     background_tasks: BackgroundTasks,
     confirm: bool = Query(default=False),
-    reason: str = Query(default="paid"),  # 'mistake' or 'paid'
+    reason: str | None = Query(default=None),  # 'mistake' or 'paid'
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
