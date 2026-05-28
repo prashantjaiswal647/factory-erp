@@ -660,9 +660,9 @@ export default function InvoicesPage() {
               </div>
             </div>
 
-            {/* Chronological Payment Logs Table Audit Log */}
+            {/* Chronological Payment Logs History Audit Log */}
             <div className="space-y-3">
-              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Chronological Payment Logs Table</span>
+              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Chronological Payment Logs History</span>
               {(!(selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments) || (selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments || []).length === 0) ? (
                 <div className="p-4 rounded-lg bg-zinc-50 text-xs text-zinc-500 text-center font-medium border border-dashed border-zinc-200">
                   No partial payments collected against this invoice. Only initial/advance amount applies.
@@ -673,8 +673,8 @@ export default function InvoicesPage() {
                     <thead className="bg-zinc-50 text-left font-semibold uppercase text-zinc-500">
                       <tr>
                         <th className="px-4 py-2.5">Allocation Date</th>
-                        <th className="px-4 py-2.5">Mode (Cash/Bank)</th>
-                        <th className="px-4 py-2.5 text-right">Deducted Amount (Rs.)</th>
+                        <th className="px-4 py-2.5">Receipt Mode (Cash/Bank)</th>
+                        <th className="px-4 py-2.5 text-right">Amount Paid (Rs.)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 bg-white">
@@ -698,13 +698,13 @@ export default function InvoicesPage() {
                 <span className="text-base font-bold text-zinc-900 mt-1">{money(selectedInvoiceDetails.bill_total)}</span>
               </div>
               <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 flex flex-col">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Cumulative Receipts Added</span>
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Total Payments Received to Date</span>
                 <span className="text-base font-bold text-emerald-800 mt-1">
                   Rs. {money(selectedInvoiceDetails.amount_paid)}
                 </span>
               </div>
               <div className="p-3 bg-rose-50 rounded-lg border border-rose-100 flex flex-col">
-                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Left Pending Net Dues</span>
+                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Remaining Balance Unsettled Dues</span>
                 <span className="text-base font-bold text-rose-800 mt-1">
                   Rs. {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
                 </span>
@@ -722,7 +722,7 @@ export default function InvoicesPage() {
                 }}
               >
                 <Eye className="h-4 w-4" />
-                View PDF Statement
+                View Invoice
               </button>
               <button 
                 className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition"
