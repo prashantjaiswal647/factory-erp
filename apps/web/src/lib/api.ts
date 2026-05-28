@@ -397,6 +397,12 @@ export type DailySaleResponse = {
   status?: string;
 };
 
+export type InvoicePaymentSummary = {
+  payment_date: string;
+  amount_paid: string;
+  payment_mode: string;
+};
+
 export type InvoiceDocumentSummary = {
   id: number;
   invoice_number: string;
@@ -411,6 +417,7 @@ export type InvoiceDocumentSummary = {
   status: string;
   pdf_generated_count: number;
   created_at: string;
+  payments?: InvoicePaymentSummary[];
 };
 
 export type InvoiceDashboardResponse = {

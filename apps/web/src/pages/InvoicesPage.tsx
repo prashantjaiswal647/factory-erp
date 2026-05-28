@@ -1,4 +1,4 @@
-import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye } from "lucide-react";
+import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { downloadInvoicePdf, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, api } from "../lib/api";
@@ -74,6 +74,7 @@ export default function InvoicesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [viewingId, setViewingId] = useState<number | null>(null);
+  const [selectedInvoiceDetails, setSelectedInvoiceDetails] = useState<InvoiceDocumentSummary | null>(null);
   const [message, setMessage] = useState("");
   
   // Custom Invoice Form state
@@ -537,6 +538,14 @@ export default function InvoicesPage() {
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button 
+                            className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-200 shadow-sm transition" 
+                            type="button" 
+                            onClick={() => setSelectedInvoiceDetails(invoice)}
+                          >
+                            <Info className="h-4 w-4 text-zinc-500" />
+                            Details
+                          </button>
+                          <button 
                             className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-200 disabled:bg-zinc-150 shadow-sm transition" 
                             type="button" 
                             disabled={viewingId === invoice.id} 
@@ -616,6 +625,115 @@ export default function InvoicesPage() {
           </div>
         </div>
       </section>
+
+      {/* Premium Glassmorphic Invoice Details Modal */}
+      {selectedInvoiceDetails && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 backdrop-blur-sm px-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl border border-zinc-100 max-h-[90vh] overflow-y-auto space-y-6">
+            <div className="flex items-start justify-between border-b border-zinc-100 pb-3">
+              <div>
+                <h2 className="text-xl font-bold text-zinc-950 flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-brand-600" />
+                  Invoice Details: #{selectedInvoiceDetails.invoice_number}
+                </h2>
+                <p className="text-xs text-zinc-500 mt-1">Date: {dateLabel(selectedInvoiceDetails.invoice_date)} · Status: <span className="font-semibold text-brand-700 uppercase">{selectedInvoiceDetails.status}</span></p>
+              </div>
+              <button 
+                className="grid h-8 w-8 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50 transition" 
+                type="button" 
+                onClick={() => setSelectedInvoiceDetails(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Billed To metadata section */}
+            <div className="grid gap-4 md:grid-cols-2 bg-zinc-50 p-4 rounded-lg border border-zinc-150 text-sm">
+              <div>
+                <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Client / Customer</span>
+                <span className="font-semibold text-zinc-900 block mt-1">{selectedInvoiceDetails.customer_name}</span>
+                <span className="text-zinc-600 text-xs">{selectedInvoiceDetails.customer_phone || "No Phone number"}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Payment Method</span>
+                <span className="font-semibold text-zinc-900 block mt-1">{selectedInvoiceDetails.payment_method}</span>
+              </div>
+            </div>
+
+            {/* Payment Collection History Audit Log */}
+            <div className="space-y-3">
+              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Payment Collection History</span>
+              {(!selectedInvoiceDetails.payments || selectedInvoiceDetails.payments.length === 0) ? (
+                <div className="p-4 rounded-lg bg-zinc-50 text-xs text-zinc-500 text-center font-medium border border-dashed border-zinc-200">
+                  No partial payments collected against this invoice. Only initial/advance amount applies.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-zinc-200">
+                  <table className="min-w-full divide-y divide-zinc-200 text-xs">
+                    <thead className="bg-zinc-50 text-left font-semibold uppercase text-zinc-500">
+                      <tr>
+                        <th className="px-4 py-2.5">Payment Date</th>
+                        <th className="px-4 py-2.5">Payment Mode</th>
+                        <th className="px-4 py-2.5 text-right">Contribution Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 bg-white">
+                      {selectedInvoiceDetails.payments.map((p, i) => (
+                        <tr key={i} className="hover:bg-zinc-50/50">
+                          <td className="px-4 py-2.5 text-zinc-600">{dateLabel(p.payment_date)}</td>
+                          <td className="px-4 py-2.5 text-zinc-700 font-medium">{p.payment_mode}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold text-emerald-700">{money(p.amount_paid)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* At the bottom of the invoice view layout: reactive balance dynamic fields */}
+            <div className="grid gap-3 md:grid-cols-3 border-t border-zinc-100 pt-4 text-sm">
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-150 flex flex-col">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total Billed Amount</span>
+                <span className="text-base font-bold text-zinc-900 mt-1">{money(selectedInvoiceDetails.bill_total)}</span>
+              </div>
+              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 flex flex-col">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Total Paid to Date (Rs.)</span>
+                <span className="text-base font-bold text-emerald-800 mt-1">
+                  {money(selectedInvoiceDetails.amount_paid)}
+                </span>
+              </div>
+              <div className="p-3 bg-rose-50 rounded-lg border border-rose-100 flex flex-col">
+                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Outstanding Balance (Rs.)</span>
+                <span className="text-base font-bold text-rose-800 mt-1">
+                  {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-100">
+              <button 
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm transition"
+                type="button"
+                onClick={() => {
+                  void preview(selectedInvoiceDetails);
+                  setSelectedInvoiceDetails(null);
+                }}
+              >
+                <Eye className="h-4 w-4" />
+                Preview Invoice PDF
+              </button>
+              <button 
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition"
+                type="button" 
+                onClick={() => setSelectedInvoiceDetails(null)}
+              >
+                Close View
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

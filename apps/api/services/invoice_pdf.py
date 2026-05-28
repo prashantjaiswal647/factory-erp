@@ -11,7 +11,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from db import SessionLocal
-from models import Factory
+from models import Factory, OutstandingBill, PaymentCollection
 
 
 def number_to_words_in_words(num: float) -> str:
@@ -297,7 +297,61 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
         )
     )
     
-    story.extend([bottom_table, Spacer(1, 35)])
+    # Fetch partial payments history
+    payments_history = []
+    invoice_id = payload.get("id")
+    if factory_id and invoice_id:
+        db = SessionLocal()
+        try:
+            bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice_id).first()
+            if bill:
+                collections = db.query(PaymentCollection).filter(PaymentCollection.outstanding_bill_id == bill.id).order_by(PaymentCollection.collection_date.asc()).all()
+                for col in collections:
+                    payments_history.append([
+                        col.collection_date.isoformat(),
+                        col.payment_mode,
+                        _money(col.amount_collected)
+                    ])
+        except Exception as e:
+            print(f"Error fetching payments in PDF build: {e}")
+        finally:
+            db.close()
+
+    story.extend([bottom_table, Spacer(1, 15)])
+
+    if payments_history:
+        history_header = ParagraphStyle(
+            "HistoryHeader",
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            leading=12,
+            textColor=colors.HexColor("#4C1D95")
+        )
+        story.append(Paragraph("<b>Payment Collection History</b>", history_header))
+        story.append(Spacer(1, 4))
+        
+        history_rows = [["Date", "Payment Mode", "Amount Contributed"]]
+        for p in payments_history:
+            history_rows.append(p)
+            
+        history_table = Table(history_rows, colWidths=[150, 150, 220])
+        history_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F4F6")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#374151")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("PADDING", (0, 0), (-1, -1), 5),
+                    ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+                ]
+            )
+        )
+        story.append(history_table)
+        story.append(Spacer(1, 15))
+    else:
+        story.append(Spacer(1, 20))
     
     # Signatory line
     sig_style = ParagraphStyle(

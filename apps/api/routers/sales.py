@@ -297,6 +297,12 @@ class SalesOrderActionResponse(BaseModel):
     status: str
 
 
+class InvoicePaymentSummary(BaseModel):
+    payment_date: str
+    amount_paid: Decimal
+    payment_mode: str
+
+
 class InvoiceDocumentSummary(BaseModel):
     id: int
     invoice_number: str
@@ -311,6 +317,7 @@ class InvoiceDocumentSummary(BaseModel):
     status: str
     pdf_generated_count: int
     created_at: str
+    payments: list[InvoicePaymentSummary] = []
 
 
 class InvoiceDashboardResponse(BaseModel):
@@ -1347,12 +1354,27 @@ def list_invoice_documents(
         .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
         .one()
     )
-    return InvoiceDashboardResponse(
-        total_invoices=int(totals[0] or 0),
-        total_billed=to_money(totals[1]),
-        total_paid=to_money(totals[2]),
-        total_due=to_money(totals[3]),
-        invoices=[
+    invoice_summaries = []
+    for invoice in invoices:
+        bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice.id).first()
+        payment_list = []
+        live_paid = to_money(invoice.amount_paid)
+        live_due = to_money(invoice.customer_total_due)
+        
+        if bill:
+            live_paid = to_money(bill.amount_paid)
+            live_due = to_money(bill.balance_amount)
+            collections = db.query(PaymentCollection).filter(PaymentCollection.outstanding_bill_id == bill.id).order_by(PaymentCollection.collection_date.asc()).all()
+            for col in collections:
+                payment_list.append(
+                    InvoicePaymentSummary(
+                        payment_date=col.collection_date.isoformat(),
+                        amount_paid=to_money(col.amount_collected),
+                        payment_mode=col.payment_mode,
+                    )
+                )
+
+        invoice_summaries.append(
             InvoiceDocumentSummary(
                 id=invoice.id,
                 invoice_number=invoice.invoice_number,
@@ -1362,14 +1384,21 @@ def list_invoice_documents(
                 customer_phone=invoice.customer_phone,
                 payment_method=invoice.payment_method,
                 bill_total=to_money(invoice.bill_total),
-                amount_paid=to_money(invoice.amount_paid),
-                customer_total_due=to_money(invoice.customer_total_due),
+                amount_paid=live_paid,
+                customer_total_due=live_due,
                 status=invoice.status,
                 pdf_generated_count=invoice.pdf_generated_count,
                 created_at=invoice.created_at.isoformat() if invoice.created_at else "",
+                payments=payment_list,
             )
-            for invoice in invoices
-        ],
+        )
+
+    return InvoiceDashboardResponse(
+        total_invoices=int(totals[0] or 0),
+        total_billed=to_money(totals[1]),
+        total_paid=to_money(totals[2]),
+        total_due=to_money(totals[3]),
+        invoices=invoice_summaries,
     )
 
 
@@ -1390,7 +1419,18 @@ def download_invoice_pdf(
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
-    pdf_bytes = build_invoice_pdf_bytes(invoice.payload_json or {})
+    bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice.id).first()
+    payload = invoice.payload_json or {}
+    if "invoice" in payload:
+        if bill:
+            payload["invoice"]["amount_paid"] = float(bill.amount_paid)
+            payload["invoice"]["customer_total_due"] = float(bill.balance_amount)
+        else:
+            payload["invoice"]["amount_paid"] = float(invoice.amount_paid)
+            payload["invoice"]["customer_total_due"] = float(invoice.customer_total_due)
+        payload["id"] = invoice.id
+
+    pdf_bytes = build_invoice_pdf_bytes(payload)
     invoice.pdf_generated_count = (invoice.pdf_generated_count or 0) + 1
     invoice.last_pdf_generated_at = datetime.now(timezone.utc)
     db.commit()
