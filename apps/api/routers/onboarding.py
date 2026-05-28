@@ -155,6 +155,48 @@ class OnboardingCustomerSummary(BaseModel):
     total_due: Decimal
 
 
+def _worker_summary(worker: Worker, previous_attendance: int = 0) -> dict:
+    return {
+        "id": worker.id,
+        "name": worker.name or "Unnamed Worker",
+        "daily_wages": Decimal(worker.daily_wages or worker.daily_salary or worker.salary or 0),
+        "duty_hours": float(worker.duty_hours or worker.shift_hours or 8.0),
+        "previous_attendance": int(previous_attendance or 0),
+    }
+
+
+def _machine_summary(machine: Machine) -> dict:
+    machine_number = machine.machine_number or machine.machine_sequence_number or machine.name or f"M-{machine.id}"
+    return {
+        "id": machine.id,
+        "machine_type": machine.machine_type or machine.machine_name or machine.name or "Paper Cup Machine",
+        "machine_number": machine_number,
+        "mould_size_ml": machine.mould_size_ml or machine.cup_size_ml or machine.current_mould_size,
+        "bottom_size_mm": machine.bottom_size_mm or machine.bottom_size or machine.current_bottom_size,
+        "speed_per_minute": int(machine.speed_per_minute or machine.speed_cups_per_minute or machine.speed_bpm or 0),
+    }
+
+
+def _raw_metric_summary(metric: RawMaterialMetrics) -> dict:
+    return {
+        "id": metric.id,
+        "material_type": metric.material_type or "Blank",
+        "size_ml_or_mm": int(metric.size_ml_or_mm or 1),
+        "weight_per_sack_kg": Decimal(metric.weight_per_sack_kg or 0),
+        "pieces_per_sack": int(metric.pieces_per_sack or 1),
+    }
+
+
+def _packaging_metric_summary(metric: PackagingMetrics) -> dict:
+    return {
+        "id": metric.id,
+        "cup_size_ml": int(metric.cup_size_ml or 1),
+        "kg_per_box": Decimal(metric.kg_per_box or 0),
+        "cups_per_box": int(metric.cups_per_box or 1),
+        "variety": getattr(metric, "variant_name", None) or "Standard/White",
+    }
+
+
 class FinalProductOpeningStockRequest(BaseModel):
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: Optional[int] = Field(default=None, gt=0)
@@ -264,32 +306,43 @@ def onboarding_overview(
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
+    workers = (
+        db.query(Worker)
+        .filter(Worker.factory_id == factory_id)
+        .filter(Worker.is_active.is_(True))
+        .order_by(Worker.name.asc().nullslast(), Worker.id.asc())
+        .all()
+    )
+    opening_by_worker_id = {
+        row.worker_id: int(row.present_days or 0)
+        for row in db.query(WorkerOpeningAttendance)
+        .filter(WorkerOpeningAttendance.factory_id == factory_id)
+        .filter(WorkerOpeningAttendance.worker_id.in_([worker.id for worker in workers] or [0]))
+        .all()
+    }
+    machines = (
+        db.query(Machine)
+        .filter(Machine.factory_id == factory_id)
+        .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc().nullslast(), Machine.id.asc())
+        .all()
+    )
+    raw_metrics = (
+        db.query(RawMaterialMetrics)
+        .filter(RawMaterialMetrics.factory_id == factory_id)
+        .order_by(RawMaterialMetrics.material_type.asc().nullslast(), RawMaterialMetrics.size_ml_or_mm.asc().nullslast(), RawMaterialMetrics.id.asc())
+        .all()
+    )
+    packaging_metrics = (
+        db.query(PackagingMetrics)
+        .filter(PackagingMetrics.factory_id == factory_id)
+        .order_by(PackagingMetrics.cup_size_ml.asc().nullslast(), PackagingMetrics.id.asc())
+        .all()
+    )
     return OnboardingOverviewResponse(
-        workers=(
-            db.query(Worker)
-            .filter(Worker.factory_id == factory_id)
-            .filter(Worker.is_active.is_(True))
-            .order_by(Worker.name.asc())
-            .all()
-        ),
-        machines=(
-            db.query(Machine)
-            .filter(Machine.factory_id == factory_id)
-            .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
-            .all()
-        ),
-        raw_material_metrics=(
-            db.query(RawMaterialMetrics)
-            .filter(RawMaterialMetrics.factory_id == factory_id)
-            .order_by(RawMaterialMetrics.material_type.asc(), RawMaterialMetrics.size_ml_or_mm.asc())
-            .all()
-        ),
-        packaging_metrics=(
-            db.query(PackagingMetrics)
-            .filter(PackagingMetrics.factory_id == factory_id)
-            .order_by(PackagingMetrics.cup_size_ml.asc())
-            .all()
-        ),
+        workers=[_worker_summary(worker, opening_by_worker_id.get(worker.id, 0)) for worker in workers],
+        machines=[_machine_summary(machine) for machine in machines],
+        raw_material_metrics=[_raw_metric_summary(metric) for metric in raw_metrics],
+        packaging_metrics=[_packaging_metric_summary(metric) for metric in packaging_metrics],
     )
 
 
@@ -527,9 +580,7 @@ def list_onboarding_workers(
         .filter(WorkerOpeningAttendance.worker_id.in_([worker.id for worker in workers] or [0]))
         .all()
     }
-    for worker in workers:
-        worker.previous_attendance = opening_by_worker_id.get(worker.id, 0)
-    return workers
+    return [_worker_summary(worker, opening_by_worker_id.get(worker.id, 0)) for worker in workers]
 
 
 @router.get("/machines", response_model=List[OnboardingMachineSummary])
@@ -537,12 +588,13 @@ def list_onboarding_machines(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    return (
+    machines = (
         db.query(Machine)
         .filter(Machine.factory_id == str(current_user.factory_id))
-        .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc())
+        .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc().nullslast(), Machine.id.asc())
         .all()
     )
+    return [_machine_summary(machine) for machine in machines]
 
 
 @router.get("/machines/limits", response_model=MachineLimitResponse)

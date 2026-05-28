@@ -729,6 +729,8 @@ def ensure_runtime_schema():
         "ALTER TABLE final_product_stock ALTER COLUMN loose_packets SET DEFAULT 0",
         "ALTER TABLE final_product_stock ALTER COLUMN total_boxes SET DEFAULT 0",
         "ALTER TABLE final_product_stock ALTER COLUMN current_quantity SET DEFAULT 0",
+        "ALTER TABLE packaging_metrics ADD COLUMN IF NOT EXISTS variant_name VARCHAR(100) NOT NULL DEFAULT 'Standard/White'",
+        "ALTER TABLE packaging_metrics ALTER COLUMN variant_name SET DEFAULT 'Standard/White'",
         "CREATE TABLE IF NOT EXISTS activity_logs (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, event_type VARCHAR(50) NOT NULL, description TEXT NOT NULL, log_date DATE NOT NULL DEFAULT CURRENT_DATE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW())",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS log_date DATE NOT NULL DEFAULT CURRENT_DATE",
         "ALTER TABLE activity_logs ALTER COLUMN factory_id TYPE INTEGER USING factory_id::integer",
