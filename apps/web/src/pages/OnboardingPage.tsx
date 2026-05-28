@@ -68,6 +68,7 @@ export default function OnboardingPage() {
   const [isSaving, setIsSaving] = useState(false);
   const { showToast, showUpgradeModal } = useUpgrade();
   const { updateUser, user } = useAuth();
+  const canDelete = user?.role === "Owner";
 
   // Dynamic & Custom Final Product opening stock metrics states
   const [isCustomMode, setIsCustomMode] = useState(false);
@@ -828,26 +829,28 @@ export default function OnboardingPage() {
                           >
                             <Settings className="h-4 w-4" />
                           </button>
-                          <button
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-red-600"
-                            type="button"
-                            onClick={async () => {
-                              if (confirm("Are you sure you want to delete this machine?")) {
-                                try {
-                                  await deleteDashboardMachine(m.id);
-                                  setToast("Machine deleted");
-                                  await loadSavedMachines();
-                                  await loadMachineUsage();
-                                } catch (err) {
-                                  console.error("Failed to delete machine:", err);
-                                  setToast("Failed to delete machine");
+                          {canDelete ? (
+                            <button
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-red-600"
+                              type="button"
+                              onClick={async () => {
+                                if (confirm("Are you sure you want to delete this machine?")) {
+                                  try {
+                                    await deleteDashboardMachine(m.id);
+                                    setToast("Machine deleted");
+                                    await loadSavedMachines();
+                                    await loadMachineUsage();
+                                  } catch (err) {
+                                    console.error("Failed to delete machine:", err);
+                                    setToast("Failed to delete machine");
+                                  }
                                 }
-                              }
-                            }}
-                            title="Delete Machine"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                              }}
+                              title="Delete Machine"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          ) : null}
                         </div>
                       </div>
 

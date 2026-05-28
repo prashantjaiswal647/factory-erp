@@ -32,9 +32,12 @@ import {
   deleteStaffOpeningAttendance
 } from "../lib/api";
 import type { StaffMember, OpeningAttendancePayload, OpeningAttendanceResponse } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { validateLocalPhone } from "../lib/phoneCountries";
 
 export default function StaffManagement() {
+  const { user } = useAuth();
+  const canDelete = user?.role === "Owner";
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -107,6 +110,10 @@ export default function StaffManagement() {
   }
 
   async function handleRemoveWorker(member: StaffMember) {
+    if (!canDelete) {
+      setToast("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      return;
+    }
     if (!member.worker_id) {
       setError("Worker ID not found.");
       return;
@@ -349,6 +356,11 @@ export default function StaffManagement() {
   // Handle staff deletion
   async function handleDeleteConfirm() {
     if (!deleteModal) return;
+    if (!canDelete) {
+      setToast("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      setDeleteModal(null);
+      return;
+    }
     setIsDeleting(true);
     try {
       await deleteStaffMember(deleteModal.id);
@@ -743,16 +755,18 @@ export default function StaffManagement() {
                           >
                             <Edit3 className="h-4 w-4" />
                           </button>
-                          <button
-                            className="inline-grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:bg-red-50 hover:text-red-600 transition"
-                            type="button"
-                            title="Revoke Credentials"
-                            onClick={() => setDeleteModal(member)}
-                            data-testid="delete-staff-button"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                          {member.role === "Operator" && member.worker_id && (
+                          {canDelete ? (
+                            <button
+                              className="inline-grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:bg-red-50 hover:text-red-600 transition"
+                              type="button"
+                              title="Revoke Credentials"
+                              onClick={() => setDeleteModal(member)}
+                              data-testid="delete-staff-button"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          ) : null}
+                          {canDelete && member.role === "Operator" && member.worker_id && (
                             <button
                               className="inline-flex h-9 items-center gap-1.5 px-3 rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 transition font-semibold text-xs"
                               type="button"
@@ -979,7 +993,7 @@ export default function StaffManagement() {
                         />
                       </label>
                     </div>
-                  {editModal.member.opening_attendance && (
+                  {canDelete && editModal.member.opening_attendance && (
                     <button
                       type="button"
                       className="mt-1 text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 bg-transparent border-none p-0 cursor-pointer"

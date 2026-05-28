@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getInventory, deleteOnboardingEntry, deleteOnboardingItem } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { getInventory, deleteOnboardingItem } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
 type InventoryFilter = "all" | "raw" | "wip" | "finished" | "packing" | "low";
@@ -41,6 +42,8 @@ const filters: Array<{ key: InventoryFilter; label: string }> = [
 ];
 
 export default function InventoryPage() {
+  const { user } = useAuth();
+  const canDelete = user?.role === "Owner";
   const [rows, setRows] = useState<LiveStockRow[]>([]);
   const [activeFilter, setActiveFilter] = useState<InventoryFilter>("all");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -66,6 +69,10 @@ export default function InventoryPage() {
   }
 
   async function handleDelete(row: InventoryDisplayRow) {
+    if (!canDelete) {
+      alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      return;
+    }
     if (!window.confirm("Are you sure you want to remove this entry?")) {
       return;
     }
@@ -171,6 +178,7 @@ export default function InventoryPage() {
               isCollapsed={Boolean(collapsed[category.key])}
               onToggle={() => setCollapsed((current) => ({ ...current, [category.key]: !current[category.key] }))}
               onDelete={handleDelete}
+              canDelete={canDelete}
             />
           ))}
         </section>
@@ -184,7 +192,7 @@ export default function InventoryPage() {
   );
 }
 
-function CategoryCard({ category, isCollapsed, onToggle, onDelete }: { category: InventoryCategory; isCollapsed: boolean; onToggle: () => void; onDelete: (row: InventoryDisplayRow) => void }) {
+function CategoryCard({ category, isCollapsed, onToggle, onDelete, canDelete }: { category: InventoryCategory; isCollapsed: boolean; onToggle: () => void; onDelete: (row: InventoryDisplayRow) => void; canDelete: boolean }) {
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
       <header className="flex items-center justify-between gap-3">
@@ -229,7 +237,7 @@ function CategoryCard({ category, isCollapsed, onToggle, onDelete }: { category:
                     <Td>{row.totalPieces}</Td>
                     <Td>{row.location}</Td>
                     <Td><StatusBadge status={row.status} /></Td>
-                    <Td><ActionButtons row={row} onDelete={onDelete} /></Td>
+                    <Td><ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} /></Td>
                   </tr>
                 ))}
               </tbody>
@@ -254,7 +262,7 @@ function CategoryCard({ category, isCollapsed, onToggle, onDelete }: { category:
                   <MobileMetric label="Location" value={row.location} />
                 </div>
                 <div className="mt-4">
-                  <ActionButtons row={row} onDelete={onDelete} />
+                  <ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} />
                 </div>
               </div>
             ))}
@@ -383,20 +391,22 @@ function locationFor(type: string) {
   return "Main Warehouse";
 }
 
-function ActionButtons({ row, onDelete }: { row: InventoryDisplayRow; onDelete: (row: InventoryDisplayRow) => void }) {
+function ActionButtons({ row, onDelete, canDelete }: { row: InventoryDisplayRow; onDelete: (row: InventoryDisplayRow) => void; canDelete: boolean }) {
   return (
     <div className="flex items-center gap-1.5">
       <Link className="grid h-8 w-8 place-items-center rounded-lg text-brand-700 hover:bg-brand-50" title="Edit item" to="/onboarding">
         <Edit3 className="h-4 w-4" />
       </Link>
-      <button
-        className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-        title="Delete item"
-        type="button"
-        onClick={() => onDelete(row)}
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
+      {canDelete ? (
+        <button
+          className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50"
+          title="Delete item"
+          type="button"
+          onClick={() => onDelete(row)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      ) : null}
     </div>
   );
 }

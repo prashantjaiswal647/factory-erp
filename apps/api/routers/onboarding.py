@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import normalize_phone_number, require_owner
+from auth import assert_owner_delete_permission, normalize_phone_number, require_owner, require_owner_delete
 from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
 from models import (
@@ -905,6 +905,7 @@ def delete_onboarding_worker(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     can_cleanup_null_factory = (current_user.role or "").lower() in {"admin", "owner"}
     worker = (
         db.query(Worker)
@@ -943,7 +944,7 @@ def delete_onboarding_worker(
 def delete_onboarding_machine(
     machine_id: int,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(require_owner_delete),
     db: Session = Depends(get_db),
 ):
     machine = (
@@ -972,7 +973,7 @@ def delete_onboarding_machine(
 def delete_onboarding_raw_material(
     raw_material_id: int,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(require_owner_delete),
     db: Session = Depends(get_db),
 ):
     metric = (
@@ -999,7 +1000,7 @@ def delete_onboarding_raw_material(
 def delete_onboarding_customer(
     customer_id: int,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(require_owner_delete),
     db: Session = Depends(get_db),
 ):
     customer = (
@@ -1650,7 +1651,7 @@ def delete_onboarding_entry(
     entry_id: str,
     background_tasks: BackgroundTasks,
     type: Optional[str] = None,
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(require_owner_delete),
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
@@ -1757,7 +1758,7 @@ def delete_onboarding_item(
     item_id: int,
     type: str,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_owner),
+    current_user: User = Depends(require_owner_delete),
     db: Session = Depends(get_db)
 ):
     factory_id = str(current_user.factory_id)

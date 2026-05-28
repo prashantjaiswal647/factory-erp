@@ -49,6 +49,7 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [analyticsData, setAnalyticsData] = useState<AnalyticsBIResponse | null>(null);
   const { user } = useAuth();
+  const canDelete = user?.role === "Owner";
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -123,6 +124,10 @@ export default function DashboardPage() {
   }
 
   async function handleDelete(row: StockDisplayRow) {
+    if (!canDelete) {
+      alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      return;
+    }
     if (!window.confirm("Are you sure you want to remove this entry?")) {
       return;
     }
@@ -415,7 +420,7 @@ export default function DashboardPage() {
           {stockRows.length === 0 ? (
             <EmptyState message="No inventory rows found yet. Add onboarding stock to see finished cups, bottom, blank, and packing material." />
           ) : (
-            stockRows.map((row) => <StockListRow key={row.key} row={row} onDelete={handleDelete} />)
+            stockRows.map((row) => <StockListRow key={row.key} row={row} onDelete={handleDelete} canDelete={canDelete} />)
           )}
         </div>
       </section>
@@ -615,7 +620,7 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
   );
 }
 
-function StockListRow({ row, onDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void }) {
+function StockListRow({ row, onDelete, canDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
   return (
     <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition hover:border-brand-200 hover:bg-brand-50/30 md:grid-cols-[minmax(180px,1.3fr)_repeat(5,minmax(110px,1fr))_120px_auto] md:items-center">
       <div className="flex min-w-0 items-center gap-3">
@@ -634,16 +639,18 @@ function StockListRow({ row, onDelete }: { row: StockDisplayRow; onDelete: (row:
         <p className="mb-1 text-xs text-zinc-500 md:hidden">Status</p>
         <StatusBadge status={row.status} />
       </div>
-      <div className="flex justify-end">
-        <button
-          className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 transition"
-          title="Delete item"
-          type="button"
-          onClick={() => onDelete(row)}
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
+      {canDelete ? (
+        <div className="flex justify-end">
+          <button
+            className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 transition"
+            title="Delete item"
+            type="button"
+            onClick={() => onDelete(row)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

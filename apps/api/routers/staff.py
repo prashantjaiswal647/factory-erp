@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import (
+    assert_owner_delete_permission,
     get_user_by_phone,
     hash_password,
     normalize_phone_number,
@@ -233,6 +234,7 @@ def delete_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     staff_user = (
         db.query(User)
         .filter(User.id == user_id)
@@ -387,6 +389,7 @@ def secure_delete_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     staff_user = (
         db.query(User)
         .filter(User.id == staff_id)
@@ -817,6 +820,7 @@ def delete_staff_opening_attendance(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     staff_user = (
         db.query(User)
         .filter(User.id == staff_id)
@@ -939,6 +943,8 @@ def delete_worker(
 ):
     from models import Worker, User, DailyProduction, AttendanceLog, AdvancePayment, HisabSettlement, WorkerOpeningAttendance, AppUsageLog, TokenUsageLog
     
+    assert_owner_delete_permission(current_user)
+
     # Enforce factory_id constraint rules
     worker = (
         db.query(Worker)

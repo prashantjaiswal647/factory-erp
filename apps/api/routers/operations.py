@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy import func as sql_func, text
 from sqlalchemy.orm import Session
 
+from auth import assert_owner_delete_permission
 from dependencies import PRODUCTION_ROLES, SALES_ROLES, check_permissions
 from db import get_db
 from models import (
@@ -750,6 +751,7 @@ def delete_daily_production(
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     production = (
         db.query(DailyProduction)
         .filter(DailyProduction.id == log_id)
@@ -949,6 +951,7 @@ def delete_sequence_log(
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
+    assert_owner_delete_permission(current_user)
     activity = (
         db.query(ActivityLog)
         .filter(ActivityLog.id == log_id)

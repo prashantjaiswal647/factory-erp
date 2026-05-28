@@ -667,6 +667,19 @@ def require_owner(current_user: User = Depends(get_current_user)) -> User:
     return check_permissions(["Owner", "Sub-Owner"])(current_user)
 
 
+def assert_owner_delete_permission(current_user: User) -> None:
+    if current_user.role != "Owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only the Factory Owner is authorized to delete entries.",
+        )
+
+
+def require_owner_delete(current_user: User = Depends(get_current_user)) -> User:
+    assert_owner_delete_permission(current_user)
+    return current_user
+
+
 # ---------------------------------------------------------------------------
 # OTP Helpers
 # ---------------------------------------------------------------------------
