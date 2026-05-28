@@ -345,7 +345,10 @@ def record_payment(
             else:
                 try:
                     date_str = str(payload.date).split("T")[0]
-                    payment_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    try:
+                        payment_date = date.fromisoformat(date_str)
+                    except ValueError:
+                        payment_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 except ValueError:
                     payment_date = date.today()
 

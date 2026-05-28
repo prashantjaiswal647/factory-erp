@@ -143,7 +143,8 @@ export default function OutstandingPage() {
       const response = await clearOutstandingBill(targetedBillId, reason);
       if (response.status === 200 || response.data?.status === "success") {
         // Slice the item directly out of the application layout cache instantly
-        setOutstandingBills((prevBills) => prevBills.filter(b => b.id !== targetId));
+        const deletedTargetId = targetId;
+        setOutstandingBills(currentList => currentList.filter(item => item.id !== deletedTargetId));
       }
       setToast(`Outstanding bill manually cleared (${reason === "mistake" ? "Stock reversed" : "Stock kept deducted"})`);
       setDeleteModalData(null);
