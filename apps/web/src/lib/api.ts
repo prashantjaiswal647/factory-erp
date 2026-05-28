@@ -722,6 +722,7 @@ export type WorkerProfile = {
   daily_wages?: number | null;
   duty_hours?: number | null;
   previous_attendance?: number;
+  previous_attendance_count?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
   is_active: boolean;
@@ -734,6 +735,7 @@ export type WorkerUpdatePayload = {
   daily_wages?: number;
   duty_hours?: number;
   previous_attendance?: number;
+  previous_attendance_count?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
 };

@@ -110,6 +110,7 @@ class WorkerUpdateRequest(BaseModel):
     phone_number: Optional[str] = Field(default=None, max_length=50)
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_attendance: Optional[int] = Field(default=None, ge=0)
+    previous_attendance_count: Optional[int] = Field(default=None, ge=0)
     daily_wage_rate: Optional[float] = Field(default=None, ge=0)
     daily_wages: Optional[float] = Field(default=None, ge=0)
     duty_hours: Optional[float] = Field(default=None, gt=0)
@@ -127,6 +128,7 @@ class WorkerProfileResponse(BaseModel):
     daily_wages: float | None = None
     duty_hours: float | None = None
     previous_attendance: int = 0
+    previous_attendance_count: int = 0
     shift_timing: str | None = None
     shift_type: str | None = None
     is_active: bool
@@ -902,6 +904,10 @@ def update_worker_profile(
             setattr(worker, field, updates[field])
 
     previous_attendance = updates.pop("previous_attendance", None)
+    previous_attendance_count = updates.pop("previous_attendance_count", None)
+    if previous_attendance is None:
+        previous_attendance = previous_attendance_count
+
     opening_attendance = (
         db.query(WorkerOpeningAttendance)
         .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
@@ -910,7 +916,7 @@ def update_worker_profile(
         .first()
     )
     if previous_attendance is not None:
-        if opening_attendance is None and previous_attendance > 0:
+        if opening_attendance is None:
             today = date.today()
             opening_attendance = WorkerOpeningAttendance(
                 factory_id=current_user.factory_id,
@@ -921,13 +927,15 @@ def update_worker_profile(
                 created_by_user_id=current_user.id,
             )
             db.add(opening_attendance)
-        elif opening_attendance is not None:
+        else:
             opening_attendance.present_days = previous_attendance
 
     try:
         db.commit()
         db.refresh(worker)
-        worker.previous_attendance = int(opening_attendance.present_days or 0) if opening_attendance else 0
+        val = int(opening_attendance.present_days or 0) if opening_attendance else 0
+        worker.previous_attendance = val
+        worker.previous_attendance_count = val
         return worker
     except IntegrityError as exc:
         db.rollback()
