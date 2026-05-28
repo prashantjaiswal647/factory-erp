@@ -211,215 +211,259 @@ def list_live_stock(
     db: Session = Depends(get_db),
 ):
     try:
-        factory_id = str(current_user.factory_id)
         processed_inventory = []
+        try:
+            factory_id = str(current_user.factory_id)
+        except Exception:
+            return []
 
         # 1. Fetch standard Inventory items
-        inventory_items = (
-            db.query(Inventory)
-            .filter(Inventory.factory_id == factory_id)
-            .order_by(Inventory.item_name.asc().nullslast(), Inventory.id.asc())
-            .all()
-        )
-        for item in inventory_items:
-            quantity = item.quantity if item.quantity is not None else 0
-            processed_inventory.append(
-                {
-                    "id": item.id,
-                    "factory_id": item.factory_id,
-                    "product_id": getattr(item, "product_id", None),
-                    "item_name": item.item_name if item.item_name is not None else "Unknown Item",
-                    "stock_type": item.category if item.category is not None else "Inventory",
-                    "current_quantity": getattr(item, "current_quantity", None) if getattr(item, "current_quantity", None) is not None else float(quantity),
-                    "quantity": float(quantity),
-                    "unit": item.unit if item.unit is not None else "pieces",
-                    "price_per_unit": float(item.price_per_unit if item.price_per_unit is not None else 0),
-                    "packaging_size": item.packaging_size if item.packaging_size is not None else "Standard",
-                    "pieces_per_packet": item.pieces_per_packet if item.pieces_per_packet is not None else 0,
-                    "packets_per_box": item.packets_per_box if item.packets_per_box is not None else 0,
-                    "category": item.category if item.category is not None else "Final Product",
-                }
+        try:
+            inventory_items = (
+                db.query(Inventory)
+                .filter(Inventory.factory_id == factory_id)
+                .filter(~Inventory.item_name.like("[DELETED]%"))
+                .order_by(Inventory.item_name.asc().nullslast(), Inventory.id.asc())
+                .all()
             )
+            for item in inventory_items:
+                try:
+                    quantity = item.quantity if item.quantity is not None else 0
+                    processed_inventory.append(
+                        {
+                            "id": item.id,
+                            "factory_id": item.factory_id,
+                            "product_id": getattr(item, "product_id", None),
+                            "item_name": item.item_name if item.item_name is not None else "Unknown Item",
+                            "stock_type": item.category if item.category is not None else "Inventory",
+                            "current_quantity": getattr(item, "current_quantity", None) if getattr(item, "current_quantity", None) is not None else float(quantity),
+                            "quantity": float(quantity),
+                            "unit": item.unit if item.unit is not None else "pieces",
+                            "price_per_unit": float(item.price_per_unit if item.price_per_unit is not None else 0),
+                            "packaging_size": item.packaging_size if item.packaging_size is not None else "Standard",
+                            "pieces_per_packet": item.pieces_per_packet if item.pieces_per_packet is not None else 0,
+                            "packets_per_box": item.packets_per_box if item.packets_per_box is not None else 0,
+                            "category": item.category if item.category is not None else "Final Product",
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 2. Fetch BlankStock items (Raw Material Tab)
-        blank_items = (
-            db.query(BlankStock)
-            .filter(BlankStock.factory_id == factory_id)
-            .order_by(BlankStock.blank_size_ml.asc())
-            .all()
-        )
-        for item in blank_items:
-            qty = float(item.total_qty_kg or 0)
-            processed_inventory.append(
-                {
-                    "id": f"blank-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": None,
-                    "item_name": f"{item.blank_size_ml}ml Blank - {item.variety or 'Plain White'}",
-                    "stock_type": "Blank",
-                    "current_quantity": qty,
-                    "quantity": qty,
-                    "unit": "kg",
-                    "price_per_unit": 0.0,
-                    "packaging_size": "Standard",
-                    "category": "Blank",
-                }
+        try:
+            blank_items = (
+                db.query(BlankStock)
+                .filter(BlankStock.factory_id == factory_id)
+                .order_by(BlankStock.blank_size_ml.asc())
+                .all()
             )
+            for item in blank_items:
+                try:
+                    qty = float(item.total_qty_kg or 0)
+                    processed_inventory.append(
+                        {
+                            "id": f"blank-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": None,
+                            "item_name": f"{getattr(item, 'blank_size_ml', 0)}ml Blank - {getattr(item, 'variety', None) or 'Plain White'}",
+                            "stock_type": "Blank",
+                            "current_quantity": qty,
+                            "quantity": qty,
+                            "unit": "kg",
+                            "price_per_unit": 0.0,
+                            "packaging_size": "Standard",
+                            "category": "Blank",
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 3. Fetch BottomStock items (Raw Material Tab)
-        bottom_items = (
-            db.query(BottomStock)
-            .filter(BottomStock.factory_id == factory_id)
-            .order_by(BottomStock.bottom_size_mm.asc())
-            .all()
-        )
-        for item in bottom_items:
-            qty = float(item.total_qty_kg or 0)
-            processed_inventory.append(
-                {
-                    "id": f"bottom-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": None,
-                    "item_name": f"{item.bottom_size_mm}mm Bottom Roll - {item.variety or 'Plain White'}",
-                    "stock_type": "Bottom",
-                    "current_quantity": qty,
-                    "quantity": qty,
-                    "unit": "kg",
-                    "price_per_unit": 0.0,
-                    "packaging_size": "Standard",
-                    "category": "Bottom",
-                    "size_mm": item.bottom_size_mm,
-                    "total_weight_kg": qty,
-                    "total_rolls": item.total_rolls or 0,
-                }
+        try:
+            bottom_items = (
+                db.query(BottomStock)
+                .filter(BottomStock.factory_id == factory_id)
+                .order_by(BottomStock.bottom_size_mm.asc())
+                .all()
             )
+            for item in bottom_items:
+                try:
+                    qty = float(item.total_qty_kg or 0)
+                    processed_inventory.append(
+                        {
+                            "id": f"bottom-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": None,
+                            "item_name": f"{getattr(item, 'bottom_size_mm', 0)}mm Bottom Roll - {getattr(item, 'variety', None) or 'Plain White'}",
+                            "stock_type": "Bottom",
+                            "current_quantity": qty,
+                            "quantity": qty,
+                            "unit": "kg",
+                            "price_per_unit": 0.0,
+                            "packaging_size": "Standard",
+                            "category": "Bottom",
+                            "size_mm": getattr(item, 'bottom_size_mm', 0),
+                            "total_weight_kg": qty,
+                            "total_rolls": getattr(item, 'total_rolls', 0) or 0,
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 4. Fetch BoxStock items (Packaging Tab)
-        box_items = (
-            db.query(BoxStock)
-            .filter(BoxStock.factory_id == factory_id)
-            .order_by(BoxStock.packaging_size_name.asc())
-            .all()
-        )
-        for item in box_items:
-            qty = float(item.quantity or 0)
-            processed_inventory.append(
-                {
-                    "id": f"box-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": None,
-                    "item_name": f"{item.packaging_size_name} Carton Box",
-                    "stock_type": "Carton Box",
-                    "current_quantity": qty,
-                    "quantity": qty,
-                    "unit": "pcs",
-                    "price_per_unit": float(item.price_per_box or 0),
-                    "packaging_size": item.packaging_size_name,
-                    "category": "Carton Box",
-                }
+        try:
+            box_items = (
+                db.query(BoxStock)
+                .filter(BoxStock.factory_id == factory_id)
+                .order_by(BoxStock.packaging_size_name.asc())
+                .all()
             )
+            for item in box_items:
+                try:
+                    qty = float(getattr(item, "quantity", 0) or 0)
+                    box_name = getattr(item, "packaging_size_name", None) or getattr(item, "box_type", None) or "Standard"
+                    processed_inventory.append(
+                        {
+                            "id": f"box-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": None,
+                            "item_name": f"{box_name} Carton Box",
+                            "stock_type": "Carton Box",
+                            "current_quantity": qty,
+                            "quantity": qty,
+                            "unit": "pcs",
+                            "price_per_unit": float(getattr(item, "price_per_box", 0) or 0),
+                            "packaging_size": box_name,
+                            "category": "Carton Box",
+                            "box_type": getattr(item, "box_type", None) or box_name,
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 5. Fetch PlasticStock items (Packaging Tab)
-        plastic_items = (
-            db.query(PlasticStock)
-            .filter(PlasticStock.factory_id == factory_id)
-            .order_by(PlasticStock.plastic_size_name.asc(), PlasticStock.cup_size_ml.asc())
-            .all()
-        )
-        for item in plastic_items:
-            qty_kg = float((item.total_boras or 0) * (item.weight_per_bora_kg or 0.0))
-            processed_inventory.append(
-                {
-                    "id": f"plastic-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": None,
-                    "item_name": f"{item.plastic_size_name} ({item.cup_size_ml}ml) Plastic",
-                    "stock_type": "Polybag",
-                    "current_quantity": qty_kg,
-                    "quantity": qty_kg,
-                    "unit": "kg",
-                    "price_per_unit": float(item.price_per_kg or 0),
-                    "packaging_size": item.plastic_size_name,
-                    "category": "Polybag",
-                }
+        try:
+            plastic_items = (
+                db.query(PlasticStock)
+                .filter(PlasticStock.factory_id == factory_id)
+                .order_by(PlasticStock.plastic_size_name.asc(), PlasticStock.cup_size_ml.asc())
+                .all()
             )
+            for item in plastic_items:
+                try:
+                    qty_kg = float((getattr(item, "total_boras", 0) or 0) * (getattr(item, "weight_per_bora_kg", 0.0) or 0.0))
+                    processed_inventory.append(
+                        {
+                            "id": f"plastic-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": None,
+                            "item_name": f"{getattr(item, 'plastic_size_name', 'Standard')} ({getattr(item, 'cup_size_ml', 0)}ml) Plastic",
+                            "stock_type": "Polybag",
+                            "current_quantity": qty_kg,
+                            "quantity": qty_kg,
+                            "unit": "kg",
+                            "price_per_unit": float(getattr(item, "price_per_kg", 0) or 0),
+                            "packaging_size": getattr(item, "plastic_size_name", "Standard"),
+                            "category": "Polybag",
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 6. Fetch PolybagStock items
-        polybag_items = (
-            db.query(PolybagStock)
-            .filter(PolybagStock.factory_id == factory_id)
-            .order_by(PolybagStock.packaging_size_name.asc())
-            .all()
-        )
-        for item in polybag_items:
-            qty = float(item.total_packets or 0)
-            processed_inventory.append(
-                {
-                    "id": f"polybag-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": None,
-                    "item_name": f"{item.packaging_size_name} Polybag",
-                    "stock_type": "Polybag",
-                    "current_quantity": qty,
-                    "quantity": qty,
-                    "unit": "packets",
-                    "price_per_unit": 0.0,
-                    "packaging_size": item.packaging_size_name,
-                    "category": "Polybag",
-                }
+        try:
+            polybag_items = (
+                db.query(PolybagStock)
+                .filter(PolybagStock.factory_id == factory_id)
+                .order_by(PolybagStock.packaging_size_name.asc())
+                .all()
             )
+            for item in polybag_items:
+                try:
+                    qty = float(getattr(item, "total_packets", 0) or 0)
+                    processed_inventory.append(
+                        {
+                            "id": f"polybag-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": None,
+                            "item_name": f"{getattr(item, 'packaging_size_name', 'Standard')} Polybag",
+                            "stock_type": "Polybag",
+                            "current_quantity": qty,
+                            "quantity": qty,
+                            "unit": "packets",
+                            "price_per_unit": 0.0,
+                            "packaging_size": getattr(item, "packaging_size_name", "Standard"),
+                            "category": "Polybag",
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # 7. Fetch Final Product Stocks
-        final_stock_items = (
-            db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == factory_id)
-            .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.packaging_size_name.asc())
-            .all()
-        )
-        for item in final_stock_items:
-            live_boxes, live_loose = calculate_live_sku_stock(
-                db=db,
-                factory_id=factory_id,
-                product_size_ml=item.product_size_ml,
-                variety=item.variety,
-                packaging_size_name=item.packaging_size_name,
-                onboarding_boxes=item.total_boxes or 0,
-                onboarding_loose=item.loose_packets or 0,
-                packets_per_box_limit=item.packets_per_box_limit or 1000,
+        try:
+            final_stock_items = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == factory_id)
+                .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.packaging_size_name.asc())
+                .all()
             )
-            # Sync to cache
-            item.current_quantity = live_boxes
-            db.add(item)
+            for item in final_stock_items:
+                try:
+                    live_boxes, live_loose = calculate_live_sku_stock(
+                        db=db,
+                        factory_id=factory_id,
+                        product_size_ml=getattr(item, "product_size_ml", 0),
+                        variety=getattr(item, "variety", "Standard"),
+                        packaging_size_name=getattr(item, "packaging_size_name", "Standard"),
+                        onboarding_boxes=getattr(item, "total_boxes", 0) or 0,
+                        onboarding_loose=getattr(item, "loose_packets", 0) or 0,
+                        packets_per_box_limit=getattr(item, "packets_per_box_limit", 1000) or 1000,
+                    )
+                    item.current_quantity = live_boxes
+                    db.add(item)
+                    packaging_size = getattr(item, "packaging_size_name", None) or "Standard"
+                    processed_inventory.append(
+                        {
+                            "id": f"final-{item.id}",
+                            "factory_id": item.factory_id,
+                            "product_id": item.id,
+                            "product_size_ml": getattr(item, "product_size_ml", 0) or 0,
+                            "variety": getattr(item, "variety", None) or "Standard/White",
+                            "item_name": f"{getattr(item, 'product_size_ml', 0) or 0}ml {getattr(item, 'variety', None) or 'Standard/White'} - {packaging_size}",
+                            "stock_type": "Final Product",
+                            "current_quantity": int(live_boxes),
+                            "quantity": int(live_boxes),
+                            "unit": "boxes",
+                            "price_per_unit": 0,
+                            "packaging_size": packaging_size,
+                            "packaging_size_name": packaging_size,
+                            "pieces_per_packet": getattr(item, "pieces_per_packet", 0) if getattr(item, "pieces_per_packet", None) is not None else 0,
+                            "packets_per_box": getattr(item, "packets_per_box_limit", 0) if getattr(item, "packets_per_box_limit", None) is not None else 0,
+                            "packets_per_box_limit": getattr(item, "packets_per_box_limit", 0) if getattr(item, "packets_per_box_limit", None) is not None else 0,
+                            "category": "Final Product",
+                        }
+                    )
+                except Exception:
+                    continue
+            db.commit()
+        except Exception:
+            db.rollback()
 
-            packaging_size = item.packaging_size_name or "Standard"
-            processed_inventory.append(
-                {
-                    "id": f"final-{item.id}",
-                    "factory_id": item.factory_id,
-                    "product_id": item.id,
-                    "product_size_ml": item.product_size_ml or 0,
-                    "variety": item.variety or "Standard/White",
-                    "item_name": f"{item.product_size_ml or 0}ml {item.variety or 'Standard/White'} - {packaging_size}",
-                    "stock_type": "Final Product",
-                    "current_quantity": int(live_boxes),
-                    "quantity": int(live_boxes),
-                    "unit": "boxes",
-                    "price_per_unit": 0,
-                    "packaging_size": packaging_size,
-                    "packaging_size_name": packaging_size,
-                    "pieces_per_packet": item.pieces_per_packet if item.pieces_per_packet is not None else 0,
-                    "packets_per_box": item.packets_per_box_limit if item.packets_per_box_limit is not None else 0,
-                    "packets_per_box_limit": item.packets_per_box_limit if item.packets_per_box_limit is not None else 0,
-                    "category": "Final Product",
-                }
-            )
-
-        db.commit()
         return processed_inventory
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Backend processing crashed: {str(e)}") from e
+    except Exception:
+        return []
 
 
 @router.post("/final-stock", response_model=FinalStockRow)

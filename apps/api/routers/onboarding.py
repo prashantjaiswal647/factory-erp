@@ -74,6 +74,7 @@ from services.n8n_sync import sync_data_to_n8n_bg
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
+v1_router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 logger = logging.getLogger(__name__)
 
 
@@ -1682,3 +1683,115 @@ def delete_onboarding_entry(
         
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Onboarding entry of type '{type}' with ID {actual_id} not found")
 
+
+@router.delete("/v1/onboarding/items/{item_id}")
+@v1_router.delete("/items/{item_id}")
+def delete_onboarding_item(
+    item_id: int,
+    type: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db)
+):
+    factory_id = str(current_user.factory_id)
+    type_lower = type.lower()
+    
+    try:
+        if type_lower in ("blank", "blankstock"):
+            entry = db.query(BlankStock).filter(BlankStock.id == item_id, BlankStock.factory_id == factory_id).first()
+            if not entry:
+                raise HTTPException(status_code=404, detail="Blank stock not found")
+            db.delete(entry)
+            db.commit()
+            
+        elif type_lower in ("bottom", "bottomstock"):
+            entry = db.query(BottomStock).filter(BottomStock.id == item_id, BottomStock.factory_id == factory_id).first()
+            if not entry:
+                raise HTTPException(status_code=404, detail="Bottom stock not found")
+            db.delete(entry)
+            db.commit()
+            
+        elif type_lower in ("box", "boxstock", "carton box", "carton", "packaging", "inventory"):
+            # Check BoxStock first
+            entry = db.query(BoxStock).filter(BoxStock.id == item_id, BoxStock.factory_id == factory_id).first()
+            if entry:
+                db.delete(entry)
+                db.commit()
+            else:
+                # Check standard Inventory table (Corrugated Box variants)
+                inv_entry = db.query(Inventory).filter(Inventory.id == item_id, Inventory.factory_id == factory_id).first()
+                if not inv_entry:
+                    raise HTTPException(status_code=404, detail="Item not found")
+                
+                # Deletion constraints: override any hardcoded constraints blocking "Standard" boxes 
+                # Check for dependencies in PackagingProfile
+                profiles = db.query(PackagingProfile).filter(
+                    (PackagingProfile.box_inventory_id == item_id) |
+                    (PackagingProfile.poly_inventory_id == item_id)
+                ).all()
+                
+                can_hard_delete = True
+                from models import DailyProduction
+                for p in profiles:
+                    # check if active production logs exist
+                    has_logs = db.query(DailyProduction).filter(
+                        (DailyProduction.factory_id == factory_id) &
+                        (sql_func.lower(DailyProduction.packaging_size_name) == p.profile_name.lower())
+                    ).first()
+                    if has_logs:
+                        can_hard_delete = False
+                        break
+                
+                if can_hard_delete:
+                    for p in profiles:
+                        db.query(FinishedGoodsStock).filter(FinishedGoodsStock.packaging_profile_id == p.id).delete()
+                        db.delete(p)
+                    db.flush()
+                    
+                    # Direct SQL Deletion against the primary table identifier string
+                    from sqlalchemy import text
+                    db.execute(
+                        text("DELETE FROM inventory WHERE factory_id = :factory_id AND id = :item_id"),
+                        {"factory_id": factory_id, "item_id": item_id}
+                    )
+                    db.commit()
+                else:
+                    # Apply soft-delete status by renaming mapping
+                    inv_entry.item_name = f"[DELETED] {inv_entry.item_name}"
+                    db.commit()
+            
+        elif type_lower in ("plastic", "plasticstock", "polybag"):
+            entry = db.query(PlasticStock).filter(PlasticStock.id == item_id, PlasticStock.factory_id == factory_id).first()
+            if not entry:
+                raise HTTPException(status_code=404, detail="Plastic stock not found")
+            db.delete(entry)
+            db.commit()
+            
+        elif type_lower in ("polybag", "polybagstock"):
+            entry = db.query(PolybagStock).filter(PolybagStock.id == item_id, PolybagStock.factory_id == factory_id).first()
+            if not entry:
+                raise HTTPException(status_code=404, detail="Polybag stock not found")
+            db.delete(entry)
+            db.commit()
+            
+        else:
+            raise HTTPException(status_code=400, detail="Invalid stock type")
+            
+        background_tasks.add_task(
+            sync_data_to_n8n_bg,
+            factory_id=str(factory_id),
+            sync_type="onboarding",
+            action="delete",
+            data={"entry_id": item_id, "type": type_lower}
+        )
+        return {"message": "Item deleted successfully"}
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot delete item because it contains active data associations: {exc}"
+        )

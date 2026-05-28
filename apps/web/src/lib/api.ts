@@ -1468,6 +1468,12 @@ export function deleteOnboardingEntry(entryId: string, type?: string) {
   });
 }
 
+export function deleteOnboardingItem(itemId: number, type: string) {
+  return api.delete(`/api/v1/onboarding/items/${itemId}`, {
+    params: { type }
+  });
+}
+
 export type ActivityLog = {
   id: number;
   factory_id: number;

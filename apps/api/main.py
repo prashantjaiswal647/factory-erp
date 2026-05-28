@@ -69,7 +69,7 @@ from models import (
     InvoiceDocument,
     TokenUsageLog,
 )
-from routers.onboarding import router as onboarding_router
+from routers.onboarding import router as onboarding_router, v1_router as onboarding_v1_router
 from routers.calculator import router as calculator_router
 from routers.automation import router as automation_router
 from routers.phase1 import router as phase1_router
@@ -157,6 +157,7 @@ app.add_middleware(
 def register_application_routers(application: FastAPI) -> None:
     """Register API routers after middleware setup so CORS applies uniformly."""
     application.include_router(onboarding_router)
+    application.include_router(onboarding_v1_router)
     application.include_router(calculator_router)
     application.include_router(automation_router)
     application.include_router(phase1_router)

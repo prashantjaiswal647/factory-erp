@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getInventory, deleteOnboardingEntry } from "../lib/api";
+import { getInventory, deleteOnboardingEntry, deleteOnboardingItem } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
 type InventoryFilter = "all" | "raw" | "wip" | "finished" | "packing" | "low";
@@ -73,7 +73,36 @@ export default function InventoryPage() {
       const entryId = row.source.id;
       const type = row.source.stock_type;
       
-      await deleteOnboardingEntry(String(entryId), type);
+      let actualId = entryId;
+      let actualType: string = type;
+
+      if (typeof entryId === "string") {
+        if (entryId.startsWith("blank-")) {
+          actualId = entryId.replace("blank-", "");
+          actualType = "blankstock";
+        } else if (entryId.startsWith("bottom-")) {
+          actualId = entryId.replace("bottom-", "");
+          actualType = "bottomstock";
+        } else if (entryId.startsWith("box-")) {
+          actualId = entryId.replace("box-", "");
+          actualType = "boxstock";
+        } else if (entryId.startsWith("plastic-")) {
+          actualId = entryId.replace("plastic-", "");
+          actualType = "plasticstock";
+        } else if (entryId.startsWith("polybag-")) {
+          actualId = entryId.replace("polybag-", "");
+          actualType = "polybagstock";
+        } else if (entryId.startsWith("final-")) {
+          actualId = entryId.replace("final-", "");
+          actualType = "final";
+        }
+      } else {
+        if (String(type) === "Carton Box" || String(type) === "Packaging") {
+          actualType = "boxstock";
+        }
+      }
+
+      await deleteOnboardingItem(Number(actualId), actualType);
       await load();
     } catch (caught) {
       const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
