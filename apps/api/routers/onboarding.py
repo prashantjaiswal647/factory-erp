@@ -383,7 +383,7 @@ def save_final_product_opening_stock(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock item not found")
             product_size_ml = product_size_ml if "product_size_ml" in provided_fields else stock.product_size_ml
             packaging_size_name = packaging_size_name if ("packaging_size_name" in provided_fields or "packaging_size" in provided_fields) else (stock.packaging_size_name or f"{product_size_ml or 210}ml Standard Box")
-            variety = variety if "variety" in provided_fields else (stock.variety or "Standard/White")
+            variety = variety.strip() if "variety" in provided_fields else (stock.variety or "Standard/White")
             pieces_per_packet = int(pieces_per_packet if "pieces_per_packet" in provided_fields else (stock.pieces_per_packet or 1))
             packets_per_box_limit = int(
                 packets_per_box_limit
@@ -397,8 +397,8 @@ def save_final_product_opening_stock(
                 db.query(FinalProductStock)
                 .filter(FinalProductStock.factory_id == factory_id)
                 .filter(FinalProductStock.product_size_ml == product_size_ml)
-                .filter(sql_func.lower(FinalProductStock.variety) == variety.lower())
-                .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
+                .filter(sql_func.lower(sql_func.trim(FinalProductStock.variety)) == variety.strip().lower())
+                .filter(sql_func.lower(sql_func.trim(FinalProductStock.packaging_size_name)) == packaging_size_name.strip().lower())
                 .with_for_update()
                 .first()
             )
