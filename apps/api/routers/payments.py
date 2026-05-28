@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Union
 from urllib import request as urlrequest
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -115,7 +115,7 @@ class PaymentCreate(BaseModel):
     customer_phone: str = Field(..., min_length=1)
     amount_paid: float = Field(..., gt=0)
     payment_mode: str = Field("Cash", pattern="^(Cash|UPI|Bank Transfer)$")
-    date: Optional[date] = None
+    date: Optional[Union[date, str]] = None
     order_id: Optional[int] = None
     sale_id: Optional[int] = None
 
@@ -322,13 +322,25 @@ def record_payment(
             if daily_sale is not None:
                 daily_sale_id = payload.sale_id
 
+        # Convert date to timezone-safe DB date object safely
+        payment_date = date.today()
+        if payload.date:
+            if isinstance(payload.date, date):
+                payment_date = payload.date
+            else:
+                try:
+                    date_str = str(payload.date).split("T")[0]
+                    payment_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    payment_date = date.today()
+
         payment = Payment(
             factory_id=factory_id,
             customer_phone=customer_phone(customer),
             sale_id=daily_sale_id,
             amount_paid=to_money(payload.amount_paid),
             payment_mode=payload.payment_mode,
-            date=payload.date or date.today(),
+            date=payment_date,
         )
         db.add(payment)
         db.flush()
@@ -339,7 +351,7 @@ def record_payment(
             customer_id=customer.id,
             amount=to_money(payload.amount_paid),
             payment_mode=payload.payment_mode,
-            collection_date=payload.date or date.today(),
+            collection_date=payment_date,
             payment_id=payment.id,
             selected_order_id=selected_order_id,
             created_by_user_id=current_user.id,
