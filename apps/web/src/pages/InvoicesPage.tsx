@@ -660,9 +660,9 @@ export default function InvoicesPage() {
               </div>
             </div>
 
-            {/* Reconciled Payment Logs History Audit Log */}
+            {/* Chronological Payment Logs Table Audit Log */}
             <div className="space-y-3">
-              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Reconciled Payment Logs History</span>
+              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Chronological Payment Logs Table</span>
               {(!(selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments) || (selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments || []).length === 0) ? (
                 <div className="p-4 rounded-lg bg-zinc-50 text-xs text-zinc-500 text-center font-medium border border-dashed border-zinc-200">
                   No partial payments collected against this invoice. Only initial/advance amount applies.
@@ -672,9 +672,9 @@ export default function InvoicesPage() {
                   <table className="min-w-full divide-y divide-zinc-200 text-xs">
                     <thead className="bg-zinc-50 text-left font-semibold uppercase text-zinc-500">
                       <tr>
-                        <th className="px-4 py-2.5">Date of Allocation</th>
-                        <th className="px-4 py-2.5">Receipt Mode (Cash/Bank)</th>
-                        <th className="px-4 py-2.5 text-right">Amount Paid (Rs.)</th>
+                        <th className="px-4 py-2.5">Allocation Date</th>
+                        <th className="px-4 py-2.5">Mode (Cash/Bank)</th>
+                        <th className="px-4 py-2.5 text-right">Deducted Amount (Rs.)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 bg-white">
@@ -698,13 +698,13 @@ export default function InvoicesPage() {
                 <span className="text-base font-bold text-zinc-900 mt-1">{money(selectedInvoiceDetails.bill_total)}</span>
               </div>
               <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 flex flex-col">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Total Payments Received to Date</span>
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Cumulative Receipts Added</span>
                 <span className="text-base font-bold text-emerald-800 mt-1">
                   Rs. {money(selectedInvoiceDetails.amount_paid)}
                 </span>
               </div>
               <div className="p-3 bg-rose-50 rounded-lg border border-rose-100 flex flex-col">
-                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Remaining Balance Unsettled Dues</span>
+                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Left Pending Net Dues</span>
                 <span className="text-base font-bold text-rose-800 mt-1">
                   Rs. {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
                 </span>
@@ -716,12 +716,13 @@ export default function InvoicesPage() {
                 className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm transition"
                 type="button"
                 onClick={() => {
-                  void preview(selectedInvoiceDetails);
+                  const invoiceUrl = `/api/sales/invoices/${selectedInvoiceDetails.id}/pdf?inline=true`;
+                  window.open(invoiceUrl, '_blank');
                   setSelectedInvoiceDetails(null);
                 }}
               >
                 <Eye className="h-4 w-4" />
-                Preview Invoice PDF
+                View PDF Statement
               </button>
               <button 
                 className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition"
