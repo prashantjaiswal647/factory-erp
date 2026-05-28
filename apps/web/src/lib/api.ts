@@ -491,8 +491,8 @@ export type BlankStockCreate = {
 };
 
 export type BoxPackagingStockCreate = {
-  box_type: "Small Box" | "Big Box";
-  quantity: number;
+  box_type: string;
+  box_quantity: number;
   price_per_box: number;
 };
 
@@ -967,7 +967,11 @@ export function createBlankStock(payload: BlankStockCreate) {
 }
 
 export function createBoxPackagingStock(payload: BoxPackagingStockCreate) {
-  return api.post("/api/onboarding/raw-material/box", payload);
+  return api.post("/api/onboarding/raw-material/box", {
+    box_type: payload.box_type,
+    quantity: payload.box_quantity,
+    price_per_box: payload.price_per_box
+  });
 }
 
 export function createPlasticStock(payload: PlasticStockCreate) {

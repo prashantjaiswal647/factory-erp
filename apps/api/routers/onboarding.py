@@ -298,170 +298,204 @@ def save_final_product_opening_stock(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
+    factory_id = str(current_user.factory_id)
+    stock = None
+    provided_fields = getattr(payload, "model_fields_set", set())
+
     try:
-        # Dynamic fallback parameters injection
-        product_size_ml = payload.product_size_ml if payload.product_size_ml is not None else 210
-        packaging_size_name = (payload.packaging_size_name or payload.packaging_size or f"{product_size_ml}ml Standard Box").strip()
-        packets_per_box_limit = payload.packets_per_box_limit or payload.packets_per_box or 1000
-        
+        product_size_ml = payload.product_size_ml
+        packaging_size_name = (payload.packaging_size_name or payload.packaging_size or "").strip()
+        variety = (payload.variety or "Standard/White").strip() or "Standard/White"
+        pieces_per_packet = int(payload.pieces_per_packet or 1)
+        packets_per_box_limit = int(payload.packets_per_box_limit or payload.packets_per_box or 1)
         quantity = payload.current_quantity
         if quantity is None:
             quantity = payload.total_boxes
         if quantity is None:
             quantity = payload.initial_quantity
-        if quantity is None:
-            quantity = 0
-
-        # Database transactional safety: Ensure raw dependency records exist dynamically in background
-        profile = db.query(PackagingProfile).filter(
-            PackagingProfile.factory_id == str(current_user.factory_id),
-            PackagingProfile.cup_size_ml == product_size_ml,
-            sql_func.lower(PackagingProfile.profile_name) == packaging_size_name.lower(),
-        ).first()
-
-        if not profile:
-            logger.info(f"Injecting dynamic default PackagingProfile '{packaging_size_name}' for size {product_size_ml}ml.")
-            poly_inventory = get_or_create_inventory(db, str(current_user.factory_id), f"{product_size_ml}ml Polybag", "Packaging", "pieces")
-            box_inventory = get_or_create_inventory(db, str(current_user.factory_id), packaging_size_name, "Packaging", "pieces")
-            cups_per_poly = payload.pieces_per_packet if payload.pieces_per_packet and payload.pieces_per_packet > 0 else 1
-            profile = PackagingProfile(
-                factory_id=str(current_user.factory_id),
-                profile_name=packaging_size_name,
-                product_name=f"{product_size_ml}ml Paper Cup",
-                product_name_ml=product_size_ml,
-                cup_size_ml=product_size_ml,
-                polybag_capacity=cups_per_poly,
-                box_capacity=cups_per_poly * packets_per_box_limit,
-                box_size_name=packaging_size_name,
-                cups_per_poly=cups_per_poly,
-                cups_per_polybag=cups_per_poly,
-                polys_per_box=packets_per_box_limit,
-                polybags_per_box=packets_per_box_limit,
-                box_inventory_id=box_inventory.id,
-                poly_inventory_id=poly_inventory.id
-            )
-            db.add(profile)
-            db.flush()
-
-        stock_fg = db.query(FinishedGoodsStock).filter(
-            FinishedGoodsStock.factory_id == str(current_user.factory_id),
-            FinishedGoodsStock.packaging_profile_id == profile.id
-        ).first()
-
-        if not stock_fg:
-            logger.info(f"Injecting dynamic default FinishedGoodsStock for size {product_size_ml}ml.")
-            stock_fg = FinishedGoodsStock(
-                factory_id=str(current_user.factory_id),
-                cup_size_ml=product_size_ml,
-                packaging_profile_id=profile.id,
-                boxes_available=0
-            )
-            db.add(stock_fg)
-            db.flush()
+        quantity = int(quantity or 0)
+        loose_packets = int(payload.loose_packets or 0)
 
         if payload.product_id:
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
+                .filter(FinalProductStock.factory_id == factory_id)
                 .filter(FinalProductStock.id == payload.product_id)
                 .with_for_update()
                 .first()
             )
             if stock is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock item not found")
+            product_size_ml = product_size_ml if "product_size_ml" in provided_fields else stock.product_size_ml
+            packaging_size_name = packaging_size_name if ("packaging_size_name" in provided_fields or "packaging_size" in provided_fields) else (stock.packaging_size_name or f"{product_size_ml or 210}ml Standard Box")
+            variety = variety if "variety" in provided_fields else (stock.variety or "Standard/White")
+            pieces_per_packet = int(pieces_per_packet if "pieces_per_packet" in provided_fields else (stock.pieces_per_packet or 1))
+            packets_per_box_limit = int(
+                packets_per_box_limit
+                if ("packets_per_box_limit" in provided_fields or "packets_per_box" in provided_fields)
+                else (stock.packets_per_box_limit or 1)
+            )
         else:
+            product_size_ml = int(product_size_ml or 210)
+            packaging_size_name = packaging_size_name or f"{product_size_ml}ml Standard Box"
             stock = (
                 db.query(FinalProductStock)
-                .filter(FinalProductStock.factory_id == str(current_user.factory_id))
+                .filter(FinalProductStock.factory_id == factory_id)
                 .filter(FinalProductStock.product_size_ml == product_size_ml)
-                .filter(FinalProductStock.variety == payload.variety)
-                .filter(FinalProductStock.packaging_size_name == packaging_size_name)
+                .filter(sql_func.lower(FinalProductStock.variety) == variety.lower())
+                .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
                 .with_for_update()
                 .first()
             )
             if stock is None:
                 stock = FinalProductStock(
-                    factory_id=str(current_user.factory_id),
+                    factory_id=factory_id,
                     product_size_ml=product_size_ml,
-                    variety=payload.variety,
+                    variety=variety,
                     packaging_size_name=packaging_size_name,
-                    pieces_per_packet=payload.pieces_per_packet if payload.pieces_per_packet else 1,
-                    packets_per_box_limit=packets_per_box_limit,
+                    pieces_per_packet=max(pieces_per_packet, 1),
+                    packets_per_box_limit=max(packets_per_box_limit, 1),
+                    current_quantity=0,
+                    total_boxes=0,
+                    loose_packets=0,
                 )
                 db.add(stock)
 
-        stock.packaging_size_name = packaging_size_name
-        stock.packets_per_box_limit = packets_per_box_limit
-        stock.variety = payload.variety
-        stock.pieces_per_packet = payload.pieces_per_packet if payload.pieces_per_packet else 1
-        stock.current_quantity = quantity
-        stock.total_boxes = quantity
-        stock.loose_packets = payload.loose_packets if payload.loose_packets is not None else 0
-        
-        db.commit()
+        if not product_size_ml:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="product_size_ml is required")
+        if not packaging_size_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packaging_size_name is required")
 
-        # Synchronize PackagingMetrics for Dashboard mapping
+        stock.product_size_ml = int(product_size_ml)
+        stock.variety = variety
+        stock.packaging_size_name = packaging_size_name
+        stock.pieces_per_packet = max(int(pieces_per_packet or 1), 1)
+        stock.packets_per_box_limit = max(int(packets_per_box_limit or 1), 1)
+        stock.current_quantity = max(quantity, 0)
+        stock.total_boxes = max(quantity, 0)
+        stock.loose_packets = max(loose_packets, 0)
+        db.flush()
+        db.commit()
+        db.refresh(stock)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Final product opening stock core save failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Final product stock save failed: {exc}") from exc
+
+    # Optional dependency/bootstrap work must never break the saved opening stock.
+    try:
+        poly_inventory = get_or_create_inventory(db, factory_id, f"{stock.product_size_ml}ml Polybag", "Packaging", "pieces")
+        box_inventory = get_or_create_inventory(db, factory_id, stock.packaging_size_name, "Packaging", "pieces")
+        profile = (
+            db.query(PackagingProfile)
+            .filter(PackagingProfile.factory_id == factory_id)
+            .filter(sql_func.lower(PackagingProfile.profile_name) == stock.packaging_size_name.lower())
+            .first()
+        )
+        if profile is None:
+            profile = PackagingProfile(
+                factory_id=factory_id,
+                profile_name=stock.packaging_size_name,
+                product_name=f"{stock.product_size_ml}ml Paper Cup",
+                product_name_ml=stock.product_size_ml,
+                cup_size_ml=stock.product_size_ml,
+                polybag_capacity=stock.pieces_per_packet,
+                box_capacity=stock.pieces_per_packet * stock.packets_per_box_limit,
+                box_size_name=stock.packaging_size_name,
+                cups_per_poly=stock.pieces_per_packet,
+                cups_per_polybag=stock.pieces_per_packet,
+                polys_per_box=stock.packets_per_box_limit,
+                polybags_per_box=stock.packets_per_box_limit,
+                box_inventory_id=box_inventory.id,
+                poly_inventory_id=poly_inventory.id,
+            )
+            db.add(profile)
+            db.flush()
+        finished = (
+            db.query(FinishedGoodsStock)
+            .filter(FinishedGoodsStock.factory_id == factory_id)
+            .filter(FinishedGoodsStock.packaging_profile_id == profile.id)
+            .first()
+        )
+        if finished is None:
+            finished = FinishedGoodsStock(
+                factory_id=factory_id,
+                cup_size_ml=stock.product_size_ml,
+                packaging_profile_id=profile.id,
+                boxes_available=0,
+            )
+            db.add(finished)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Optional final-stock packaging bootstrap failed and was suppressed: %s", exc)
+
+    try:
         metric = (
             db.query(PackagingMetrics)
-            .filter(PackagingMetrics.factory_id == str(current_user.factory_id))
-            .filter(PackagingMetrics.cup_size_ml == product_size_ml)
+            .filter(PackagingMetrics.factory_id == factory_id)
+            .filter(PackagingMetrics.cup_size_ml == stock.product_size_ml)
             .first()
         )
         if metric is None:
             metric = PackagingMetrics(
-                factory_id=str(current_user.factory_id),
-                cup_size_ml=product_size_ml,
+                factory_id=factory_id,
+                cup_size_ml=stock.product_size_ml,
                 kg_per_box=Decimal("10.000"),
-                cups_per_box=packets_per_box_limit,
+                cups_per_box=stock.packets_per_box_limit,
             )
             db.add(metric)
         else:
-            metric.cups_per_box = packets_per_box_limit
+            metric.cups_per_box = stock.packets_per_box_limit
         db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Optional packaging metrics sync failed and was suppressed: %s", exc)
 
-        db.refresh(stock)
-        
-        # Synchronize caches to opening balance immediately
+    try:
         from routers.inventory import recalculate_and_sync_sku_stock
         recalculate_and_sync_sku_stock(
             db=db,
-            factory_id=str(current_user.factory_id),
-            product_size_ml=product_size_ml,
-            variety=payload.variety,
-            packaging_size_name=packaging_size_name,
+            factory_id=factory_id,
+            product_size_ml=stock.product_size_ml,
+            variety=stock.variety,
+            packaging_size_name=stock.packaging_size_name,
         )
+        db.commit()
         db.refresh(stock)
-        
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Optional final-stock live cache sync failed and was suppressed: %s", exc)
+        stock = db.query(FinalProductStock).filter(FinalProductStock.id == stock.id).first()
+
+    try:
         background_tasks.add_task(
             sync_data_to_n8n_bg,
-            factory_id=str(current_user.factory_id),
+            factory_id=factory_id,
             sync_type="onboarding",
             action="insert",
             data=payload,
         )
+    except Exception as exc:
+        logger.exception("Optional final-stock n8n enqueue failed and was suppressed: %s", exc)
 
-        # Enforce string representation for factory_id in return payload
-        return FinalProductOpeningStockResponse(
-            id=stock.id,
-            factory_id=str(stock.factory_id),
-            product_size_ml=stock.product_size_ml,
-            variety=stock.variety or "Standard/White",
-            packaging_size=stock.packaging_size_name,
-            packaging_size_name=stock.packaging_size_name,
-            pieces_per_packet=stock.pieces_per_packet,
-            packets_per_box=stock.packets_per_box_limit,
-            current_quantity=stock.current_quantity if stock.current_quantity is not None else 0,
-            total_boxes=stock.total_boxes or 0,
-            loose_packets=stock.loose_packets or 0,
-            packets_per_box_limit=stock.packets_per_box_limit,
-        )
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
+    return FinalProductOpeningStockResponse(
+        id=stock.id,
+        factory_id=str(stock.factory_id),
+        product_size_ml=stock.product_size_ml,
+        variety=stock.variety or "Standard/White",
+        packaging_size=stock.packaging_size_name,
+        packaging_size_name=stock.packaging_size_name,
+        pieces_per_packet=stock.pieces_per_packet,
+        packets_per_box=stock.packets_per_box_limit,
+        current_quantity=stock.current_quantity if stock.current_quantity is not None else 0,
+        total_boxes=stock.total_boxes or 0,
+        loose_packets=stock.loose_packets or 0,
+        packets_per_box_limit=stock.packets_per_box_limit,
+    )
 
 @router.get("/workers", response_model=List[OnboardingWorkerSummary])
 def list_onboarding_workers(

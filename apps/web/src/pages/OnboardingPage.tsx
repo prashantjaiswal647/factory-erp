@@ -12,7 +12,7 @@ import { useUpgrade } from "../context/UpgradeContext";
 const todayWorker: WorkerCreate = { name: "", country_code: "+91", phone: "", daily_wages: 0, duty_hours: 8 };
 const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20, total_sacks: 0 };
 const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
-const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", quantity: 0, price_per_box: 0 };
+const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", box_quantity: 0, price_per_box: 0 };
 const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
 const finalProductStockDraft = { product_id: 0, initial_quantity: 0 };
 const machineDraft: MachineCreate = {
@@ -1061,8 +1061,8 @@ export default function OnboardingPage() {
 
             <MaterialCard title="Box Packaging Stock">
               <div className="grid gap-3 md:grid-cols-3">
-                <SelectInput label="Box Type" value={boxStock.box_type} options={["Small Box", "Big Box"]} onChange={(box_type) => setBoxStock({ ...boxStock, box_type: box_type as BoxPackagingStockCreate["box_type"] })} />
-                <NumberInput label="Box Quantity (Pieces)" value={boxStock.quantity} onChange={(quantity) => setBoxStock({ ...boxStock, quantity })} />
+                <TextInput label="Box Type" value={boxStock.box_type} onChange={(box_type) => setBoxStock({ ...boxStock, box_type })} />
+                <NumberInput label="Box Quantity (Pieces)" value={boxStock.box_quantity} onChange={(box_quantity) => setBoxStock({ ...boxStock, box_quantity })} />
                 <NumberInput label="Price per Box (Rs)" value={boxStock.price_per_box} onChange={(price_per_box) => setBoxStock({ ...boxStock, price_per_box })} />
               </div>
               <StockButton label="Add Box Stock" color="blue" isSaving={isSaving} onClick={addBoxStock} />

@@ -318,9 +318,23 @@ class BottomStockResponse(BaseModel):
 
 
 class BoxStockCreate(BaseModel):
-    box_type: str = Field(..., pattern="^(Small Box|Big Box)$")
-    quantity: int = Field(..., ge=0)
+    box_type: str = Field(..., min_length=1, max_length=100)
+    quantity: Optional[int] = Field(default=None, ge=0)
+    box_quantity: Optional[int] = Field(default=None, ge=0)
     price_per_box: float = Field(..., ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_quantity(cls, data):
+        if isinstance(data, dict):
+            if "box_quantity" in data and "quantity" not in data:
+                data["quantity"] = data["box_quantity"]
+            elif "quantity" in data and "box_quantity" not in data:
+                data["box_quantity"] = data["quantity"]
+            if data.get("quantity") is None and data.get("box_quantity") is None:
+                data["quantity"] = 0
+                data["box_quantity"] = 0
+        return data
 
 
 class PlasticStockCreate(BaseModel):
