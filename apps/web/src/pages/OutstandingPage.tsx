@@ -138,7 +138,34 @@ export default function OutstandingPage() {
     setIsSaving(true);
     setError("");
     try {
-      await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0, reason);
+      const response = await clearOutstandingBill(bill.bill_id ?? bill.order_id ?? 0, reason);
+      if (response.status === 200 || response.data?.status === "success") {
+        setRows((currentRows) =>
+          currentRows
+            .map((cust) => {
+              if (cust.customer_id === row.customer_id) {
+                const updatedBills = (cust.bills || []).filter(
+                  (b) => (b.bill_id ?? b.order_id) !== (bill.bill_id ?? bill.order_id)
+                );
+                
+                // Recalculate totals for this customer row
+                const billSum = updatedBills.reduce((acc, curr) => acc + Number(curr.bill_amount || 0), 0);
+                const paidSum = updatedBills.reduce((acc, curr) => acc + Number(curr.amount_paid || 0), 0);
+                const pendingSum = updatedBills.reduce((acc, curr) => acc + Number(curr.remaining_balance || 0), 0);
+                
+                return {
+                  ...cust,
+                  bills: updatedBills,
+                  total_bill_amount: String(billSum),
+                  total_paid: String(paidSum),
+                  current_pending_balance: String(pendingSum),
+                };
+              }
+              return cust;
+            })
+            .filter((cust) => (cust.bills || []).length > 0)
+        );
+      }
       setToast(`Outstanding bill manually cleared (${reason === "mistake" ? "Stock reversed" : "Stock kept deducted"})`);
       setDeleteModalData(null);
       triggerDataRefresh();
