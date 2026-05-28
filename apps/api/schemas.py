@@ -462,6 +462,8 @@ class CustomerCreate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_due: Decimal = Field(default=Decimal("0.00"), ge=0)
     total_due: Decimal = Field(default=Decimal("0.00"), ge=0)
+    opening_balance: Decimal = Field(default=Decimal("0.00"), ge=0)
+    legacy_dues: Decimal = Field(default=Decimal("0.00"), ge=0)
 
 
 class CustomerResponse(BaseModel):

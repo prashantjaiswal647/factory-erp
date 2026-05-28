@@ -387,7 +387,6 @@ class Customer(TenantMixin, Base):
             "advance_discount_pct >= 0 AND advance_discount_pct <= 100",
             name="ck_customers_advance_discount_pct_range",
         ),
-        UniqueConstraint("factory_id", "name", name="uq_customers_factory_name"),
         UniqueConstraint("factory_id", "phone_number", name="uq_customers_factory_phone_number"),
     )
 
@@ -1008,6 +1007,35 @@ class InvoiceDocument(TenantMixin, Base):
     )
 
 
+class OutstandingBill(TenantMixin, Base):
+    __tablename__ = "outstanding_bills"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, index=True)
+    invoice_document_id = Column(Integer, ForeignKey("invoice_documents.id"), nullable=True, index=True)
+    source_type = Column(String(50), nullable=False, default="invoice", server_default="invoice", index=True)
+    tracking_number = Column(String(100), nullable=False, index=True)
+    bill_date = Column(Date, nullable=False, server_default=func.current_date(), index=True)
+    bill_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    balance_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    status = Column(String(50), nullable=False, default="active", server_default="active", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    customer = relationship("Customer")
+    order = relationship("Order")
+    invoice_document = relationship("InvoiceDocument")
+
+    __table_args__ = (
+        CheckConstraint("bill_amount >= 0", name="ck_outstanding_bills_bill_amount_non_negative"),
+        CheckConstraint("amount_paid >= 0", name="ck_outstanding_bills_amount_paid_non_negative"),
+        CheckConstraint("balance_amount >= 0", name="ck_outstanding_bills_balance_amount_non_negative"),
+        UniqueConstraint("factory_id", "tracking_number", name="uq_outstanding_bills_factory_tracking"),
+    )
+
+
 class BlankStock(TenantMixin, Base):
     __tablename__ = "blank_stock"
 
@@ -1214,6 +1242,31 @@ class Payment(TenantMixin, Base):
     __table_args__ = (
         CheckConstraint("amount_paid > 0", name="ck_payments_amount_paid_positive"),
         CheckConstraint("payment_mode IN ('Cash', 'UPI', 'Bank Transfer')", name="ck_payments_mode_valid"),
+    )
+
+
+class PaymentCollection(TenantMixin, Base):
+    __tablename__ = "payment_collections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=True, index=True)
+    outstanding_bill_id = Column(Integer, ForeignKey("outstanding_bills.id"), nullable=True, index=True)
+    amount_collected = Column(Numeric(14, 2), nullable=False)
+    payment_mode = Column(String(20), nullable=False, default="Cash", server_default="Cash")
+    collection_date = Column(Date, nullable=False, index=True)
+    reference_number = Column(String(100), nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    customer = relationship("Customer")
+    payment = relationship("Payment")
+    outstanding_bill = relationship("OutstandingBill")
+    created_by = relationship("User")
+
+    __table_args__ = (
+        CheckConstraint("amount_collected > 0", name="ck_payment_collections_amount_positive"),
+        CheckConstraint("payment_mode IN ('Cash', 'UPI', 'Bank Transfer')", name="ck_payment_collections_mode_valid"),
     )
 
 

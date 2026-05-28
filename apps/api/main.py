@@ -709,6 +709,17 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_created ON invoice_documents(factory_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_date ON invoice_documents(factory_id, invoice_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_customer_id ON invoice_documents(customer_id)",
+        "ALTER TABLE customers DROP CONSTRAINT IF EXISTS uq_customers_factory_name",
+        "DROP INDEX IF EXISTS uq_customers_factory_name",
+        "CREATE TABLE IF NOT EXISTS outstanding_bills (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, customer_id INTEGER NOT NULL REFERENCES customers(id), order_id INTEGER NULL REFERENCES orders(id), invoice_document_id INTEGER NULL REFERENCES invoice_documents(id), source_type VARCHAR(50) NOT NULL DEFAULT 'invoice', tracking_number VARCHAR(100) NOT NULL, bill_date DATE NOT NULL DEFAULT CURRENT_DATE, bill_amount NUMERIC(14,2) NOT NULL DEFAULT 0, amount_paid NUMERIC(14,2) NOT NULL DEFAULT 0, balance_amount NUMERIC(14,2) NOT NULL DEFAULT 0, status VARCHAR(50) NOT NULL DEFAULT 'active', created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT uq_outstanding_bills_factory_tracking UNIQUE (factory_id, tracking_number), CONSTRAINT ck_outstanding_bills_bill_amount_non_negative CHECK (bill_amount >= 0), CONSTRAINT ck_outstanding_bills_amount_paid_non_negative CHECK (amount_paid >= 0), CONSTRAINT ck_outstanding_bills_balance_amount_non_negative CHECK (balance_amount >= 0))",
+        "CREATE INDEX IF NOT EXISTS idx_outstanding_bills_factory_customer ON outstanding_bills(factory_id, customer_id)",
+        "CREATE INDEX IF NOT EXISTS idx_outstanding_bills_factory_status ON outstanding_bills(factory_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_outstanding_bills_order_id ON outstanding_bills(order_id)",
+        "CREATE INDEX IF NOT EXISTS idx_outstanding_bills_invoice_document_id ON outstanding_bills(invoice_document_id)",
+        "CREATE TABLE IF NOT EXISTS payment_collections (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, customer_id INTEGER NOT NULL REFERENCES customers(id), payment_id INTEGER NULL REFERENCES payments(id), outstanding_bill_id INTEGER NULL REFERENCES outstanding_bills(id), amount_collected NUMERIC(14,2) NOT NULL, payment_mode VARCHAR(20) NOT NULL DEFAULT 'Cash', collection_date DATE NOT NULL, reference_number VARCHAR(100), created_by_user_id INTEGER NULL REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT ck_payment_collections_amount_positive CHECK (amount_collected > 0), CONSTRAINT ck_payment_collections_mode_valid CHECK (payment_mode IN ('Cash', 'UPI', 'Bank Transfer')))",
+        "CREATE INDEX IF NOT EXISTS idx_payment_collections_factory_customer ON payment_collections(factory_id, customer_id)",
+        "CREATE INDEX IF NOT EXISTS idx_payment_collections_bill_id ON payment_collections(outstanding_bill_id)",
+        "CREATE INDEX IF NOT EXISTS idx_payment_collections_payment_id ON payment_collections(payment_id)",
         "ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS duty_hours DOUBLE PRECISION NOT NULL DEFAULT 8.0",
         "ALTER TABLE attendance_logs DROP CONSTRAINT IF EXISTS ck_attendance_logs_duty_hours_positive",
         "ALTER TABLE attendance_logs ADD CONSTRAINT ck_attendance_logs_duty_hours_positive CHECK (duty_hours > 0)",
@@ -1099,7 +1110,7 @@ def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: S
         db.add(db_item)
         
     if payload.payment_method == "Normal_Credit":
-        customer.balance_amount = previous_balance + total_final_amount
+        customer.balance_amount = previous_balance
     customer_phone_number = customer.contact_number or customer.phone or customer.phone_number or ""
     try:
         log_factory_operation(

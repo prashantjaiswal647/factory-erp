@@ -570,6 +570,8 @@ export type CustomerCreate = {
   gst_number?: string | null;
   previous_due: number;
   total_due: number;
+  opening_balance?: number;
+  legacy_dues?: number;
 };
 
 export type CustomerSearchResult = {

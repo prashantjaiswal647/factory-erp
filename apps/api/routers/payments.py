@@ -8,11 +8,13 @@ from urllib import request as urlrequest
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sql_func, or_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
-from models import Customer, DailySale, Order, Payment, User
+from models import Customer, DailySale, Order, OutstandingBill, Payment, PaymentCollection, User
+from services.accounting import apply_payment_to_outstanding_bills, sync_customer_balance_from_bills
 
 
 router = APIRouter(tags=["payments"])
@@ -61,6 +63,29 @@ def send_n8n_whatsapp_event(payload: dict) -> None:
 
 
 def calculate_customer_outstanding(db: Session, factory_id: int, customer: Customer) -> tuple[Decimal, Decimal, Decimal]:
+    ledger_total = to_money(
+        db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.bill_amount), 0))
+        .filter(OutstandingBill.factory_id == factory_id)
+        .filter(OutstandingBill.customer_id == customer.id)
+        .scalar()
+    )
+    if ledger_total > 0:
+        ledger_paid = to_money(
+            db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.amount_paid), 0))
+            .filter(OutstandingBill.factory_id == factory_id)
+            .filter(OutstandingBill.customer_id == customer.id)
+            .scalar()
+        )
+        ledger_balance = to_money(
+            db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0))
+            .filter(OutstandingBill.factory_id == factory_id)
+            .filter(OutstandingBill.customer_id == customer.id)
+            .filter(OutstandingBill.balance_amount > 0)
+            .filter(OutstandingBill.status.in_(["active", "partial"]))
+            .scalar()
+        )
+        return ledger_total, ledger_paid, ledger_balance
+
     total_bill = to_money(
         db.query(sql_func.coalesce(sql_func.sum(Order.total_amount), 0))
         .filter(Order.factory_id == factory_id)
@@ -105,7 +130,7 @@ class PaymentResponse(BaseModel):
 
 
 class OutstandingBillRow(BaseModel):
-    order_id: int
+    order_id: Optional[int] = None
     order_date: str
     bill_amount: Decimal
     amount_paid: Decimal
@@ -131,6 +156,25 @@ class OutstandingResponse(BaseModel):
 
 
 def apply_payment_to_orders(db: Session, factory_id: int, customer: Customer, amount: Decimal, specific_order_id: Optional[int] = None) -> Decimal:
+    ledger_total = to_money(
+        db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0))
+        .filter(OutstandingBill.factory_id == factory_id)
+        .filter(OutstandingBill.customer_id == customer.id)
+        .filter(OutstandingBill.balance_amount > 0)
+        .filter(OutstandingBill.status.in_(["active", "partial"]))
+        .scalar()
+    )
+    if ledger_total > 0:
+        return apply_payment_to_outstanding_bills(
+            db,
+            factory_id=factory_id,
+            customer_id=customer.id,
+            amount=amount,
+            payment_mode="Cash",
+            collection_date=date.today(),
+            selected_order_id=specific_order_id,
+        )
+
     remaining = to_money(amount)
     query = (
         db.query(Order)
@@ -173,15 +217,26 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
         total_bill, total_paid, balance = calculate_customer_outstanding(db, factory_id, customer)
         if balance <= 0:
             continue
-        bills = (
-            db.query(Order)
-            .filter(Order.factory_id == factory_id)
-            .filter(Order.customer_id == customer.id)
-            .filter(Order.balance_amount > 0)
-            .filter(Order.status.notin_(["cancelled", "adjusted_closed", "Rejected"]))
-            .order_by(Order.order_date.asc(), Order.id.asc())
+        ledger_bills = (
+            db.query(OutstandingBill)
+            .filter(OutstandingBill.factory_id == factory_id)
+            .filter(OutstandingBill.customer_id == customer.id)
+            .filter(OutstandingBill.balance_amount > 0)
+            .filter(OutstandingBill.status.in_(["active", "partial"]))
+            .order_by(OutstandingBill.bill_date.asc(), OutstandingBill.id.asc())
             .all()
         )
+        order_bills = []
+        if not ledger_bills:
+            order_bills = (
+                db.query(Order)
+                .filter(Order.factory_id == factory_id)
+                .filter(Order.customer_id == customer.id)
+                .filter(Order.balance_amount > 0)
+                .filter(Order.status.notin_(["cancelled", "adjusted_closed", "Rejected"]))
+                .order_by(Order.order_date.asc(), Order.id.asc())
+                .all()
+            )
 
         rows.append(
             OutstandingRow(
@@ -195,6 +250,16 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
                 last_reminded_at=customer.last_whatsapp_reminder_at,
                 bills=[
                     OutstandingBillRow(
+                        order_id=bill.order_id,
+                        order_date=bill.bill_date.isoformat() if bill.bill_date else "",
+                        bill_amount=to_money(bill.bill_amount),
+                        amount_paid=to_money(bill.amount_paid),
+                        remaining_balance=to_money(bill.balance_amount),
+                        status=bill.status,
+                    )
+                    for bill in ledger_bills
+                ] or [
+                    OutstandingBillRow(
                         order_id=bill.id,
                         order_date=bill.order_date.isoformat() if bill.order_date else "",
                         bill_amount=to_money(bill.total_amount),
@@ -202,7 +267,7 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
                         remaining_balance=to_money(bill.balance_amount),
                         status=bill.status,
                     )
-                    for bill in bills
+                    for bill in order_bills
                 ],
             )
         )
@@ -229,55 +294,90 @@ def record_payment(
     current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
     db: Session = Depends(get_db),
 ):
-    factory_id = current_user.factory_id
-    phone = payload.customer_phone.strip()
-    selected_order_id = payload.order_id or payload.sale_id
-    customer = (
-        db.query(Customer)
-        .filter(Customer.factory_id == factory_id)
-        .filter(or_(Customer.phone_number == phone, Customer.phone == phone, Customer.contact_number == phone))
-        .with_for_update()
-        .first()
-    )
-    if customer is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
-    _, _, current_balance = calculate_customer_outstanding(db, factory_id, customer)
-    if to_money(payload.amount_paid) > current_balance:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment amount exceeds outstanding balance")
-
-    daily_sale_id = None
-    if payload.sale_id is not None:
-        daily_sale = (
-            db.query(DailySale.id)
-            .filter(DailySale.factory_id == factory_id)
-            .filter(DailySale.id == payload.sale_id)
+    try:
+        factory_id = current_user.factory_id
+        phone = payload.customer_phone.strip()
+        selected_order_id = payload.order_id or payload.sale_id
+        customer = (
+            db.query(Customer)
+            .filter(Customer.factory_id == factory_id)
+            .filter(or_(Customer.phone_number == phone, Customer.phone == phone, Customer.contact_number == phone))
+            .with_for_update()
             .first()
         )
-        if daily_sale is not None:
-            daily_sale_id = payload.sale_id
+        if customer is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+        _, _, current_balance = calculate_customer_outstanding(db, factory_id, customer)
+        if to_money(payload.amount_paid) > current_balance:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment amount exceeds outstanding balance")
 
-    payment = Payment(
-        factory_id=factory_id,
-        customer_phone=customer_phone(customer),
-        sale_id=daily_sale_id,
-        amount_paid=to_money(payload.amount_paid),
-        payment_mode=payload.payment_mode,
-        date=payload.date or date.today(),
-    )
-    db.add(payment)
-    db.flush()
+        daily_sale_id = None
+        if payload.sale_id is not None:
+            daily_sale = (
+                db.query(DailySale.id)
+                .filter(DailySale.factory_id == factory_id)
+                .filter(DailySale.id == payload.sale_id)
+                .first()
+            )
+            if daily_sale is not None:
+                daily_sale_id = payload.sale_id
 
-    apply_payment_to_orders(db, factory_id, customer, to_money(payload.amount_paid), selected_order_id)
-    db.flush()
+        payment = Payment(
+            factory_id=factory_id,
+            customer_phone=customer_phone(customer),
+            sale_id=daily_sale_id,
+            amount_paid=to_money(payload.amount_paid),
+            payment_mode=payload.payment_mode,
+            date=payload.date or date.today(),
+        )
+        db.add(payment)
+        db.flush()
 
-    _, _, balance = calculate_customer_outstanding(db, factory_id, customer)
-    customer.total_due = balance
-    customer.balance_amount = balance
-    customer.pending_balance = balance
-    customer.pending_dues = float(balance)
+        unapplied = apply_payment_to_outstanding_bills(
+            db,
+            factory_id=factory_id,
+            customer_id=customer.id,
+            amount=to_money(payload.amount_paid),
+            payment_mode=payload.payment_mode,
+            collection_date=payload.date or date.today(),
+            payment_id=payment.id,
+            selected_order_id=selected_order_id,
+            created_by_user_id=current_user.id,
+        )
+        if unapplied > 0:
+            order_unapplied = apply_payment_to_orders(db, factory_id, customer, unapplied, selected_order_id)
+            legacy_applied = to_money(unapplied - order_unapplied)
+            if legacy_applied > 0:
+                db.add(
+                    PaymentCollection(
+                        factory_id=factory_id,
+                        customer_id=customer.id,
+                        payment_id=payment.id,
+                        outstanding_bill_id=None,
+                        amount_collected=legacy_applied,
+                        payment_mode=payload.payment_mode,
+                        collection_date=payload.date or date.today(),
+                        created_by_user_id=current_user.id,
+                    )
+                )
+        db.flush()
 
-    db.commit()
-    db.refresh(payment)
+        balance = sync_customer_balance_from_bills(db, factory_id, customer)
+        if balance <= 0:
+            _, _, balance = calculate_customer_outstanding(db, factory_id, customer)
+            customer.total_due = balance
+            customer.balance_amount = balance
+            customer.pending_balance = balance
+            customer.pending_dues = float(balance)
+
+        db.commit()
+        db.refresh(payment)
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Payment collection failed and was rolled back") from exc
 
     background_tasks.add_task(
         send_n8n_whatsapp_event,

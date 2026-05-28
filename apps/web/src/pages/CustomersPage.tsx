@@ -12,7 +12,9 @@ const initialForm: CustomerCreate = {
   place: "",
   gst_number: "",
   previous_due: 0,
-  total_due: 0
+  total_due: 0,
+  opening_balance: 0,
+  legacy_dues: 0
 };
 
 export default function CustomersPage() {

@@ -20,9 +20,10 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog, OutstandingBill
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
+from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
 from services.invoice_pdf import build_invoice_pdf_bytes
 from services.n8n_sync import sync_data_to_n8n_bg
 
@@ -246,7 +247,7 @@ class PendingSaleResponse(BaseModel):
 
 
 class OutstandingBillResponse(BaseModel):
-    order_id: int
+    order_id: int | None = None
     order_date: str
     bill_amount: Decimal
     amount_paid: Decimal
@@ -481,6 +482,19 @@ def create_invoice_document(
     )
     db.add(document)
     db.flush()
+    if document.customer_id is not None:
+        create_outstanding_bill(
+            db,
+            factory_id=factory_id,
+            customer_id=document.customer_id,
+            order_id=order_id,
+            invoice_document_id=document.id,
+            source_type="invoice",
+            tracking_number=f"INV-{document.invoice_number}",
+            bill_date=document.invoice_date,
+            bill_amount=document.bill_total,
+            amount_paid=document.amount_paid,
+        )
     return document
 
 
@@ -800,7 +814,7 @@ def add_sale_invoice(
         )
         db.add(activity)
 
-        db.commit()
+        db.flush()
 
         google_spreadsheet_id = resolve_factory_google_sheet_id(db, factory_id)
         invoice_payload = {
@@ -843,6 +857,7 @@ def add_sale_invoice(
             customer=customer,
             invoice_payload=invoice_payload,
         )
+        sync_customer_balance_from_bills(db, current_user.factory_id, customer)
         db.commit()
 
         background_tasks.add_task(
@@ -1037,36 +1052,61 @@ def create_sales_customer(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
-    total_due = payload.total_due if payload.total_due is not None else payload.previous_due
+    opening_due = max(
+        to_money(payload.opening_balance),
+        to_money(payload.legacy_dues),
+        to_money(payload.previous_due),
+        to_money(payload.total_due),
+    )
     phone_number = payload.phone_number.strip()
-    existing = (
-        db.query(Customer)
-        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-        .filter(Customer.phone_number == phone_number)
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer phone number already exists")
+    try:
+        with db.begin():
+            existing = (
+                db.query(Customer)
+                .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+                .filter(Customer.phone_number == phone_number)
+                .first()
+            )
+            if existing is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer phone number already exists")
 
-    customer = Customer(
-        factory_id=factory_id_text(current_user.factory_id),
-        name=payload.name.strip(),
-        phone_number=phone_number,
-        place=payload.place.strip(),
-        gst_number=payload.gst_number.strip() if payload.gst_number else None,
-        firm_name=payload.company_name.strip() if payload.company_name else None,
-        address=payload.address or payload.place.strip(),
-        phone=phone_number,
-        contact_number=phone_number,
-        previous_due=payload.previous_due,
-        total_due=total_due,
-        pending_balance=total_due,
-        balance_amount=total_due,
-        pending_dues=float(total_due),
-    )
-    db.add(customer)
-    db.commit()
-    db.refresh(customer)
+            customer = Customer(
+                factory_id=factory_id_text(current_user.factory_id),
+                name=payload.name.strip(),
+                phone_number=phone_number,
+                place=payload.place.strip(),
+                gst_number=payload.gst_number.strip() if payload.gst_number else None,
+                firm_name=payload.company_name.strip() if payload.company_name else None,
+                address=payload.address or payload.place.strip(),
+                phone=phone_number,
+                contact_number=phone_number,
+                previous_due=opening_due,
+                total_due=opening_due,
+                pending_balance=opening_due,
+                balance_amount=opening_due,
+                pending_dues=float(opening_due),
+            )
+            db.add(customer)
+            db.flush()
+            if opening_due > 0:
+                create_outstanding_bill(
+                    db,
+                    factory_id=current_user.factory_id,
+                    customer_id=customer.id,
+                    source_type="opening_balance",
+                    tracking_number=f"OPEN-{customer.id}",
+                    bill_date=datetime.now(timezone.utc).date(),
+                    bill_amount=opening_due,
+                    amount_paid=Decimal("0.00"),
+                )
+                sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+        db.refresh(customer)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Customer creation failed and rolled back")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Customer creation failed: {exc}") from exc
     return customer
 
 
@@ -1497,6 +1537,18 @@ def approve_sales_order(
         )
         db.add(activity)
 
+        invoice_payload = build_order_invoice_payload(db, str(current_user.factory_id), order)
+        create_invoice_document(
+            db=db,
+            factory_id=str(current_user.factory_id),
+            current_user=current_user,
+            customer=order.customer,
+            invoice_payload=invoice_payload,
+            order_id=order.id,
+        )
+        if order.customer is not None:
+            sync_customer_balance_from_bills(db, current_user.factory_id, order.customer)
+
         db.commit()
     except HTTPException:
         db.rollback()
@@ -1513,17 +1565,6 @@ def approve_sales_order(
         action="insert",
         data={"order_id": order_id, "status": order.status},
     )
-    invoice_payload = build_order_invoice_payload(db, str(current_user.factory_id), order)
-    create_invoice_document(
-        db=db,
-        factory_id=str(current_user.factory_id),
-        current_user=current_user,
-        customer=order.customer,
-        invoice_payload=invoice_payload,
-        order_id=order.id,
-    )
-    db.commit()
-
     if order.customer is not None:
         message = build_confirmed_bill_message(order.customer.name, factory_display_name(current_user), to_money(order.total_amount))
         background_tasks.add_task(send_order_whatsapp_bill, customer_display_phone(order.customer), message)
@@ -1582,6 +1623,50 @@ def get_sales_outstanding(
     current_user: User = Depends(check_permissions(SALES_ROLES)),
     db: Session = Depends(get_db),
 ):
+    ledger_bills = (
+        db.query(OutstandingBill)
+        .options(joinedload(OutstandingBill.customer))
+        .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
+        .filter(OutstandingBill.balance_amount > 0)
+        .filter(OutstandingBill.status.in_(["active", "partial"]))
+        .order_by(OutstandingBill.customer_id.asc(), OutstandingBill.bill_date.asc(), OutstandingBill.id.asc())
+        .all()
+    )
+    if ledger_bills:
+        grouped: dict[int, OutstandingCustomerBillsResponse] = {}
+        grand_total = Decimal("0.00")
+        for bill in ledger_bills:
+            if bill.customer is None:
+                continue
+            customer_id = bill.customer.id
+            if customer_id not in grouped:
+                grouped[customer_id] = OutstandingCustomerBillsResponse(
+                    customer_id=customer_id,
+                    customer_name=bill.customer.name,
+                    customer_phone=customer_display_phone(bill.customer),
+                    place=bill.customer.place or bill.customer.address or "",
+                    total_bill_amount=Decimal("0.00"),
+                    total_paid=Decimal("0.00"),
+                    current_pending_balance=Decimal("0.00"),
+                    bills=[],
+                )
+            row = grouped[customer_id]
+            row.total_bill_amount = to_money(row.total_bill_amount + to_money(bill.bill_amount))
+            row.total_paid = to_money(row.total_paid + to_money(bill.amount_paid))
+            row.current_pending_balance = to_money(row.current_pending_balance + to_money(bill.balance_amount))
+            row.bills.append(
+                OutstandingBillResponse(
+                    order_id=bill.order_id,
+                    order_date=bill.bill_date.isoformat() if bill.bill_date else "",
+                    bill_amount=to_money(bill.bill_amount),
+                    amount_paid=to_money(bill.amount_paid),
+                    remaining_balance=to_money(bill.balance_amount),
+                    status=bill.status,
+                )
+            )
+            grand_total = to_money(grand_total + to_money(bill.balance_amount))
+        return SalesOutstandingResponse(grand_total_outstanding=grand_total, customers=list(grouped.values()))
+
     orders = (
         db.query(Order)
         .options(joinedload(Order.customer))
