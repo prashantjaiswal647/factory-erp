@@ -318,6 +318,7 @@ class InvoiceDocumentSummary(BaseModel):
     pdf_generated_count: int
     created_at: str
     payments: list[InvoicePaymentSummary] = []
+    payment_collections: list[InvoicePaymentSummary] = []
 
 
 class InvoiceDashboardResponse(BaseModel):
@@ -1390,6 +1391,7 @@ def list_invoice_documents(
                 pdf_generated_count=invoice.pdf_generated_count,
                 created_at=invoice.created_at.isoformat() if invoice.created_at else "",
                 payments=payment_list,
+                payment_collections=payment_list,
             )
         )
 

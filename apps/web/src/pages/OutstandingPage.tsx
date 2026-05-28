@@ -139,36 +139,11 @@ export default function OutstandingPage() {
     setError("");
     try {
       const targetedBillId = bill.bill_id ?? bill.order_id ?? 0;
+      const targetId = targetedBillId;
       const response = await clearOutstandingBill(targetedBillId, reason);
       if (response.status === 200 || response.data?.status === "success") {
-        // Enforce real-time frontend re-rendering: force-inject array state update expression
-        setOutstandingBills((currentBills) => {
-          const updated = currentBills.map((cust) => {
-            if (cust.customer_id === row.customer_id) {
-              const updatedBills = (cust.bills || []).filter(
-                (b) => (b.bill_id ?? b.order_id) !== targetedBillId
-              );
-              
-              // Recalculate totals for this customer row
-              const billSum = updatedBills.reduce((acc, curr) => acc + Number(curr.bill_amount || 0), 0);
-              const paidSum = updatedBills.reduce((acc, curr) => acc + Number(curr.amount_paid || 0), 0);
-              const pendingSum = updatedBills.reduce((acc, curr) => acc + Number(curr.remaining_balance || 0), 0);
-              
-              return {
-                ...cust,
-                bills: updatedBills,
-                total_bill_amount: String(billSum),
-                total_paid: String(paidSum),
-                current_pending_balance: String(pendingSum),
-              };
-            }
-            return cust;
-          }).filter((cust) => (cust.bills || []).length > 0);
-
-          // Force-inject array state update expression to instantly purge the row out of the view buffer
-          // utilizing an explicit functional spread tracking callback:
-          return updated.filter((b) => (b as any).id !== targetedBillId);
-        });
+        // Slice the item directly out of the application layout cache instantly
+        setOutstandingBills((currentCollection) => currentCollection.filter(b => b.id !== targetId));
       }
       setToast(`Outstanding bill manually cleared (${reason === "mistake" ? "Stock reversed" : "Stock kept deducted"})`);
       setDeleteModalData(null);

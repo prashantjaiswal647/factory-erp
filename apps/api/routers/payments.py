@@ -112,7 +112,8 @@ def calculate_customer_outstanding(db: Session, factory_id: int, customer: Custo
 
 
 class PaymentCreate(BaseModel):
-    customer_phone: str = Field(..., min_length=1)
+    customer_phone: Optional[str] = None
+    customer_id: Optional[int] = None
     amount_paid: float = Field(..., gt=0)
     payment_mode: str = Field("Cash", pattern="^(Cash|UPI|Bank Transfer)$")
     date: Optional[Union[date, str]] = None
@@ -295,16 +296,30 @@ def record_payment(
     db: Session = Depends(get_db),
 ):
     try:
+        if not db.in_transaction():
+            db.begin()
         factory_id = current_user.factory_id
-        phone = payload.customer_phone.strip()
         selected_order_id = payload.order_id or payload.sale_id
-        customer = (
-            db.query(Customer)
-            .filter(Customer.factory_id == factory_id)
-            .filter(or_(Customer.phone_number == phone, Customer.phone == phone, Customer.contact_number == phone))
-            .with_for_update()
-            .first()
-        )
+        if payload.customer_id is not None:
+            customer = (
+                db.query(Customer)
+                .filter(Customer.factory_id == factory_id)
+                .filter(Customer.id == payload.customer_id)
+                .with_for_update()
+                .first()
+            )
+        elif payload.customer_phone:
+            phone = payload.customer_phone.strip()
+            customer = (
+                db.query(Customer)
+                .filter(Customer.factory_id == factory_id)
+                .filter(or_(Customer.phone_number == phone, Customer.phone == phone, Customer.contact_number == phone))
+                .with_for_update()
+                .first()
+            )
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either customer_id or customer_phone must be provided")
+            
         if customer is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
         _, _, current_balance = calculate_customer_outstanding(db, factory_id, customer)

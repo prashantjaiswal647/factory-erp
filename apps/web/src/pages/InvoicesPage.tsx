@@ -660,10 +660,10 @@ export default function InvoicesPage() {
               </div>
             </div>
 
-            {/* Payment Collection History Audit Log */}
+            {/* Reconciled Payment Logs History Audit Log */}
             <div className="space-y-3">
-              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Payment Collection History</span>
-              {(!selectedInvoiceDetails.payments || selectedInvoiceDetails.payments.length === 0) ? (
+              <span className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Reconciled Payment Logs History</span>
+              {(!(selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments) || (selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments || []).length === 0) ? (
                 <div className="p-4 rounded-lg bg-zinc-50 text-xs text-zinc-500 text-center font-medium border border-dashed border-zinc-200">
                   No partial payments collected against this invoice. Only initial/advance amount applies.
                 </div>
@@ -672,13 +672,13 @@ export default function InvoicesPage() {
                   <table className="min-w-full divide-y divide-zinc-200 text-xs">
                     <thead className="bg-zinc-50 text-left font-semibold uppercase text-zinc-500">
                       <tr>
-                        <th className="px-4 py-2.5">Payment Date</th>
-                        <th className="px-4 py-2.5">Payment Mode</th>
-                        <th className="px-4 py-2.5 text-right">Contribution Amount</th>
+                        <th className="px-4 py-2.5">Date of Allocation</th>
+                        <th className="px-4 py-2.5">Receipt Mode (Cash/Bank)</th>
+                        <th className="px-4 py-2.5 text-right">Amount Paid (Rs.)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 bg-white">
-                      {selectedInvoiceDetails.payments.map((p, i) => (
+                      {(selectedInvoiceDetails.payment_collections || selectedInvoiceDetails.payments || []).map((p: any, i: number) => (
                         <tr key={i} className="hover:bg-zinc-50/50">
                           <td className="px-4 py-2.5 text-zinc-600">{dateLabel(p.payment_date)}</td>
                           <td className="px-4 py-2.5 text-zinc-700 font-medium">{p.payment_mode}</td>
@@ -698,15 +698,15 @@ export default function InvoicesPage() {
                 <span className="text-base font-bold text-zinc-900 mt-1">{money(selectedInvoiceDetails.bill_total)}</span>
               </div>
               <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 flex flex-col">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Total Paid to Date (Rs.)</span>
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Total Payments Received to Date</span>
                 <span className="text-base font-bold text-emerald-800 mt-1">
-                  {money(selectedInvoiceDetails.amount_paid)}
+                  Rs. {money(selectedInvoiceDetails.amount_paid)}
                 </span>
               </div>
               <div className="p-3 bg-rose-50 rounded-lg border border-rose-100 flex flex-col">
-                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Outstanding Balance (Rs.)</span>
+                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Remaining Balance Unsettled Dues</span>
                 <span className="text-base font-bold text-rose-800 mt-1">
-                  {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
+                  Rs. {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
                 </span>
               </div>
             </div>

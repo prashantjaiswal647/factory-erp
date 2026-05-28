@@ -418,6 +418,7 @@ export type InvoiceDocumentSummary = {
   pdf_generated_count: number;
   created_at: string;
   payments?: InvoicePaymentSummary[];
+  payment_collections?: InvoicePaymentSummary[];
 };
 
 export type InvoiceDashboardResponse = {
@@ -637,6 +638,7 @@ export type PendingSale = {
 };
 
 export type OutstandingCustomer = {
+  id?: number | string;
   customer_id: number;
   customer_name: string;
   customer_phone: string;
