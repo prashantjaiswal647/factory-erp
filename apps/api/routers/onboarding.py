@@ -128,6 +128,7 @@ class OnboardingPackagingMetricSummary(BaseModel):
     cup_size_ml: int
     kg_per_box: Decimal
     cups_per_box: int
+    variety: Optional[str] = "Standard/White"
 
 
 class OnboardingOverviewResponse(BaseModel):
@@ -376,7 +377,14 @@ def save_final_product_opening_stock(
         stock.total_boxes = max(quantity, 0)
         stock.loose_packets = max(loose_packets, 0)
         db.flush()
-        db.commit()
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Variant combination already initialized: {exc}"
+            )
         db.refresh(stock)
     except HTTPException:
         db.rollback()
@@ -439,12 +447,14 @@ def save_final_product_opening_stock(
             db.query(PackagingMetrics)
             .filter(PackagingMetrics.factory_id == factory_id)
             .filter(PackagingMetrics.cup_size_ml == stock.product_size_ml)
+            .filter(sql_func.lower(PackagingMetrics.variant_name) == stock.variety.lower())
             .first()
         )
         if metric is None:
             metric = PackagingMetrics(
                 factory_id=factory_id,
                 cup_size_ml=stock.product_size_ml,
+                variant_name=stock.variety,
                 kg_per_box=Decimal("10.000"),
                 cups_per_box=stock.packets_per_box_limit,
             )
@@ -799,12 +809,14 @@ def create_plastic_stock(
         db.query(PackagingMetrics)
         .filter(PackagingMetrics.factory_id == factory_id)
         .filter(PackagingMetrics.cup_size_ml == payload.cup_size_ml)
+        .filter(sql_func.lower(PackagingMetrics.variant_name) == "standard/white")
         .first()
     )
     if metric is None:
         metric = PackagingMetrics(
             factory_id=factory_id,
             cup_size_ml=payload.cup_size_ml,
+            variant_name="Standard/White",
             kg_per_box=Decimal(str(payload.weight_per_bora_kg or 0)) if payload.weight_per_bora_kg > 0 else Decimal("10.000"),
             cups_per_box=1000,
         )
@@ -1210,16 +1222,19 @@ def onboarding_step3_materials(
 
     pack_saved = 0
     for item in payload.packaging_metrics:
+        variety = getattr(item, "variety", "Standard/White") or "Standard/White"
         metric = (
             db.query(PackagingMetrics)
             .filter(PackagingMetrics.factory_id == factory_id)
             .filter(PackagingMetrics.cup_size_ml == item.cup_size_ml)
+            .filter(sql_func.lower(PackagingMetrics.variant_name) == variety.lower())
             .first()
         )
         if metric is None:
             metric = PackagingMetrics(
                 factory_id=factory_id,
                 cup_size_ml=item.cup_size_ml,
+                variant_name=variety,
             )
             db.add(metric)
 

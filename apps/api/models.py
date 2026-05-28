@@ -494,12 +494,13 @@ class PackagingMetrics(TenantMixin, Base):
     cup_size_ml = Column(Integer, nullable=False, index=True)
     kg_per_box = Column(Numeric(14, 3), nullable=False, default=0)
     cups_per_box = Column(Integer, nullable=False)
+    variant_name = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
 
     __table_args__ = (
         CheckConstraint("cup_size_ml > 0", name="ck_packaging_metrics_cup_size_positive"),
         CheckConstraint("kg_per_box >= 0", name="ck_packaging_metrics_kg_non_negative"),
         CheckConstraint("cups_per_box > 0", name="ck_packaging_metrics_cups_positive"),
-        UniqueConstraint("factory_id", "cup_size_ml", name="uq_packaging_metrics_factory_cup"),
+        UniqueConstraint("factory_id", "cup_size_ml", "variant_name", name="uq_packaging_metrics_factory_cup_variant"),
     )
 
 
