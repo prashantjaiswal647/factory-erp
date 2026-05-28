@@ -1754,7 +1754,7 @@ def clear_outstanding_order(
     return_status = "adjusted_closed"
 
     try:
-        # 1. Look up the OutstandingBill and its Order
+        # 1. Look up the OutstandingBill
         ledger_bill = (
             db.query(OutstandingBill)
             .options(joinedload(OutstandingBill.customer), joinedload(OutstandingBill.order))
@@ -1764,46 +1764,50 @@ def clear_outstanding_order(
             .first()
         )
 
-        # 2. Clear any dependent payment collections first to prevent FK constraint violations
-        db.query(PaymentCollection).filter(
-            (PaymentCollection.outstanding_bill_id == bill_id) |
-            (PaymentCollection.outstanding_bill_id == (ledger_bill.id if ledger_bill else -1))
-        ).delete()
-        db.flush()
-
         if ledger_bill is not None:
-            # Set the outstanding bill status to closed
-            previous_balance = to_money(ledger_bill.balance_amount)
-            ledger_bill.balance_amount = Decimal("0.00")
-            ledger_bill.amount_paid = to_money(ledger_bill.bill_amount)
-            ledger_bill.status = "adjusted_closed"
+            customer_id = ledger_bill.customer_id
+            order_id = ledger_bill.order_id
+            if order_id is not None:
+                return_order_id = order_id
 
-            order = ledger_bill.order
-            if ledger_bill.order_id is not None:
-                return_order_id = ledger_bill.order_id
-            if order is not None:
-                order.balance_amount = Decimal("0.00")
-                order.pending_amount = Decimal("0.00")
-                order.payment_status = "Adjusted"
-                order.status = "adjusted_closed"
+            # 2. Hard delete dependent payment collections first to prevent FK constraint violations
+            db.query(PaymentCollection).filter(
+                (PaymentCollection.outstanding_bill_id == bill_id) |
+                (PaymentCollection.outstanding_bill_id == ledger_bill.id)
+            ).delete()
+            db.flush()
 
-            if ledger_bill.customer is not None:
+            # 3. Hard delete the Outstanding Bill itself
+            db.delete(ledger_bill)
+            db.flush()
+
+            # 4. Clean up corresponding order status if linked
+            if order_id is not None:
+                order = db.query(Order).filter(Order.factory_id == str(factory_id), Order.id == order_id).first()
+                if order is not None:
+                    order.balance_amount = Decimal("0.00")
+                    order.pending_amount = Decimal("0.00")
+                    order.payment_status = "Adjusted"
+                    order.status = "adjusted_closed"
+
+            # 5. Safely recalculate and sync remaining active customer dues
+            if customer_id is not None:
                 db.flush()
-                # Safely synchronize remaining active customer balance
                 active_due = db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0)).filter(
                     OutstandingBill.factory_id == factory_id,
-                    OutstandingBill.customer_id == ledger_bill.customer.id,
+                    OutstandingBill.customer_id == customer_id,
                     OutstandingBill.status.in_(["active", "partial"])
                 ).scalar() or Decimal("0.00")
                 
-                customer = ledger_bill.customer
-                customer.total_due = max(to_money(active_due), Decimal("0.00"))
-                customer.balance_amount = customer.total_due
-                customer.pending_balance = customer.total_due
-                customer.pending_dues = float(customer.total_due)
+                customer = db.query(Customer).filter(Customer.factory_id == str(factory_id), Customer.id == customer_id).first()
+                if customer is not None:
+                    customer.total_due = max(to_money(active_due), Decimal("0.00"))
+                    customer.balance_amount = customer.total_due
+                    customer.pending_balance = customer.total_due
+                    customer.pending_dues = float(customer.total_due)
 
             db.commit()
-            return_status = ledger_bill.status
+            return_status = "adjusted_closed"
         else:
             # Fallback legacy order adjustment if ledger bill was not found
             order = (
@@ -1817,13 +1821,17 @@ def clear_outstanding_order(
             if order is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found")
 
+            # Clean any collections mapped to this legacy order
+            db.query(PaymentCollection).filter(PaymentCollection.factory_id == factory_id, PaymentCollection.customer_id == order.customer_id).delete()
+            db.flush()
+
             previous_balance = to_money(order.balance_amount)
             order.balance_amount = Decimal("0.00")
             order.pending_amount = Decimal("0.00")
             order.payment_status = "Adjusted"
             order.status = "adjusted_closed"
 
-            if order.customer is not None and previous_balance > 0:
+            if order.customer is not None:
                 remaining_customer_balance = max(
                     to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
                     Decimal("0.00"),
@@ -1838,18 +1846,43 @@ def clear_outstanding_order(
             return_status = order.status
     except Exception as exc:
         db.rollback()
-        logger.exception("Outstanding bill clear operation failed; attempting raw SQL force-adjustment: bill_id=%s", bill_id)
+        logger.exception("Outstanding bill hard-delete operation failed; attempting raw SQL force-deletion: bill_id=%s", bill_id)
         try:
-            # Force close via direct raw SQL updates to bypass any complex ORM constraint blocks
+            # Force hard-deletion and state reset via direct raw SQL updates to bypass any complex ORM constraint blocks
             factory_id_val = int(current_user.factory_id)
+            
+            # Fetch customer_id to update balances afterwards
+            cust_id_res = db.execute(
+                text("SELECT customer_id, order_id FROM outstanding_bills WHERE factory_id = :fid AND id = :bid"),
+                {"fid": factory_id_val, "bid": bill_id}
+            ).first()
+            
             db.execute(
-                text("UPDATE outstanding_bills SET balance_amount = 0, amount_paid = bill_amount, status = 'adjusted_closed', updated_at = NOW() WHERE factory_id = :fid AND (id = :bid OR order_id = :bid)"),
+                text("DELETE FROM payment_collections WHERE outstanding_bill_id = :bid"),
+                {"bid": bill_id}
+            )
+            db.execute(
+                text("DELETE FROM outstanding_bills WHERE factory_id = :fid AND id = :bid"),
                 {"fid": factory_id_val, "bid": bill_id}
             )
             db.execute(
-                text("UPDATE orders SET balance_amount = 0, pending_amount = 0, payment_status = 'Adjusted', status = 'adjusted_closed' WHERE factory_id = :fid AND id = :bid"),
+                text("UPDATE orders SET balance_amount = 0, pending_amount = 0, payment_status = 'Adjusted', status = 'adjusted_closed' WHERE factory_id = :fid AND (id = :bid OR id = (SELECT order_id FROM outstanding_bills WHERE id = :bid))"),
                 {"fid": factory_id_val, "bid": bill_id}
             )
+            
+            # Recalculate customer due
+            if cust_id_res and cust_id_res[0] is not None:
+                cid = cust_id_res[0]
+                active_due_res = db.execute(
+                    text("SELECT COALESCE(SUM(balance_amount), 0) FROM outstanding_bills WHERE factory_id = :fid AND customer_id = :cid AND status IN ('active', 'partial')"),
+                    {"fid": factory_id_val, "cid": cid}
+                ).scalar() or Decimal("0.00")
+                
+                db.execute(
+                    text("UPDATE customers SET total_due = :due, balance_amount = :due, pending_balance = :due, pending_dues = :due_f WHERE factory_id = :fid AND id = :cid"),
+                    {"due": active_due_res, "due_f": float(active_due_res), "fid": str(factory_id_val), "cid": cid}
+                )
+                
             db.commit()
         except Exception as inner_exc:
             db.rollback()
@@ -1868,6 +1901,7 @@ def clear_outstanding_order(
     )
 
     return SalesOrderActionResponse(message="Outstanding bill manually adjusted and closed.", order_id=return_order_id, status=return_status)
+
 
 
 
