@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
+import logging
 import os
 
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
@@ -13,6 +14,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import String, cast, or_, func as sql_func
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import UploadFile
 
@@ -27,6 +29,7 @@ from services.n8n_sync import sync_data_to_n8n_bg
 
 router = APIRouter()
 MONEY_QUANT = Decimal("0.01")
+logger = logging.getLogger(__name__)
 
 
 def to_money(value) -> Decimal:
@@ -1650,30 +1653,64 @@ def clear_outstanding_order(
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
+    if current_user.role != "Owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only the Factory Owner is authorized to delete entries.",
+        )
     if not confirm:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation required to clear outstanding balance")
 
-    order = (
-        db.query(Order)
-        .options(joinedload(Order.customer))
-        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
-        .filter(Order.id == order_id)
-        .with_for_update()
-        .first()
-    )
-    if order is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    try:
+        order = (
+            db.query(Order)
+            .options(joinedload(Order.customer))
+            .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+            .filter(Order.id == order_id)
+            .with_for_update()
+            .first()
+        )
+        if order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
-    previous_balance = to_money(order.balance_amount)
-    order.balance_amount = Decimal("0.00")
-    order.status = "adjusted_closed"
-    if order.customer is not None and previous_balance > 0:
-        remaining_customer_balance = max(to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance, Decimal("0.00"))
-        order.customer.total_due = remaining_customer_balance
-        order.customer.balance_amount = remaining_customer_balance
-        order.customer.pending_balance = remaining_customer_balance
-        order.customer.pending_dues = float(remaining_customer_balance)
-    db.commit()
+        previous_balance = to_money(order.balance_amount)
+
+        # Soft-delete/close linked bills instead of hard-deleting rows that may be referenced
+        # by invoice documents, order items, storefront ledgers, or audit exports.
+        order.balance_amount = Decimal("0.00")
+        order.pending_amount = Decimal("0.00")
+        order.payment_status = "Adjusted"
+        order.status = "adjusted_closed"
+
+        if order.customer is not None and previous_balance > 0:
+            remaining_customer_balance = max(
+                to_money(order.customer.total_due or order.customer.balance_amount or 0) - previous_balance,
+                Decimal("0.00"),
+            )
+            order.customer.total_due = remaining_customer_balance
+            order.customer.balance_amount = remaining_customer_balance
+            order.customer.pending_balance = remaining_customer_balance
+            order.customer.pending_dues = float(remaining_customer_balance)
+
+        db.commit()
+        db.refresh(order)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Outstanding bill delete blocked by integrity constraints: order_id=%s factory_id=%s", order_id, current_user.factory_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
+        ) from exc
+    except (OperationalError, SQLAlchemyError) as exc:
+        db.rollback()
+        logger.exception("Outstanding bill delete database failure: order_id=%s factory_id=%s", order_id, current_user.factory_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot hard-delete this bill: Active transactional ledger dependencies found. Consider archiving instead.",
+        ) from exc
 
     background_tasks.add_task(
         sync_data_to_n8n_bg,
