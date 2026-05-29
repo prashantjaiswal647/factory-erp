@@ -13,7 +13,9 @@ from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import OWNER_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, Payment, User, ExpenseLog, Worker, Machine
+from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, Payment, User, ExpenseLog, Worker, Machine, WastageLog
+from schemas import AnalyticsSummaryResponse
+
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -411,3 +413,44 @@ def get_dashboard_analytics(
         cost_breakdown=cost_breakdown,
         wastage_data=wastage_data
     )
+
+
+@router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
+def get_analytics_summary(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    today = date.today()
+    start_of_month = date(today.year, today.month, 1)
+
+    total_wastage_weight = db.query(sql_func.coalesce(sql_func.sum(WastageLog.wastage_weight), 0.0))\
+        .filter(WastageLog.factory_id == current_user.factory_id)\
+        .filter(WastageLog.date >= start_of_month)\
+        .filter(WastageLog.date <= today)\
+        .scalar()
+
+    active_worker_count = db.query(sql_func.count(Worker.id))\
+        .filter(Worker.factory_id == current_user.factory_id)\
+        .filter(Worker.is_active == True)\
+        .scalar() or 0
+
+    month_sales = db.query(sql_func.coalesce(sql_func.sum(DailySale.total_bill), 0))\
+        .filter(DailySale.factory_id == current_user.factory_id)\
+        .filter(DailySale.date >= start_of_month)\
+        .filter(DailySale.date <= today)\
+        .scalar()
+
+    month_payments = db.query(sql_func.coalesce(sql_func.sum(Payment.amount_paid), 0))\
+        .filter(Payment.factory_id == current_user.factory_id)\
+        .filter(Payment.date >= start_of_month)\
+        .filter(Payment.date <= today)\
+        .scalar()
+
+    ledger_net_receivables = float(month_sales - month_payments)
+
+    return AnalyticsSummaryResponse(
+        total_wastage_weight=float(total_wastage_weight or 0.0),
+        active_worker_count=float(active_worker_count),
+        ledger_net_receivables=ledger_net_receivables,
+    )
+

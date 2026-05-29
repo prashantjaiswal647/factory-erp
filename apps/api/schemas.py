@@ -918,3 +918,9 @@ class AccountantSummaryResponse(BaseModel):
     ending_invoice_number: Optional[str] = None
     total_billed_amount: Decimal
     total_paid_amount: Decimal
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    total_wastage_weight: float = 0.0
+    active_worker_count: float = 0.0
+    ledger_net_receivables: float = 0.0

@@ -1304,3 +1304,13 @@ class BillPayment(TenantMixin, Base):
     __table_args__ = (
         CheckConstraint("amount_allocated > 0", name="ck_bill_payments_amount_allocated_positive"),
     )
+
+
+class WastageLog(TenantMixin, Base):
+    __tablename__ = "wastage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    wastage_weight = Column(Float, nullable=False, default=0.0)
+    date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
