@@ -21,3 +21,5 @@ httpx
 pytest
 reportlab
 fastapi-mail
+redis
+

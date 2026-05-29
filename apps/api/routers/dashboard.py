@@ -139,6 +139,85 @@ def dashboard_subscription_status(
     )
 
 
+@router.get("/summary", response_model=AiDashboardStats)
+def get_dashboard_summary(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    import redis
+    factory_id = str(current_user.factory_id)
+    cache_key = f"summary:{factory_id}"
+    
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    r = None
+    try:
+        r = redis.Redis.from_url(redis_url, socket_timeout=2)
+        cached_data = r.get(cache_key)
+        if cached_data:
+            data = json.loads(cached_data)
+            return AiDashboardStats(**data)
+    except Exception as exc:
+        print(f"Redis cache interception error: {exc}")
+
+    # Fallback to postgres DB query
+    today = date.today()
+    week_start = today - timedelta(days=6)
+
+    total_sales = to_money(
+        db.query(sql_func.coalesce(sql_func.sum(DailySale.total_bill), 0))
+        .filter(DailySale.factory_id == factory_id)
+        .filter(DailySale.date >= week_start)
+        .scalar()
+    )
+    total_collection = to_money(
+        db.query(sql_func.coalesce(sql_func.sum(Payment.amount_paid), 0))
+        .filter(Payment.factory_id == factory_id)
+        .filter(Payment.date >= week_start)
+        .scalar()
+    )
+    current_outstanding = to_money(
+        db.query(sql_func.coalesce(sql_func.sum(Customer.total_due), 0))
+        .filter(Customer.factory_id == factory_id)
+        .scalar()
+    )
+    wastage_rows = (
+        db.query(DailyProduction.wastage_kg, DailyProduction.total_raw_material_kg)
+        .filter(DailyProduction.factory_id == factory_id)
+        .filter(DailyProduction.date >= week_start)
+        .all()
+    )
+    wastage_percents = [
+        (Decimal(row.wastage_kg or 0) / Decimal(row.total_raw_material_kg or 1)) * Decimal("100")
+        for row in wastage_rows
+        if Decimal(row.total_raw_material_kg or 0) > 0
+    ]
+    avg_wastage = (
+        sum(wastage_percents, Decimal("0")) / Decimal(len(wastage_percents))
+        if wastage_percents
+        else Decimal("0")
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    low_stock_alerts = 0
+    low_stock_alerts += db.query(BlankStock).filter(BlankStock.factory_id == factory_id).filter(BlankStock.total_qty_kg < 0).count()
+    low_stock_alerts += db.query(BottomStock).filter(BottomStock.factory_id == factory_id).filter(BottomStock.total_weight_kg < 0).count()
+    low_stock_alerts += db.query(BoxStock).filter(BoxStock.factory_id == factory_id).filter(BoxStock.total_boxes < 0).count()
+
+    stats = {
+        "total_sales_last_7_days": total_sales,
+        "total_collection_last_7_days": total_collection,
+        "current_total_market_outstanding": current_outstanding,
+        "average_wastage_percent_last_7_days": avg_wastage,
+        "raw_material_low_stock_alerts": low_stock_alerts,
+    }
+
+    if r is not None:
+        try:
+            r.setex(cache_key, 300, json.dumps(stats, default=str))
+        except Exception as exc:
+            print(f"Redis cache save error: {exc}")
+
+    return AiDashboardStats(**stats)
+
+
 @router.get("/ai-insights", response_model=AiInsightsResponse)
 def ai_insights(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
