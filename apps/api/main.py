@@ -12,6 +12,7 @@ from urllib import request as urlrequest
 from urllib.error import URLError
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
@@ -188,6 +189,10 @@ def register_application_routers(application: FastAPI) -> None:
     #application.include_router(internal_automation_router)
 
 register_application_routers(app)
+
+# Mount local media directory for Finished Goods stock preview images
+os.makedirs("./volumes/media", exist_ok=True)
+app.mount("/media", StaticFiles(directory="./volumes/media"), name="media")
 
 # ==================== EXCEPTION TELEMETRY TRACER ====================
 @app.exception_handler(Exception)
@@ -1004,7 +1009,7 @@ def get_storefront_details(storeToken: str, db: Session = Depends(get_db)):
             packaging_profile_name=p.packaging_profile.profile_name if p.packaging_profile else f"{p.cup_size_ml}ml Product",
             availability_status=availability,
             base_price=base_price,
-            image_url=p.packaging_profile.image_url if p.packaging_profile else None,
+            image_url=p.image_url or (p.packaging_profile.image_url if p.packaging_profile else None),
             print_design_name=p.packaging_profile.print_design_name if p.packaging_profile else None
         ))
         

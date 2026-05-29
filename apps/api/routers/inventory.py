@@ -1,10 +1,13 @@
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from PIL import Image
+from io import BytesIO
+import os
 
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
@@ -161,7 +164,7 @@ def recalculate_and_sync_sku_stock(
 
 
 class LiveStockRow(BaseModel):
-    id: int
+    id: Union[int, str]
     stock_type: str
     item_name: str
     category: Optional[str] = None
@@ -173,6 +176,8 @@ class LiveStockRow(BaseModel):
     size_mm: Optional[int] = None
     total_weight_kg: Optional[Decimal] = None
     total_rolls: Optional[int] = None
+    image_url: Optional[str] = None
+    variant_name: Optional[str] = None
 
 
 class FinalStockRow(BaseModel):
@@ -187,6 +192,8 @@ class FinalStockRow(BaseModel):
     current_quantity: Optional[int] = None
     total_boxes: Optional[int] = None
     loose_packets: Optional[int] = None
+    image_url: Optional[str] = None
+    variant_name: Optional[str] = None
 
 
 class FinalStockCreate(BaseModel):
@@ -433,6 +440,23 @@ def list_live_stock(
                     )
                     item.current_quantity = live_boxes
                     db.add(item)
+                    
+                    # Join PackagingProfile to get FinishedGoodsStock metadata
+                    fg_stock = (
+                        db.query(FinishedGoodsStock)
+                        .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+                        .filter(
+                            FinishedGoodsStock.factory_id == factory_id,
+                            PackagingProfile.cup_size_ml == getattr(item, "product_size_ml", 0),
+                            func.lower(PackagingProfile.profile_name) == getattr(item, "packaging_size_name", "Standard").strip().lower()
+                        )
+                        .first()
+                    )
+                    
+                    item_image_url = fg_stock.image_url if fg_stock else None
+                    item_category = fg_stock.category if fg_stock else "CUP_FINISHED"
+                    item_variant_name = fg_stock.variant_name if fg_stock else f"{getattr(item, 'product_size_ml', 0)}ml_{getattr(item, 'variety', 'Standard')}"
+                    
                     packaging_size = getattr(item, "packaging_size_name", None) or "Standard"
                     processed_inventory.append(
                         {
@@ -452,7 +476,9 @@ def list_live_stock(
                             "pieces_per_packet": getattr(item, "pieces_per_packet", 0) if getattr(item, "pieces_per_packet", None) is not None else 0,
                             "packets_per_box": getattr(item, "packets_per_box_limit", 0) if getattr(item, "packets_per_box_limit", None) is not None else 0,
                             "packets_per_box_limit": getattr(item, "packets_per_box_limit", 0) if getattr(item, "packets_per_box_limit", None) is not None else 0,
-                            "category": "Final Product",
+                            "category": item_category,
+                            "image_url": item_image_url,
+                            "variant_name": item_variant_name,
                         }
                     )
                 except Exception:
@@ -530,6 +556,16 @@ def save_final_stock(
         stock.loose_packets = payload.loose_packets
         db.commit()
         db.refresh(stock)
+        fg_stock = (
+            db.query(FinishedGoodsStock)
+            .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+            .filter(
+                FinishedGoodsStock.factory_id == str(current_user.factory_id),
+                PackagingProfile.cup_size_ml == stock.product_size_ml,
+                func.lower(PackagingProfile.profile_name) == stock.packaging_size_name.strip().lower()
+            )
+            .first()
+        )
         return FinalStockRow(
             id=stock.id,
             product_size_ml=stock.product_size_ml,
@@ -542,6 +578,9 @@ def save_final_stock(
             total_boxes=stock.total_boxes or 0,
             loose_packets=stock.loose_packets or 0,
             packets_per_box_limit=stock.packets_per_box_limit,
+            image_url=fg_stock.image_url if fg_stock else None,
+            category=fg_stock.category if fg_stock else "CUP_FINISHED",
+            variant_name=fg_stock.variant_name if fg_stock else f"{stock.product_size_ml}ml_{stock.variety}",
         )
     except HTTPException:
         db.rollback()
@@ -581,6 +620,16 @@ def list_final_stock(
             row.current_quantity = live_boxes
             db.add(row)
             
+            fg_stock = (
+                db.query(FinishedGoodsStock)
+                .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+                .filter(
+                    FinishedGoodsStock.factory_id == str(current_user.factory_id),
+                    PackagingProfile.cup_size_ml == row.product_size_ml,
+                    func.lower(PackagingProfile.profile_name) == row.packaging_size_name.strip().lower()
+                )
+                .first()
+            )
             processed_rows.append(
                 FinalStockRow(
                     id=row.id,
@@ -594,6 +643,9 @@ def list_final_stock(
                     total_boxes=row.total_boxes or 0,
                     loose_packets=row.loose_packets or 0,
                     packets_per_box_limit=row.packets_per_box_limit,
+                    image_url=fg_stock.image_url if fg_stock else None,
+                    category=fg_stock.category if fg_stock else "CUP_FINISHED",
+                    variant_name=fg_stock.variant_name if fg_stock else f"{row.product_size_ml}ml_{row.variety}",
                 )
             )
         db.commit()
@@ -602,3 +654,81 @@ def list_final_stock(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/final-stock/{product_id}/image")
+async def upload_product_image(
+    product_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
+    db: Session = Depends(get_db)
+):
+    try:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
+
+        product = db.query(FinalProductStock).filter(
+            FinalProductStock.factory_id == str(current_user.factory_id),
+            FinalProductStock.id == product_id
+        ).first()
+
+        if not product:
+            raise HTTPException(status_code=404, detail="Product stock not found")
+
+        profile = db.query(PackagingProfile).filter(
+            PackagingProfile.factory_id == str(current_user.factory_id),
+            PackagingProfile.cup_size_ml == product.product_size_ml,
+            func.lower(PackagingProfile.profile_name) == product.packaging_size_name.strip().lower()
+        ).first()
+
+        if not profile:
+            raise HTTPException(status_code=404, detail="Packaging profile not found for this product specification")
+
+        fg_stock = db.query(FinishedGoodsStock).filter(
+            FinishedGoodsStock.factory_id == str(current_user.factory_id),
+            FinishedGoodsStock.packaging_profile_id == profile.id
+        ).first()
+
+        if not fg_stock:
+            fg_stock = FinishedGoodsStock(
+                factory_id=str(current_user.factory_id),
+                cup_size_ml=product.product_size_ml,
+                packaging_profile_id=profile.id,
+                boxes_available=product.current_quantity or 0,
+                category="CUP_FINISHED",
+                variant_name=f"{product.product_size_ml}ml_{product.variety}"
+            )
+            db.add(fg_stock)
+            db.flush()
+
+        contents = await file.read()
+        try:
+            with Image.open(BytesIO(contents)) as img:
+                if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                    pass
+                else:
+                    img = img.convert("RGB")
+
+                img.thumbnail((800, 800))
+
+                os.makedirs("./volumes/media", exist_ok=True)
+                filename = f"factory_{current_user.factory_id}_stock_{product_id}.webp"
+                filepath = os.path.join("./volumes/media", filename)
+                
+                img.save(filepath, "WEBP", quality=75)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to process and compress image: {str(e)}")
+
+        relative_url = f"/media/{filename}"
+        fg_stock.image_url = relative_url
+        db.add(fg_stock)
+        db.commit()
+
+        return {"status": "success", "image_url": relative_url}
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

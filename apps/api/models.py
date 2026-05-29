@@ -13,6 +13,7 @@ from sqlalchemy import (
     func,
     Text,
     JSON,
+    Index,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
@@ -617,6 +618,9 @@ class FinishedGoodsStock(TenantMixin, Base):
         index=True,
     )
     boxes_available = Column(Integer, nullable=False, default=0, server_default="0")
+    category = Column(String(50), nullable=True, index=True, default="CUP_FINISHED", server_default="CUP_FINISHED")
+    variant_name = Column(String(255), nullable=True, index=True)
+    image_url = Column(String(1000), nullable=True)
     updated_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -631,6 +635,8 @@ class FinishedGoodsStock(TenantMixin, Base):
         UniqueConstraint("factory_id", "packaging_profile_id", name="uq_finished_goods_stock_factory_packaging_profile"),
         CheckConstraint("cup_size_ml > 0", name="ck_finished_goods_stock_cup_size_positive"),
         CheckConstraint("boxes_available >= 0", name="ck_finished_goods_stock_boxes_available_non_negative"),
+        Index("idx_finished_goods_factory_category", "factory_id", "category"),
+        CheckConstraint("category IN ('CUP_FINISHED', 'CUP_BLANK', 'CUP_BOTTOM', 'PACKAGING_MATERIAL')", name="ck_finished_goods_stock_category"),
     )
 
 

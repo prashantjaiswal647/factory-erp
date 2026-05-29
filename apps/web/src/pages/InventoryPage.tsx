@@ -1,4 +1,5 @@
-import { ChevronDown, Edit3, Filter, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
+import { Camera, ChevronDown, Edit3, Filter, Loader2, Package, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
+import { API_BASE_URL } from "../lib/api";
 import axios from "axios";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -30,6 +31,8 @@ type InventoryDisplayRow = {
   location: string;
   status: StockStatus;
   source: LiveStockRow;
+  image_url?: string | null;
+  variant_name?: string | null;
 };
 
 const filters: Array<{ key: InventoryFilter; label: string }> = [
@@ -49,6 +52,29 @@ export default function InventoryPage() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [uploadingId, setUploadingId] = useState<number | null>(null);
+
+  async function handleImageUpload(productId: number, file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setUploadingId(productId);
+    try {
+      const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
+      await axios.post(`${API_BASE_URL}/api/inventory/final-stock/${productId}/image`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${token}`
+        }
+      });
+      await load();
+    } catch (caught: any) {
+      const message = caught.response?.data?.detail || caught.message || "Failed to upload image";
+      alert(message);
+    } finally {
+      setUploadingId(null);
+    }
+  }
 
   useEffect(() => {
     void load();
@@ -179,6 +205,8 @@ export default function InventoryPage() {
               onToggle={() => setCollapsed((current) => ({ ...current, [category.key]: !current[category.key] }))}
               onDelete={handleDelete}
               canDelete={canDelete}
+              onImageUpload={handleImageUpload}
+              uploadingId={uploadingId}
             />
           ))}
         </section>
@@ -192,10 +220,41 @@ export default function InventoryPage() {
   );
 }
 
-function CategoryCard({ category, isCollapsed, onToggle, onDelete, canDelete }: { category: InventoryCategory; isCollapsed: boolean; onToggle: () => void; onDelete: (row: InventoryDisplayRow) => void; canDelete: boolean }) {
+function getFallbackGradient(key: string) {
+  const gradients = [
+    "linear-gradient(135deg, #4f46e5, #06b6d4)", // indigo to cyan
+    "linear-gradient(135deg, #f59e0b, #e11d48)", // amber to rose
+    "linear-gradient(135deg, #10b981, #3b82f6)", // emerald to blue
+    "linear-gradient(135deg, #8b5cf6, #ec4899)", // violet to pink
+    "linear-gradient(135deg, #64748b, #475569)"  // slate
+  ];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = key.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return gradients[Math.abs(hash) % gradients.length];
+}
+
+function CategoryCard({
+  category,
+  isCollapsed,
+  onToggle,
+  onDelete,
+  canDelete,
+  onImageUpload,
+  uploadingId
+}: {
+  category: InventoryCategory;
+  isCollapsed: boolean;
+  onToggle: () => void;
+  onDelete: (row: InventoryDisplayRow) => void;
+  canDelete: boolean;
+  onImageUpload: (productId: number, file: File) => Promise<void>;
+  uploadingId: number | null;
+}) {
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
-      <header className="flex items-center justify-between gap-3">
+      <header className="flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="truncate text-base font-semibold text-zinc-950 sm:text-lg">{category.title}</h2>
           <span className="shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
@@ -208,66 +267,128 @@ function CategoryCard({ category, isCollapsed, onToggle, onDelete, canDelete }: 
       </header>
  
       {isCollapsed ? null : category.rows.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-500">No {category.title.toLowerCase()} rows found.</div>
+        <div className="mt-4 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-500">
+          No {category.title.toLowerCase()} rows found.
+        </div>
       ) : (
-        <>
-          <div className="mt-4 hidden overflow-hidden rounded-xl border border-zinc-100 md:block">
-            <table className="w-full table-fixed divide-y divide-zinc-100 text-sm">
-              <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
-                <tr>
-                  <Th className="w-[22%]">Product</Th>
-                  <Th>Size</Th>
-                  <Th>Stock</Th>
-                  <Th>Unit</Th>
-                  <Th>Per Box</Th>
-                  <Th>Total</Th>
-                  <Th>Location</Th>
-                  <Th>Status</Th>
-                  <Th className="w-[84px]">Actions</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {category.rows.map((row) => (
-                  <tr key={row.key} className="h-[52px] hover:bg-zinc-50">
-                    <Td strong>{row.variant}</Td>
-                    <Td>{row.size}</Td>
-                    <Td>{row.quantityLabel}</Td>
-                    <Td>{row.unitType}</Td>
-                    <Td>{row.perBox}</Td>
-                    <Td>{row.totalPieces}</Td>
-                    <Td>{row.location}</Td>
-                    <Td><StatusBadge status={row.status} /></Td>
-                    <Td><ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} /></Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
- 
-          <div className="grid gap-3 p-4 md:hidden">
-            {category.rows.map((row) => (
-              <div key={row.key} className="rounded-lg border border-zinc-200 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-zinc-950">{row.variant}</p>
-                    <p className="mt-1 text-sm text-zinc-500">{row.size}</p>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          {category.rows.map((row) => {
+            const isFinalProduct = row.source.stock_type === "Final Product" || row.source.product_id != null;
+            const productId = row.source.product_id;
+            const fileInputId = `image-upload-${productId}`;
+
+            return (
+              <div
+                key={row.key}
+                className="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-0 shadow-sm transition-all duration-300 hover:shadow-md hover:border-zinc-300 flex flex-col"
+              >
+                {/* Image layout window box profile element */}
+                <div className="relative h-44 w-full overflow-hidden bg-zinc-100 border-b border-zinc-100 flex-shrink-0">
+                  {row.image_url ? (
+                    <img
+                      src={row.image_url.startsWith("http") ? row.image_url : `${API_BASE_URL}${row.image_url}`}
+                      alt={row.variant}
+                      className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                        const sibling = (e.target as HTMLElement).nextElementSibling;
+                        if (sibling) (sibling as HTMLElement).style.display = 'flex';
+                      }}
+                    />
+                  ) : null}
+                  
+                  {/* Fallback placeholder layout configurations */}
+                  <div
+                    className="absolute inset-0 flex flex-col items-center justify-center p-4 text-white text-center gap-2 select-none"
+                    style={{
+                      display: row.image_url ? 'none' : 'flex',
+                      background: getFallbackGradient(row.key)
+                    }}
+                  >
+                    <span className="rounded-full bg-white/20 p-2.5 backdrop-blur-md">
+                      <Package className="h-6 w-6 text-white" />
+                    </span>
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider opacity-90">{row.source.stock_type || "Stock"}</p>
+                      <p className="text-[10px] opacity-75 mt-0.5">{row.size}</p>
+                    </div>
                   </div>
-                  <StatusBadge status={row.status} />
+
+                  {/* Status badge floating on the image */}
+                  <div className="absolute top-3 right-3 z-10">
+                    <StatusBadge status={row.status} />
+                  </div>
+
+                  {/* Hover overlays for actions */}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-2.5 z-20">
+                    {isFinalProduct && productId ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={uploadingId === productId}
+                          onClick={() => document.getElementById(fileInputId)?.click()}
+                          className="grid h-10 w-10 place-items-center rounded-xl bg-white text-zinc-800 shadow-md hover:bg-zinc-50 hover:scale-105 active:scale-95 transition-all"
+                          title="Upload stock image"
+                        >
+                          {uploadingId === productId ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
+                          ) : (
+                            <Camera className="h-5 w-5 text-brand-600" />
+                          )}
+                        </button>
+                        <input
+                          id={fileInputId}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              void onImageUpload(productId, file);
+                            }
+                          }}
+                        />
+                      </>
+                    ) : null}
+                    
+                    <ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} />
+                  </div>
                 </div>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <MobileMetric label="Stock" value={row.quantityLabel} />
-                  <MobileMetric label="Unit" value={row.unitType} />
-                  <MobileMetric label="Per Box" value={row.perBox} />
-                  <MobileMetric label="Total Pieces" value={row.totalPieces} />
-                  <MobileMetric label="Location" value={row.location} />
-                </div>
-                <div className="mt-4">
-                  <ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} />
+
+                {/* Content Area */}
+                <div className="p-4 flex flex-col flex-grow justify-between gap-3">
+                  <div className="space-y-1 text-left">
+                    <h3 className="font-bold text-zinc-900 group-hover:text-brand-700 transition-colors text-sm line-clamp-1">
+                      {row.variant}
+                    </h3>
+                    
+                    {row.source.variant_name ? (
+                      <span className="inline-block rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
+                        Code: {row.source.variant_name}
+                      </span>
+                    ) : null}
+                    
+                    <p className="text-xs text-zinc-500 line-clamp-1">
+                      Size: {row.size} · Location: {row.location}
+                    </p>
+                  </div>
+
+                  {/* Metric info grid */}
+                  <div className="grid grid-cols-2 gap-3 border-t border-zinc-100 pt-3 text-left">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">Available Stock</p>
+                      <p className="mt-0.5 text-xs font-bold text-zinc-800">{row.quantityLabel}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">Unit / Capacity</p>
+                      <p className="mt-0.5 text-xs font-semibold text-zinc-700">{row.perBox}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        </>
+            );
+          })}
+        </div>
       )}
     </section>
   );
@@ -322,7 +443,9 @@ function toDisplayRow(row: LiveStockRow): InventoryDisplayRow {
     totalPieces: piecesPerBox > 0 ? `${formatNumber(quantity * piecesPerBox)} pcs` : totalPiecesFallback(row, type),
     location: locationFor(type),
     status: statusFor(quantity, type),
-    source: row
+    source: row,
+    image_url: row.image_url,
+    variant_name: row.variant_name
   };
 }
 

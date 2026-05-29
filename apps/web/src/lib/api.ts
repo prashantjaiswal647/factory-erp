@@ -480,6 +480,8 @@ export type LiveStockRow = {
   size_mm?: number | null;
   total_weight_kg?: number | null;
   total_rolls?: number | null;
+  image_url?: string | null;
+  variant_name?: string | null;
 };
 
 export type BottomStockCreate = {
