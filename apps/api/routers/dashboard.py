@@ -420,6 +420,21 @@ def get_analytics_summary(
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
+    import redis
+    factory_id = str(current_user.factory_id)
+    cache_key = f"analytics_summary:{factory_id}"
+
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    r = None
+    try:
+        r = redis.Redis.from_url(redis_url, socket_timeout=2)
+        cached_data = r.get(cache_key)
+        if cached_data:
+            data = json.loads(cached_data)
+            return AnalyticsSummaryResponse(**data)
+    except Exception as exc:
+        print(f"Redis cache interception error for analytics summary: {exc}")
+
     today = date.today()
     start_of_month = date(today.year, today.month, 1)
 
@@ -448,9 +463,18 @@ def get_analytics_summary(
 
     ledger_net_receivables = float(month_sales - month_payments)
 
-    return AnalyticsSummaryResponse(
-        total_wastage_weight=float(total_wastage_weight or 0.0),
-        active_worker_count=float(active_worker_count),
-        ledger_net_receivables=ledger_net_receivables,
-    )
+    stats = {
+        "total_wastage_weight": float(total_wastage_weight or 0.0),
+        "active_worker_count": float(active_worker_count),
+        "ledger_net_receivables": ledger_net_receivables,
+    }
+
+    if r is not None:
+        try:
+            r.setex(cache_key, 300, json.dumps(stats, default=str))
+        except Exception as exc:
+            print(f"Redis cache save error for analytics summary: {exc}")
+
+    return AnalyticsSummaryResponse(**stats)
+
 
