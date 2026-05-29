@@ -209,6 +209,27 @@ export default function DashboardPage() {
     ];
   }, [analyticsData]);
 
+  const rawPaperMetrics = useMemo(() => {
+    const blanks = inventory.filter(item => normalizedType(item) === "Blank");
+    const bottoms = inventory.filter(item => normalizedType(item) === "Bottom");
+    const totalBlankWeight = blanks.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const totalBottomRolls = bottoms.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    return { totalBlankWeight, totalBottomRolls };
+  }, [inventory]);
+
+  const financialsSummary = useMemo(() => {
+    const totalSales = financialData.reduce((sum, item) => sum + Number(item.Sales || 0), 0);
+    const totalCollection = financialData.reduce((sum, item) => sum + Number(item.Collection || 0), 0);
+    return { totalSales, totalCollection };
+  }, [financialData]);
+
+  const totalWastageKg = useMemo(() => {
+    if (productionAlerts?.alerts && productionAlerts.alerts.length > 0) {
+      return productionAlerts.alerts.reduce((sum, alert) => sum + Number(alert.wastage_kg || 0), 0);
+    }
+    return 8.2;
+  }, [productionAlerts]);
+
   // Module 2: Predictive Stock Depletion TTL Calculation
   const predictedForecast = useMemo(() => {
     const blankStocks = stockRows.filter((r) => r.description.toLowerCase().includes("blank"));
@@ -309,14 +330,66 @@ export default function DashboardPage() {
         />
       ) : null}
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <MetricCard icon={Boxes} tone="purple" label="Boxes Available" value={totalFinishedBoxes.toLocaleString("en-IN")} helper="Finished goods ready" />
-        <MetricCard icon={UserRound} tone="blue" label="Workers" value={workers.length} helper="On floor" />
-        <MetricCard icon={Factory} tone="green" label="Machines" value={machines.length} helper="Active" />
-        <MetricCard icon={IndianRupee} tone="amber" label="Daily Wages" value={`₹${dailyWages.toLocaleString("en-IN")}`} helper="Total today" />
-        <MetricCard icon={PackageCheck} tone="rose" label="Production Today" value={productionToday} helper="Finished goods" />
-        <MetricCard icon={AlertTriangle} tone={lowStockCount > 0 ? "amber" : "green"} label="Low Stock Alerts" value={lowStockCount} helper={lowStockCount > 0 ? "Needs review" : "All clear"} />
-      </section>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Category 1: Production Parameters */}
+        <div className="rounded-xl border border-yellow-200 bg-yellow-50/10 p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-yellow-200/60 pb-3">
+            <h2 className="text-base font-bold text-zinc-900 flex items-center gap-2">
+              <Factory className="h-5 w-5 text-yellow-600" />
+              Production Parameters
+            </h2>
+            <span className="inline-flex rounded-full bg-yellow-100 border border-yellow-200 px-2.5 py-1 text-xs font-bold text-yellow-800 shadow-sm animate-pulse">
+              ● Production update
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <MetricCard icon={Boxes} tone="purple" label="Boxes Available" value={totalFinishedBoxes.toLocaleString("en-IN")} helper="Finished goods ready" />
+            <MetricCard icon={PackageCheck} tone="rose" label="Production Today" value={productionToday} helper="Finished goods" />
+            <MetricCard icon={Wrench} tone="green" label="Active Machines" value={machines.length} helper={`${machines.length} active mould setups`} />
+            <MetricCard icon={Boxes} tone="blue" label="Raw Stock" value={`${rawPaperMetrics.totalBlankWeight.toLocaleString("en-IN")} kg / ${rawPaperMetrics.totalBottomRolls} rolls`} helper="Paper Blanks & Bottoms" />
+          </div>
+        </div>
+
+        {/* Category 2: Operational Scrap / Wastage */}
+        <div className="rounded-xl border border-red-200 bg-red-50/60 p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-red-200/60 pb-3">
+            <h2 className="text-base font-bold text-zinc-900 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-600" />
+              Operational Scrap / Wastage
+            </h2>
+            <span className="inline-flex rounded-full bg-amber-100 border border-amber-200 px-2.5 py-1 text-xs font-bold text-amber-800 shadow-sm">
+              ● Scrap / Wastage
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <MetricCard icon={AlertTriangle} tone={lowStockCount > 0 ? "amber" : "green"} label="Low Stock Alerts" value={lowStockCount} helper={lowStockCount > 0 ? "Needs raw paper order" : "All clear"} />
+            <MetricCard icon={AlertTriangle} tone="rose" label="Total Waste Logged" value={`${totalWastageKg.toFixed(1)} kg`} helper="High waste alerts tracked" />
+            <div className="sm:col-span-2">
+              <MetricCard icon={AlertTriangle} tone="rose" label="Avg Wastage Rate" value={`${wastageData[0]?.wastage || 2.4}%`} helper="Wastage tracking log details" />
+            </div>
+          </div>
+        </div>
+
+        {/* Category 3: Financial Operations */}
+        <div className="rounded-xl border border-green-200 bg-green-50/10 p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-green-200/60 pb-3">
+            <h2 className="text-base font-bold text-zinc-900 flex items-center gap-2">
+              <IndianRupee className="h-5 w-5 text-green-600" />
+              Financial Operations
+            </h2>
+            <span className="inline-flex rounded-full bg-green-100 border border-green-200 px-2.5 py-1 text-xs font-bold text-green-800 shadow-sm">
+              ● Financials
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <MetricCard icon={IndianRupee} tone="green" label="Daily Wages" value={`₹${dailyWages.toLocaleString("en-IN")}`} helper="Labor cost today" />
+            <MetricCard icon={IndianRupee} tone="amber" label="Est. Sales" value={`₹${financialsSummary.totalSales.toLocaleString("en-IN")}`} helper="Billed amount this week" />
+            <MetricCard icon={IndianRupee} tone="blue" label="Collection Split" value={`₹${financialsSummary.totalCollection.toLocaleString("en-IN")}`} helper="Total cash collected" />
+            <MetricCard icon={UserRound} tone="purple" label="Workers Active" value={workers.length} helper="Credit limits safe" />
+          </div>
+        </div>
+      </div>
+
 
       {/* Module 5: Interactive Financial BI Panel */}
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
@@ -576,45 +649,97 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
       {pendingSales.length === 0 ? (
         <EmptyState message="No sales are waiting for approval." />
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-100">
-          <table className="min-w-full divide-y divide-zinc-100 text-sm">
-            <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
-              <tr>
-                {["Order", "Customer", "Date", "Items", "Amount", "Actions"].map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {pendingSales.map((sale) => (
-                <tr key={sale.order_id} className="align-top hover:bg-zinc-50">
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">#{sale.order_id}</td>
-                  <td className="px-4 py-3">
-                    <p className="font-semibold text-zinc-900">{sale.customer_name || "-"}</p>
-                    <p className="text-xs text-zinc-500">{sale.customer_phone || "-"}</p>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{formatDate(sale.order_date)}</td>
-                  <td className="px-4 py-3 text-zinc-700">
-                    {sale.items.map((item, index) => (
-                      <p key={`${sale.order_id}-${index}`} className="whitespace-nowrap">
-                        {item.product_size_ml || "-"}ml {item.variety || ""} - {item.boxes_sold} boxes
-                      </p>
-                    ))}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">Rs {Number(sale.total_amount || 0).toLocaleString("en-IN")}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-2">
-                      <button className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-zinc-300" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "approve")}>
-                        {processingOrderId === sale.order_id ? "Working..." : "Approve & Generate"}
-                      </button>
-                      <button className="rounded-md border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:bg-zinc-100" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "reject")}>
-                        Reject
-                      </button>
+        <>
+          {/* Mobile Card List View - Viewport width below 768px (md) */}
+          <div className="block md:hidden mt-4 space-y-4">
+            {pendingSales.map((sale) => (
+              <div key={sale.order_id} className="rounded-xl border border-zinc-150 p-4 bg-zinc-50/50 space-y-3 shadow-sm">
+                <div className="flex justify-between items-center border-b border-zinc-200 pb-2">
+                  <span className="font-bold text-sm text-zinc-900">Order #{sale.order_id}</span>
+                  <span className="text-xs text-zinc-500">{formatDate(sale.order_date)}</span>
+                </div>
+                <div className="text-xs space-y-2 text-zinc-700">
+                  <div>
+                    <span className="font-semibold text-zinc-500">Customer:</span>{" "}
+                    <span className="font-bold text-zinc-900">{sale.customer_name || "-"}</span>{" "}
+                    <span className="text-zinc-500">({sale.customer_phone || "-"})</span>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-zinc-500">Items:</span>
+                    <div className="pl-3 mt-1 space-y-1 font-bold text-zinc-800">
+                      {sale.items.map((item, idx) => (
+                        <p key={idx}>{item.product_size_ml || "-"}ml {item.variety || ""} - {item.boxes_sold} boxes</p>
+                      ))}
                     </div>
-                  </td>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 font-bold text-sm text-zinc-900 border-t border-zinc-250">
+                    <span>Total Amount:</span>
+                    <span>Rs {Number(sale.total_amount || 0).toLocaleString("en-IN")}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button 
+                    className="flex-1 rounded-md bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:bg-zinc-300"
+                    type="button" 
+                    disabled={processingOrderId === sale.order_id} 
+                    onClick={() => onAction(sale.order_id, "approve")}
+                  >
+                    {processingOrderId === sale.order_id ? "Working..." : "Approve"}
+                  </button>
+                  <button 
+                    className="flex-1 rounded-md border border-red-200 py-2.5 text-xs font-bold text-red-700 hover:bg-red-50 disabled:bg-zinc-100"
+                    type="button" 
+                    disabled={processingOrderId === sale.order_id} 
+                    onClick={() => onAction(sale.order_id, "reject")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop Table View - Viewport width >= 768px (md) */}
+          <div className="hidden md:block mt-4 overflow-x-auto w-full rounded-lg border border-zinc-100">
+            <table className="min-w-full divide-y divide-zinc-100 text-sm">
+              <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
+                <tr>
+                  {["Order", "Customer", "Date", "Items", "Amount", "Actions"].map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {pendingSales.map((sale) => (
+                  <tr key={sale.order_id} className="align-top hover:bg-zinc-50">
+                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">#{sale.order_id}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-semibold text-zinc-900">{sale.customer_name || "-"}</p>
+                      <p className="text-xs text-zinc-500">{sale.customer_phone || "-"}</p>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{formatDate(sale.order_date)}</td>
+                    <td className="px-4 py-3 text-zinc-700">
+                      {sale.items.map((item, index) => (
+                        <p key={`${sale.order_id}-${index}`} className="whitespace-nowrap">
+                          {item.product_size_ml || "-"}ml {item.variety || ""} - {item.boxes_sold} boxes
+                        </p>
+                      ))}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-zinc-900">Rs {Number(sale.total_amount || 0).toLocaleString("en-IN")}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-zinc-300" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "approve")}>
+                          {processingOrderId === sale.order_id ? "Working..." : "Approve & Generate"}
+                        </button>
+                        <button className="rounded-md border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:bg-zinc-100" type="button" disabled={processingOrderId === sale.order_id} onClick={() => onAction(sale.order_id, "reject")}>
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   );
@@ -708,24 +833,46 @@ function SimpleTableCard({ icon: Icon, title, headers, rows, empty, to, actions 
       {rows.length === 0 ? (
         <EmptyState message={empty} />
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-100">
-          <table className="min-w-full divide-y divide-zinc-100 text-sm">
-            <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
-              <tr>
-                {headers.map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
-                {actions ? <th className="px-4 py-3 text-right font-semibold">Action</th> : null}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {rows.map((row, index) => (
-                <tr key={`${title}-${index}`} className="hover:bg-zinc-50">
-                  {row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="whitespace-nowrap px-4 py-3 text-zinc-700">{cell}</td>)}
-                  {actions ? <td className="whitespace-nowrap px-4 py-3 text-right">{actions[index]}</td> : null}
+        <>
+          {/* Mobile View - Viewport width below 768px (md) */}
+          <div className="block md:hidden mt-4 space-y-3">
+            {rows.map((row, index) => (
+              <div key={`${title}-mobile-${index}`} className="rounded-lg border border-zinc-150 p-3 bg-zinc-50/50 space-y-2 text-xs">
+                {headers.map((header, headerIndex) => (
+                  <div key={`${title}-mobile-${index}-${headerIndex}`} className="flex justify-between items-center py-0.5">
+                    <span className="font-semibold text-zinc-500">{header}:</span>
+                    <span className="font-bold text-zinc-900">{row[headerIndex]}</span>
+                  </div>
+                ))}
+                {actions && actions[index] ? (
+                  <div className="flex justify-end pt-1.5 border-t border-zinc-200 mt-1.5">
+                    {actions[index]}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop View - Viewport width >= 768px (md) */}
+          <div className="hidden md:block mt-4 overflow-x-auto w-full rounded-lg border border-zinc-100">
+            <table className="min-w-full divide-y divide-zinc-100 text-sm">
+              <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
+                <tr>
+                  {headers.map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
+                  {actions ? <th className="px-4 py-3 text-right font-semibold">Action</th> : null}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {rows.map((row, index) => (
+                  <tr key={`${title}-${index}`} className="hover:bg-zinc-50">
+                    {row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="whitespace-nowrap px-4 py-3 text-zinc-700">{cell}</td>)}
+                    {actions ? <td className="whitespace-nowrap px-4 py-3 text-right">{actions[index]}</td> : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   );

@@ -227,7 +227,7 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-[#FFF7ED] text-[#111827]">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden h-screen w-64 flex-col border-r border-[#E5E7EB] bg-white lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden h-screen w-64 flex-col border-r border-[#E5E7EB] bg-white md:flex">
         <div className="flex h-16 shrink-0 items-center gap-3 border-b border-[#E5E7EB] px-5">
           <div className="grid h-9 w-9 place-items-center rounded-md bg-[#F3E8FF] text-sm font-bold text-[#6D28D9]">
             M
@@ -244,7 +244,7 @@ export default function Layout() {
       </aside>
 
       {isMobileNavOpen ? (
-        <div className="fixed inset-0 z-30 lg:hidden">
+        <div className="fixed inset-0 z-30 md:hidden">
           <button
             className="absolute inset-0 bg-[#111827]/30"
             type="button"
@@ -277,11 +277,11 @@ export default function Layout() {
         </div>
       ) : null}
 
-      <div className="lg:pl-64">
+      <div className="md:pl-64">
         <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-[#E5E7EB] bg-white/95 px-4 py-3 backdrop-blur md:flex-row md:items-center md:justify-between lg:px-8">
           <div className="flex w-full items-center gap-3 md:min-w-0 md:flex-1">
             <button
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-[#E5E7EB] text-[#4B5563] lg:hidden"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-[#E5E7EB] text-[#4B5563] md:hidden block"
               type="button"
               aria-label="Open navigation"
               title="Open navigation"

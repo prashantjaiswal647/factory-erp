@@ -1,0 +1,27 @@
+# ====================================================================
+# MunshiAI Production Hardened Secrets Template
+# Generated on: 2026-05-29
+# ====================================================================
+# INSTRUCTIONS: Copy the below block and replace the corresponding 
+# variables inside your production VPS ~/factory-erp/.env file.
+# Make sure to back up your current .env first!
+
+# 1. PostgreSQL DB Credentials
+POSTGRES_USER=erp_admin
+POSTGRES_PASSWORD=Mp7_9kLz_2wQ_VfX92xRpQ8_T_vB5y_erp_prod
+DATABASE_URL=postgresql://erp_admin:Mp7_9kLz_2wQ_VfX92xRpQ8_T_vB5y_erp_prod@ai-erp-postgres:5432/ai_erp
+
+# 2. JWT & Security Secrets
+JWT_SECRET_KEY=9a3f2b8cde47f125a83cd70ef91823abf40192e28374d6c5bfe01d3a9582d1c6
+SUPER_ADMIN_JWT_SECRET=4a20f92b7c4d5162a839cf9e102fba3d850284e9c716fa5bde01d2a84931e28c
+N8N_USER_MANAGEMENT_JWT_SECRET=e7b2c9a1d48f2b3e8c901aef83c92f1b40283c7d9e0fa52bde01c9a8342d1f7c
+
+# 3. n8n Security Settings
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=admin@munshiai.local
+N8N_BASIC_AUTH_PASSWORD=P@ssw0rd_Str0ng_n8n_AuTh_2026!
+
+# 4. Super Admin Credentials
+SUPER_ADMIN_EMAIL=admin@munshiai.co.in
+# Note: Hash matching a highly secure password will be generated or can be set via script.
+# Use standard bcrypt to hash your desired super admin password.
