@@ -261,13 +261,13 @@ export default function DashboardPage() {
     }
 
     for (const r of bottomStocks) {
-      const rolls = r.quantity; 
-      const days = Math.round(rolls / bottomCons) || 4;
+      const bottomKg = r.quantity;
+      const days = Math.round(bottomKg / bottomCons) || 4;
       forecasts.push({
         name: r.productName,
         size: r.size,
         type: "Bottom",
-        qty: `${rolls} rolls`,
+        qty: `${bottomKg} kg`,
         ttl: days,
         status: days < 5 ? "Critical" : days < 10 ? "Warning" : "Healthy"
       });
@@ -287,7 +287,7 @@ export default function DashboardPage() {
           name: "Bottom Roll Stock",
           size: "68mm",
           type: "Bottom",
-          qty: "96 rolls",
+          qty: "96 kg",
           ttl: 8,
           status: "Warning"
         }
@@ -547,7 +547,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs text-zinc-600 mb-3">
                       <div>Current Stock: <span className="font-semibold text-zinc-900">{item.qty}</span></div>
-                      <div>Avg Daily Use: <span className="font-semibold text-zinc-900">{item.type === "Blank" ? "40 kg" : "12 rolls"}</span></div>
+                      <div>Avg Daily Use: <span className="font-semibold text-zinc-900">{item.type === "Blank" ? "40 kg / day" : "12 kg / day"}</span></div>
                       <div className="col-span-2 mt-1">
                         AI Depletion TTL: <span className="font-semibold text-zinc-900 text-sm">{item.ttl} days remaining</span>
                       </div>

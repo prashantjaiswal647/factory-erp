@@ -1,4 +1,4 @@
-import { Check, FileText, Plus, Receipt, ReceiptText, Search, Trash2 } from "lucide-react";
+import { Check, ChevronDown, FileText, Plus, Receipt, ReceiptText, Search, Trash2 } from "lucide-react";
 import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -101,6 +101,8 @@ export default function SalesEntryPage() {
   const { triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
   const customerSearchRef = useRef<HTMLInputElement>(null);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
 
   const [form, setForm] = useState<DailySaleCreate>({
     date: new Date().toISOString().slice(0, 10),
@@ -162,6 +164,16 @@ export default function SalesEntryPage() {
     }, 200);
     return () => window.clearTimeout(handle);
   }, [customerQuery]);
+
+  useEffect(() => {
+    function closeCustomerDropdown(event: MouseEvent) {
+      if (!customerDropdownRef.current?.contains(event.target as Node)) {
+        setIsCustomerDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", closeCustomerDropdown);
+    return () => document.removeEventListener("mousedown", closeCustomerDropdown);
+  }, []);
 
   // ─── Tax Calculations ───────────────────────────────────────────────────────
   const taxCalc = useMemo(() => {
@@ -261,6 +273,7 @@ export default function SalesEntryPage() {
       setSelectedCustomer(null);
       setCustomerQuery("");
       setCustomerResults([]);
+      setIsCustomerDropdownOpen(false);
       setForm({
         date: new Date().toISOString().slice(0, 10),
         customer_id: 0,
@@ -293,6 +306,7 @@ export default function SalesEntryPage() {
       place_of_supply: form.place_of_supply || customer.place || "",
     });
     setCustomerResults([]);
+    setIsCustomerDropdownOpen(false);
   }
 
   function patchItem(index: number, patch: Partial<SaleItem>) {
@@ -367,7 +381,19 @@ export default function SalesEntryPage() {
 
         {/* ── Core Fields ─────────────────────────────────────────────────── */}
         <div className="grid gap-4 md:grid-cols-[1.4fr_0.7fr_0.7fr]">
-          <CustomerCombobox inputRef={customerSearchRef} query={customerQuery} results={customerResults} onQueryChange={setCustomerQuery} onSelect={selectCustomer} />
+          <CustomerCombobox
+            containerRef={customerDropdownRef}
+            inputRef={customerSearchRef}
+            isOpen={isCustomerDropdownOpen}
+            query={customerQuery}
+            results={customerResults}
+            onQueryChange={(value) => {
+              setCustomerQuery(value);
+              setIsCustomerDropdownOpen(true);
+            }}
+            onSelect={selectCustomer}
+            onToggle={() => setIsCustomerDropdownOpen((open) => !open)}
+          />
           <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
           <NumberField label="Amount paid" value={form.amount_paid} onChange={(amount_paid) => setForm({ ...form, amount_paid })} />
         </div>
@@ -620,16 +646,49 @@ function StockIndicator({ item, rows }: { item: SaleItem; rows: LiveStockRow[] }
   );
 }
 
-function CustomerCombobox({ inputRef, query, results, onQueryChange, onSelect }: { inputRef: RefObject<HTMLInputElement>; query: string; results: CustomerSearchResult[]; onQueryChange: (value: string) => void; onSelect: (customer: CustomerSearchResult) => void }) {
+function CustomerCombobox({
+  containerRef,
+  inputRef,
+  isOpen,
+  query,
+  results,
+  onQueryChange,
+  onSelect,
+  onToggle,
+}: {
+  containerRef: RefObject<HTMLDivElement>;
+  inputRef: RefObject<HTMLInputElement>;
+  isOpen: boolean;
+  query: string;
+  results: CustomerSearchResult[];
+  onQueryChange: (value: string) => void;
+  onSelect: (customer: CustomerSearchResult) => void;
+  onToggle: () => void;
+}) {
   return (
-    <div className="relative text-sm">
+    <div ref={containerRef} className="relative text-sm">
       <span className="font-medium text-zinc-700">Customer</span>
       <Search className="pointer-events-none absolute left-3 top-9 h-4 w-4 text-zinc-400" />
-      <input ref={inputRef} className="mt-1 h-10 w-full rounded-md border border-zinc-200 pl-9 pr-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search name or phone" />
-      {results.length > 0 ? (
+      <input
+        ref={inputRef}
+        className="mt-1 h-10 w-full rounded-md border border-zinc-200 pl-9 pr-10 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+        onClick={onToggle}
+        placeholder="Search name or phone"
+      />
+      <button
+        aria-label={isOpen ? "Collapse customer list" : "Expand customer list"}
+        className="absolute right-2 top-8 grid h-7 w-7 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+        type="button"
+        onClick={onToggle}
+      >
+        <ChevronDown className={`h-4 w-4 transition ${isOpen ? "rotate-180" : ""}`} />
+      </button>
+      {isOpen && results.length > 0 ? (
         <div className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg">
           {results.map((customer) => (
-            <button key={customer.id} className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50" type="button" onClick={() => onSelect(customer)}>
+            <button key={customer.id} className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(customer)}>
               {customer.name} - {customer.place} ({customer.phone_number})
             </button>
           ))}
