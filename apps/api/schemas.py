@@ -839,7 +839,7 @@ class DailySaleCreate(BaseModel):
     date: date
     customer_id: int = Field(..., gt=0)
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0)
-    legal_invoice_type: Literal["tax_invoice", "bill_of_supply"] = "bill_of_supply"
+    legal_invoice_type: Literal["tax_invoice", "bill_of_supply", "bill_of_supply_simple", "BILL_OF_SUPPLY_SIMPLE"] = "bill_of_supply"
     legal_invoice_number: Optional[str] = Field(default=None, max_length=50)
     rough_bill_enabled: bool = True
     rough_bill_number: Optional[str] = Field(default=None, max_length=50)
@@ -917,6 +917,7 @@ class FactoryProfileUpdate(BaseModel):
     initial_invoice_number: Optional[int] = Field(default=1, ge=1)
     invoice_prefix: Optional[str] = Field(default="INV-", max_length=50)
     advance_payment_discount_percentage: Optional[Decimal] = Field(default=Decimal('2.00'), ge=0, le=100)
+    digital_signature_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class FactoryProfileResponse(BaseModel):
@@ -928,6 +929,7 @@ class FactoryProfileResponse(BaseModel):
     current_invoice_counter: int
     invoice_prefix: Optional[str] = "INV-"
     advance_payment_discount_percentage: Decimal = Decimal('2.00')
+    digital_signature_url: Optional[str] = None
 
 
 class AccountantSummaryResponse(BaseModel):

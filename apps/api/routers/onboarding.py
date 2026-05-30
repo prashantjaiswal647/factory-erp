@@ -272,7 +272,8 @@ def get_factory_profile(
         initial_invoice_number=getattr(factory, "initial_invoice_number", 1) or 1,
         current_invoice_counter=getattr(factory, "current_invoice_counter", 1) or 1,
         invoice_prefix=getattr(factory, "invoice_prefix", "INV-") or "INV-",
-        advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00")
+        advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00"),
+        digital_signature_url=getattr(factory, "digital_signature_url", None)
     )
 
 @router.post("/factory-profile", response_model=FactoryProfileResponse)
@@ -301,6 +302,9 @@ def update_factory_profile(
     if payload.advance_payment_discount_percentage is not None:
         factory.advance_payment_discount_percentage = payload.advance_payment_discount_percentage
         
+    if payload.digital_signature_url is not None:
+        factory.digital_signature_url = payload.digital_signature_url.strip() if payload.digital_signature_url else None
+        
     db.commit()
     db.refresh(factory)
     return FactoryProfileResponse(
@@ -311,7 +315,8 @@ def update_factory_profile(
         initial_invoice_number=factory.initial_invoice_number,
         current_invoice_counter=factory.current_invoice_counter,
         invoice_prefix=factory.invoice_prefix or "INV-",
-        advance_payment_discount_percentage=factory.advance_payment_discount_percentage
+        advance_payment_discount_percentage=factory.advance_payment_discount_percentage,
+        digital_signature_url=factory.digital_signature_url
     )
 
 

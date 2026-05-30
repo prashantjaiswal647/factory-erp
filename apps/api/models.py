@@ -82,6 +82,7 @@ class Factory(Base):
     current_invoice_counter = Column(Integer, default=1, server_default="1")
     invoice_prefix = Column(String(50), nullable=False, default="INV-", server_default="INV-")
     advance_payment_discount_percentage = Column(Numeric(5, 2), nullable=False, default=2.00, server_default="2.00")
+    digital_signature_url = Column(String(500), nullable=True)
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
     owner = relationship("User", foreign_keys=[owner_phone_number], back_populates="owned_factory")

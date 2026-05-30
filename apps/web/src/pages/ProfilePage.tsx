@@ -105,7 +105,8 @@ export default function ProfilePage() {
         factory_name: factoryProfile.factory_name,
         address: factoryProfile.address || '',
         gst_number: factoryProfile.gst_number || '',
-        advance_payment_discount_percentage: Number(factoryProfile.advance_payment_discount_percentage || 0)
+        advance_payment_discount_percentage: Number(factoryProfile.advance_payment_discount_percentage || 0),
+        digital_signature_url: factoryProfile.digital_signature_url || ''
       });
       setToast('Factory Settings saved successfully.');
       void loadFactoryProfile();
@@ -316,6 +317,32 @@ export default function ProfilePage() {
                   onChange={(e) => setFactoryProfile({ ...factoryProfile, address: e.target.value })}
                 />
               </label>
+              <div className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500 block mb-2">Digital Signature Image</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = () => {
+                        const base64String = reader.result as string;
+                        const finalUrl = base64String.length < 500 ? base64String : `/assets/signatures/${file.name}`;
+                        setFactoryProfile({ ...factoryProfile, digital_signature_url: finalUrl });
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100"
+                />
+                {factoryProfile.digital_signature_url && (
+                  <div className="mt-3">
+                    <span className="text-xs font-semibold text-zinc-400 block mb-1">Preview:</span>
+                    <img src={factoryProfile.digital_signature_url} alt="Signature Preview" className="h-12 object-contain bg-white p-1 border rounded" />
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex justify-end pt-2">
               <button

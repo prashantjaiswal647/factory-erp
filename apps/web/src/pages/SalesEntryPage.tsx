@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { useAuth } from "../context/AuthContext";
-import { createDailySale, createPendingSaleOrder, getInventory, getNextInvoiceNumber, searchCustomers } from "../lib/api";
+import { createDailySale, createPendingSaleOrder, getInventory, getNextInvoiceNumber, searchCustomers, getFactoryProfile } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -88,6 +88,56 @@ function inferIntraStateSupply(buyerGstin?: string | null, placeOfSupply?: strin
   return true;
 }
 
+function numberToWords(num: number): string {
+  if (num === 0) return "Rupees Zero Only";
+  const a = [
+    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+    "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"
+  ];
+  const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  function g(n: number): string {
+    if (n < 20) return a[n];
+    const digit = n % 10;
+    return b[Math.floor(n / 10)] + (digit ? "-" + a[digit] : "");
+  }
+
+  function h(n: number): string {
+    if (n === 0) return "";
+    let str = "";
+    if (n >= 100) {
+      str += a[Math.floor(n / 100)] + " Hundred ";
+      n %= 100;
+    }
+    if (n > 0) {
+      if (str !== "") str += "and ";
+      str += g(n) + " ";
+    }
+    return str;
+  }
+
+  let result = "";
+  let temp = num;
+
+  if (temp >= 10000000) {
+    result += h(Math.floor(temp / 10000000)) + "Crore ";
+    temp %= 10000000;
+  }
+  if (temp >= 100000) {
+    result += h(Math.floor(temp / 100000)) + "Lakh ";
+    temp %= 100000;
+  }
+  if (temp >= 1000) {
+    result += h(Math.floor(temp / 1000)) + "Thousand ";
+    temp %= 1000;
+  }
+  if (temp > 0) {
+    result += h(temp);
+  }
+
+  return "Rupees " + result.trim() + " Only";
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function SalesEntryPage() {
@@ -103,6 +153,19 @@ export default function SalesEntryPage() {
   const customerSearchRef = useRef<HTMLInputElement>(null);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+
+  // Bill of Supply Simple State Variables
+  const [profile, setProfile] = useState<any>(null);
+  const [simpleDesc, setSimpleDesc] = useState("");
+  const [simpleHsn, setSimpleHsn] = useState("");
+  const [simpleQty, setSimpleQty] = useState(0);
+  const [simpleRate, setSimpleRate] = useState(0);
+
+  useEffect(() => {
+    void getFactoryProfile()
+      .then((res) => setProfile(res.data))
+      .catch(console.error);
+  }, []);
 
   const [form, setForm] = useState<DailySaleCreate>({
     date: new Date().toISOString().slice(0, 10),
@@ -120,6 +183,7 @@ export default function SalesEntryPage() {
   });
 
   const isTaxInvoice = form.legal_invoice_type === "tax_invoice";
+  const isSimpleInvoice = form.legal_invoice_type === "BILL_OF_SUPPLY_SIMPLE" || form.legal_invoice_type === "bill_of_supply_simple";
 
   async function refreshNextInvoiceNumber(overwrite = false) {
     try {
@@ -220,7 +284,73 @@ export default function SalesEntryPage() {
     });
   }, [form.items, inventoryRows]);
 
+  async function submitSimple() {
+    if (!selectedCustomer) { setToast("Please select a customer."); return; }
+    if (simpleQty <= 0 || simpleRate <= 0) { setToast("Quantity and Rate must be greater than zero."); return; }
+    if (!simpleDesc.trim()) { setToast("Description is required."); return; }
+    setIsSaving(true);
+    try {
+      const payload: DailySaleCreate = {
+        date: form.date,
+        customer_id: Number(selectedCustomer.id),
+        amount_paid: Number(form.amount_paid || 0),
+        legal_invoice_type: "BILL_OF_SUPPLY_SIMPLE",
+        legal_invoice_number: form.legal_invoice_number?.trim() || null,
+        rough_bill_enabled: false,
+        rough_bill_number: null,
+        items: [{
+          product_id: null,
+          product_size_ml: 210,
+          variety: "Standard/White",
+          packaging_size: "Standard Box",
+          packaging_size_name: "Standard Box",
+          boxes_sold: simpleQty,
+          loose_packets_sold: 0,
+          rate_per_box: simpleRate,
+          rate_per_packet: 0,
+          packets_per_box: 1,
+          description: simpleDesc,
+          hsn_code: simpleHsn || null,
+          tax_rate: 0,
+        }],
+      };
+      
+      if (user?.role === "Owner") {
+        const response = await createDailySale(payload);
+        setLastInvoiceId(response.data.invoice_document_id || null);
+        setToast("Invoice saved. PDF can be downloaded from Invoices.");
+      } else {
+        await createPendingSaleOrder(payload);
+        setToast("Order sent to Owner for approval.");
+      }
+      triggerDataRefresh();
+      const nextInvoiceNumber = await refreshNextInvoiceNumber(true);
+      setSelectedCustomer(null);
+      setCustomerQuery("");
+      setCustomerResults([]);
+      setIsCustomerDropdownOpen(false);
+      setSimpleDesc("");
+      setSimpleHsn("");
+      setSimpleQty(0);
+      setSimpleRate(0);
+      setForm({
+        ...form,
+        amount_paid: 0,
+        legal_invoice_number: nextInvoiceNumber,
+      });
+      window.setTimeout(() => customerSearchRef.current?.focus(), 0);
+    } catch (error) {
+      setToast(apiErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function submit() {
+    if (isSimpleInvoice) {
+      await submitSimple();
+      return;
+    }
     if (!selectedCustomer) return;
     const billableItems = form.items.filter((item) => Number(item.boxes_sold || 0) > 0 || Number(item.loose_packets_sold || 0) > 0);
     if (hasInsufficientStock) { setToast("Insufficient Stock"); return; }

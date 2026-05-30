@@ -1065,6 +1065,7 @@ export type FactoryProfile = {
   current_invoice_counter: number;
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
+  digital_signature_url?: string;
 };
 
 export type FactoryProfileUpdate = {
@@ -1074,6 +1075,7 @@ export type FactoryProfileUpdate = {
   initial_invoice_number?: number;
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
+  digital_signature_url?: string;
 };
 
 export function getFactoryProfile() {

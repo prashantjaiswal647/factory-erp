@@ -12,6 +12,9 @@ RUN npm run build
 # Stage 2: Serve stage
 FROM nginx:alpine
 
+# Copy Nginx custom configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Copy built frontend assets to Nginx html directory
 COPY --from=build /app/dist /usr/share/nginx/html
 
