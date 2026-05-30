@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Boxes, CalendarDays, Edit2, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench, Trash2 } from "lucide-react";
+import { AlertTriangle, Archive, Boxes, CalendarDays, Edit2, Factory, IndianRupee, PackageCheck, RefreshCw, ScrollText, UserRound, Wrench, Trash2 } from "lucide-react";
 import axios from "axios";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -27,6 +27,13 @@ type StockDisplayRow = {
   location: string;
   status: StockStatus;
   source: LiveStockRow;
+};
+
+type StockGroup = {
+  key: string;
+  title: string;
+  icon: LucideIcon;
+  rows: StockDisplayRow[];
 };
 
 const todayFormatter = new Intl.DateTimeFormat("en-IN", {
@@ -161,6 +168,7 @@ export default function DashboardPage() {
   const [activeBiTab, setActiveBiTab] = useState("Overview");
 
   const stockRows = useMemo(() => buildDashboardStockRows(inventory), [inventory]);
+  const stockGroups = useMemo(() => buildDashboardStockGroups(stockRows), [stockRows]);
   const finishedRows = stockRows.filter((row) => row.description === "Finished paper cup");
   const totalFinishedBoxes = finishedRows.reduce((sum, row) => sum + row.quantity, 0);
   const dailyWages = workers.reduce((sum, worker) => sum + Number(worker.daily_wages || 0), 0);
@@ -489,11 +497,13 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        <div className="mt-5 space-y-3">
+        <div className="mt-5 space-y-5">
           {stockRows.length === 0 ? (
             <EmptyState message="No inventory rows found yet. Add onboarding stock to see finished cups, bottom, blank, and packing material." />
           ) : (
-            stockRows.map((row) => <StockListRow key={row.key} row={row} onDelete={handleDelete} canDelete={canDelete} />)
+            stockGroups.map((group) => (
+              <StockGroupSection key={group.key} group={group} onDelete={handleDelete} canDelete={canDelete} />
+            ))
           )}
         </div>
       </section>
@@ -633,6 +643,24 @@ function buildDashboardStockRows(rows: LiveStockRow[]): StockDisplayRow[] {
     });
 }
 
+function buildDashboardStockGroups(rows: StockDisplayRow[]): StockGroup[] {
+  const paperRows = rows.filter((row) => {
+    const type = normalizedType(row.source);
+    return type === "Bottom" || type === "Blank";
+  });
+  const rawRows = rows.filter((row) => normalizedType(row.source) === "Inventory");
+  const packingRows = rows.filter((row) => {
+    const type = normalizedType(row.source);
+    return type === "Carton Box" || type === "Polybag" || type === "Final Product";
+  });
+
+  return [
+    { key: "paper-rolls", title: "1. Paper Rolls (Bottoms & Blanks)", icon: ScrollText, rows: paperRows },
+    { key: "raw-materials", title: "2. Raw Materials", icon: Archive, rows: rawRows },
+    { key: "packaging-materials", title: "3. Packaging Materials (Boxes & More)", icon: Boxes, rows: packingRows },
+  ];
+}
+
 function PendingSalesApprovalSection({ message, pendingSales, processingOrderId, onAction }: { message: string; pendingSales: PendingSale[]; processingOrderId: number | null; onAction: (orderId: number, action: "approve" | "reject") => void }) {
   return (
     <section className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm sm:p-5">
@@ -745,38 +773,81 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
   );
 }
 
-function StockListRow({ row, onDelete, canDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
+function StockGroupSection({ group, onDelete, canDelete }: { group: StockGroup; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
+  const Icon = group.icon;
   return (
-    <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition hover:border-brand-200 hover:bg-brand-50/30 md:grid-cols-[minmax(180px,1.3fr)_repeat(5,minmax(110px,1fr))_120px_auto] md:items-center">
-      <div className="flex min-w-0 items-center gap-3">
-        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-zinc-100 text-xl">{row.marker}</span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-zinc-950">{row.productName}</p>
-          <p className="text-xs text-zinc-500">{row.description}</p>
+    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="flex items-center gap-3 border-b border-zinc-200 bg-zinc-50 px-4 py-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-50 text-brand-700">
+          <Icon className="h-4 w-4" />
+        </span>
+        <h3 className="text-sm font-bold text-zinc-950">{group.title}</h3>
+        <span className="ml-auto rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 ring-1 ring-zinc-200">
+          {group.rows.length} rows
+        </span>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-zinc-100 text-sm">
+          <thead className="bg-white text-xs uppercase tracking-wide text-zinc-500">
+            <tr>
+              {["Item Name", "Size", "Total Stock", "Per Box", "Total Pieces", "Location", "Status", "Action"].map((header) => (
+                <th key={header} className={`px-4 py-3 font-semibold ${header === "Action" ? "text-right" : "text-left"}`}>{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {group.rows.length > 0 ? (
+              group.rows.map((row) => (
+                <StockTableRow key={row.key} row={row} onDelete={onDelete} canDelete={canDelete} />
+              ))
+            ) : (
+              <tr>
+                <td className="px-4 py-5 text-sm text-zinc-500" colSpan={8}>
+                  No rows in this category yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function StockTableRow({ row, onDelete, canDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
+  return (
+    <tr className="align-middle transition hover:bg-brand-50/30">
+      <td className="min-w-[220px] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 ring-4 ring-emerald-50" />
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-zinc-950">{row.productName}</p>
+            <p className="text-xs text-zinc-500">{row.description}</p>
+          </div>
         </div>
-      </div>
-      <RowMetric label="Size" value={row.size} />
-      <RowMetric label="Total Stock" value={row.stockLabel} />
-      <RowMetric label="Per Box" value={row.perBox} />
-      <RowMetric label="Total Pieces" value={row.totalPieces} />
-      <RowMetric label="Location" value={row.location} />
-      <div>
-        <p className="mb-1 text-xs text-zinc-500 md:hidden">Status</p>
-        <StatusBadge status={row.status} />
-      </div>
-      {canDelete ? (
-        <div className="flex justify-end">
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 font-medium text-zinc-700">{row.size}</td>
+      <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-zinc-950">{row.stockLabel}</td>
+      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.perBox}</td>
+      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.totalPieces}</td>
+      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.location}</td>
+      <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={row.status} /></td>
+      <td className="whitespace-nowrap px-4 py-3 text-right">
+        {canDelete ? (
           <button
-            className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50 transition"
+            className="inline-grid h-8 w-8 place-items-center rounded-lg text-red-600 transition hover:bg-red-50"
             title="Delete item"
             type="button"
             onClick={() => onDelete(row)}
           >
             <Trash2 className="h-4 w-4" />
           </button>
-        </div>
-      ) : null}
-    </div>
+        ) : (
+          <span className="text-xs text-zinc-400">-</span>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -930,7 +1001,10 @@ function sizeFor(row: LiveStockRow, type: string) {
 
 function perBoxFallback(row: LiveStockRow, type: string) {
   if (type === "Bottom" && row.total_rolls) return `${formatNumber(row.total_rolls)} rolls`;
-  if (type === "Blank") return "kg stock";
+  if (type === "Bottom") return "30 rolls";
+  if (type === "Blank") return "20 kg";
+  if (type === "Carton Box") return "1 box";
+  if (type === "Polybag") return "1 packet";
   return "-";
 }
 
