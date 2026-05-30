@@ -467,12 +467,12 @@ export default function SalesEntryPage() {
       </header>
 
       {/* ── Invoice Type Toggle Tabs ────────────────────────────────────────── */}
-      <div className="flex gap-0 rounded-xl border border-zinc-200 bg-zinc-50 p-1 shadow-sm w-fit">
+      <div className="flex gap-0 rounded-xl border border-zinc-200 bg-zinc-50 p-1 shadow-sm w-fit flex-wrap">
         <button
           type="button"
           onClick={() => setForm({ ...form, legal_invoice_type: "bill_of_supply" })}
           className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
-            !isTaxInvoice
+            !isTaxInvoice && !isSimpleInvoice
               ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-zinc-200"
               : "text-zinc-500 hover:text-zinc-800"
           }`}
@@ -492,6 +492,18 @@ export default function SalesEntryPage() {
           <FileText className="h-4 w-4" />
           Tax Invoice (GST)
         </button>
+        <button
+          type="button"
+          onClick={() => setForm({ ...form, legal_invoice_type: "BILL_OF_SUPPLY_SIMPLE" })}
+          className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
+            isSimpleInvoice
+              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-zinc-200"
+              : "text-zinc-500 hover:text-zinc-800"
+          }`}
+        >
+          <ReceiptText className="h-4 w-4" />
+          Bill of Supply Simple
+        </button>
       </div>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
@@ -501,10 +513,14 @@ export default function SalesEntryPage() {
           </span>
           <div>
             <h2 className="text-lg font-semibold text-zinc-950">
-              {isTaxInvoice ? "Tax Invoice (B2B GST)" : "Bill of Supply"}
+              {isTaxInvoice ? "Tax Invoice (B2B GST)" : isSimpleInvoice ? "Bill of Supply Simple" : "Bill of Supply"}
             </h2>
             <p className="text-xs text-zinc-400 mt-0.5">
-              {isTaxInvoice ? "GST registered — CGST/SGST or IGST calculated automatically" : "Composition scheme / unregistered — no GST breakdown"}
+              {isTaxInvoice
+                ? "GST registered — CGST/SGST or IGST calculated automatically"
+                : isSimpleInvoice
+                ? "Manual entry — free-form goods description, no inventory lookup"
+                : "Composition scheme / unregistered — no GST breakdown"}
             </p>
           </div>
         </div>
@@ -571,69 +587,71 @@ export default function SalesEntryPage() {
           </div>
         )}
 
-        {/* ── Items Table ──────────────────────────────────────────────────── */}
-        <div className="mt-5 space-y-3">
-          {form.items.map((item, index) => (
-            <div
-              key={index}
-              className={`rounded-md border border-zinc-200 p-3 ${isTaxInvoice ? "grid gap-3 md:grid-cols-[1.4fr_1fr_0.55fr_0.55fr_0.55fr_0.55fr_0.5fr_0.65fr_auto]" : "grid gap-3 md:grid-cols-[1.5fr_0.75fr_0.75fr_0.75fr_0.65fr_0.75fr_auto]"}`}
-            >
-              <VariationField
-                item={item}
-                rows={inventoryRows}
-                onCustomChange={(value) => patchItem(index, {
-                  product_id: null,
-                  variety: value || "Plain White",
-                  packaging_size: value,
-                  packaging_size_name: value,
-                })}
-                onSelect={(stock) => patchItem(index, itemFromVariation(stock, item))}
-              />
-              {isTaxInvoice && (
-                <Field
-                  label="Product Description"
-                  value={item.description || ""}
-                  onChange={(description) => patchItem(index, { description })}
-                  placeholder="Optional item description"
+        {/* ── Items Table (standard tabs only) ─────────────────────────────── */}
+        {!isSimpleInvoice && (
+          <div className="mt-5 space-y-3">
+            {form.items.map((item, index) => (
+              <div
+                key={index}
+                className={`rounded-md border border-zinc-200 p-3 ${isTaxInvoice ? "grid gap-3 md:grid-cols-[1.4fr_1fr_0.55fr_0.55fr_0.55fr_0.55fr_0.5fr_0.65fr_auto]" : "grid gap-3 md:grid-cols-[1.5fr_0.75fr_0.75fr_0.75fr_0.65fr_0.75fr_auto]"}`}
+              >
+                <VariationField
+                  item={item}
+                  rows={inventoryRows}
+                  onCustomChange={(value) => patchItem(index, {
+                    product_id: null,
+                    variety: value || "Plain White",
+                    packaging_size: value,
+                    packaging_size_name: value,
+                  })}
+                  onSelect={(stock) => patchItem(index, itemFromVariation(stock, item))}
                 />
-              )}
-              {isTaxInvoice && (
-                <label className="block text-sm">
-                  <span className="font-medium text-zinc-700">HSN Code</span>
-                  <input
-                    className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    placeholder="Optional"
-                    type="text"
-                    value={item.hsn_code || ""}
-                    onChange={(e) => patchItem(index, { hsn_code: e.target.value })}
+                {isTaxInvoice && (
+                  <Field
+                    label="Product Description"
+                    value={item.description || ""}
+                    onChange={(description) => patchItem(index, { description })}
+                    placeholder="Optional item description"
                   />
-                </label>
-              )}
-              <NumberField label="Rate/packet" value={item.rate_per_packet} onChange={(rate_per_packet) => patchItem(index, { rate_per_packet })} />
-              <NumberField label="Packets/box" value={item.packets_per_box} onChange={(packets_per_box) => patchItem(index, { packets_per_box })} />
-              <NumberField label="Rate/box" value={item.rate_per_box} onChange={() => undefined} readOnly />
-              <NumberField label="Boxes" value={item.boxes_sold} onChange={(boxes_sold) => patchItem(index, { boxes_sold })} />
-              {isTaxInvoice && (
-                <label className="block text-sm">
-                  <span className="font-medium text-zinc-700">Tax %</span>
-                  <select
-                    className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    value={item.tax_rate ?? 18}
-                    onChange={(e) => patchItem(index, { tax_rate: Number(e.target.value) })}
-                  >
-                    {TAX_RATES.map((rate) => (
-                      <option key={rate} value={rate}>{rate}%</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <StockIndicator item={item} rows={inventoryRows} />
-              <button className="mt-auto grid h-10 w-10 place-items-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600" type="button" onClick={() => removeItem(index)}>
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-        </div>
+                )}
+                {isTaxInvoice && (
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">HSN Code</span>
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      placeholder="Optional"
+                      type="text"
+                      value={item.hsn_code || ""}
+                      onChange={(e) => patchItem(index, { hsn_code: e.target.value })}
+                    />
+                  </label>
+                )}
+                <NumberField label="Rate/packet" value={item.rate_per_packet} onChange={(rate_per_packet) => patchItem(index, { rate_per_packet })} />
+                <NumberField label="Packets/box" value={item.packets_per_box} onChange={(packets_per_box) => patchItem(index, { packets_per_box })} />
+                <NumberField label="Rate/box" value={item.rate_per_box} onChange={() => undefined} readOnly />
+                <NumberField label="Boxes" value={item.boxes_sold} onChange={(boxes_sold) => patchItem(index, { boxes_sold })} />
+                {isTaxInvoice && (
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">Tax %</span>
+                    <select
+                      className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      value={item.tax_rate ?? 18}
+                      onChange={(e) => patchItem(index, { tax_rate: Number(e.target.value) })}
+                    >
+                      {TAX_RATES.map((rate) => (
+                        <option key={rate} value={rate}>{rate}%</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <StockIndicator item={item} rows={inventoryRows} />
+                <button className="mt-auto grid h-10 w-10 place-items-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600" type="button" onClick={() => removeItem(index)}>
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* ── Tax Breakdown Card (Tax Invoice only) ────────────────────────── */}
         {isTaxInvoice && (
@@ -659,23 +677,116 @@ export default function SalesEntryPage() {
           </div>
         )}
 
-        {/* ── Bill of Supply Preview ───────────────────────────────────────── */}
-        {!isTaxInvoice && (
+        {/* ── Bill of Supply Preview (standard bill_of_supply only) ────────── */}
+        {!isTaxInvoice && !isSimpleInvoice && (
           <InvoicePreview customer={selectedCustomer} form={form} billTotal={taxCalc.subtotal} />
         )}
 
+        {/* ── Bill of Supply Simple — Manual Entry Form ────────────────────── */}
+        {isSimpleInvoice && (
+          <div className="mt-5 space-y-5">
+            {/* Read-only profile fields */}
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+              <p className="mb-3 text-xs font-bold uppercase tracking-widest text-zinc-500">Factory Details (Auto-Filled)</p>
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                <ReadonlyField label="Factory Name" value={profile?.factory_name || "Loading..."} />
+                <ReadonlyField label="GST Number" value={profile?.gst_number || "—"} />
+                <ReadonlyField label="Address" value={profile?.address || "—"} />
+                <ReadonlyField label="Mobile Number" value={profile?.mobile_number || "—"} />
+                <ReadonlyField label="Invoice Number" value={form.legal_invoice_number || "Auto"} />
+              </div>
+            </div>
+
+            {/* Manual entry fields */}
+            <div className="rounded-xl border border-zinc-200 bg-white p-4">
+              <p className="mb-3 text-xs font-bold uppercase tracking-widest text-zinc-500">Goods Details (Manual Entry)</p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="col-span-full block text-sm">
+                  <span className="font-medium text-zinc-700">Description of Goods <span className="text-red-500">*</span></span>
+                  <textarea
+                    className="mt-1 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 resize-none"
+                    rows={2}
+                    placeholder="Enter description of goods supplied..."
+                    value={simpleDesc}
+                    onChange={(e) => setSimpleDesc(e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-zinc-700">HSN Code</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                    type="text"
+                    placeholder="e.g. 3923"
+                    value={simpleHsn}
+                    onChange={(e) => setSimpleHsn(e.target.value)}
+                  />
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">Quantity <span className="text-red-500">*</span></span>
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={simpleQty === 0 ? "" : simpleQty}
+                      onChange={(e) => setSimpleQty(e.target.value === "" ? 0 : Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">Rate (₹) <span className="text-red-500">*</span></span>
+                    <input
+                      className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      type="number"
+                      min="0"
+                      placeholder="0.00"
+                      value={simpleRate === 0 ? "" : simpleRate}
+                      onChange={(e) => setSimpleRate(e.target.value === "" ? 0 : Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Live total calculation */}
+            <div className="rounded-xl border border-brand-200 bg-white shadow-sm overflow-hidden">
+              <div className="bg-brand-600 px-4 py-2">
+                <p className="text-xs font-bold uppercase tracking-widest text-white">Total Taxable Amount</p>
+              </div>
+              <div className="px-4 py-4 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-zinc-600">
+                    {simpleQty} × ₹{simpleRate} =
+                  </span>
+                  <span className="text-2xl font-extrabold text-brand-700">
+                    ₹{(simpleQty * simpleRate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+                {(simpleQty > 0 && simpleRate > 0) && (
+                  <p className="text-xs font-semibold text-zinc-500 italic">
+                    {numberToWords(Math.round(simpleQty * simpleRate))}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Footer Buttons ───────────────────────────────────────────────── */}
         <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700"
-            type="button"
-            onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], { ...emptyItem }) : { ...emptyItem }] })}
-          >
-            <Plus className="h-4 w-4" />
-            Add Product
-          </button>
+          {!isSimpleInvoice && (
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700"
+              type="button"
+              onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], { ...emptyItem }) : { ...emptyItem }] })}
+            >
+              <Plus className="h-4 w-4" />
+              Add Product
+            </button>
+          )}
           <button
             className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
-            disabled={isSaving || !selectedCustomer || hasInsufficientStock}
+            disabled={isSaving || !selectedCustomer || (!isSimpleInvoice && hasInsufficientStock)}
             type="button"
             onClick={submit}
           >
@@ -862,6 +973,17 @@ function NumberField({ label, value, onChange, readOnly = false }: { label: stri
       <span className="font-medium text-zinc-700">{label}</span>
       <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-50 disabled:text-zinc-600" disabled={readOnly} placeholder="0" type="number" value={value === 0 ? "" : value} onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))} />
     </label>
+  );
+}
+
+function ReadonlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <div className="mt-1 flex h-10 items-center rounded-md border border-zinc-200 bg-zinc-100 px-3 text-sm text-zinc-600 select-all cursor-default truncate">
+        {value}
+      </div>
+    </div>
   );
 }
 

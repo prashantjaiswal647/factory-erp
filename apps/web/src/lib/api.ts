@@ -395,7 +395,7 @@ export type DailySaleCreate = {
   date: string;
   customer_id: number;
   amount_paid: number;
-  legal_invoice_type: "tax_invoice" | "bill_of_supply";
+  legal_invoice_type: "tax_invoice" | "bill_of_supply" | "BILL_OF_SUPPLY_SIMPLE" | "bill_of_supply_simple";
   legal_invoice_number?: string | null;
   rough_bill_enabled: boolean;
   rough_bill_number?: string | null;
