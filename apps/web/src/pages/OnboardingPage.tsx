@@ -1,8 +1,8 @@
 import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog } from "../lib/api";
-import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog, setupDynamicMachine } from "../lib/api";
+import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
 import { EditMachineModal } from "../components/EditMachineModal";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
@@ -15,14 +15,17 @@ const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | n
 const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", box_quantity: 0, price_per_box: 0 };
 const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
 const machineDraft: MachineCreate = {
-  machine_type: "Paper Cup",
+  machine_type: "",
   machine_number: "",
-  mould_size_ml: 210,
-  bottom_size_mm: 68,
-  speed_per_minute: 55,
-  machine_name: ""
+  mould_size_ml: null,
+  bottom_size_mm: null,
+  speed_per_minute: 0,
+  machine_name: "",
+  default_speed: 0,
+  target_output_per_shift: 0,
+  raw_materials_mapped: [""],
+  is_active: true
 };
-type DynamicField = { label: string; value: string; source: "template" | "custom" };
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
@@ -43,8 +46,6 @@ export default function OnboardingPage() {
   });
   const [machine, setMachine] = useState<MachineCreate>(machineDraft);
   const [machines, setMachines] = useState<MachineCreate[]>([]);
-  const [machineTemplates, setMachineTemplates] = useState<MachineTemplateRecord[]>([]);
-  const [dynamicMachineFields, setDynamicMachineFields] = useState<DynamicField[]>([]);
   const [savedMachines, setSavedMachines] = useState<any[]>([]);
   const [editingMachine, setEditingMachine] = useState<any | null>(null);
   const [telemetryStates, setTelemetryStates] = useState<Record<number, {
@@ -87,7 +88,6 @@ export default function OnboardingPage() {
   useEffect(() => {
     void loadFinalProducts();
     void loadMachineUsage();
-    void loadMachineTemplates();
     void loadSavedMachines();
     
     async function loadFactoryProfile() {
@@ -117,10 +117,6 @@ export default function OnboardingPage() {
     }
   }
 
-  useEffect(() => {
-    applyTemplateFields(machine.machine_type);
-  }, [machineTemplates]);
-
   async function loadFinalProducts() {
     try {
       const response = await getFinalStockOptions();
@@ -147,30 +143,6 @@ export default function OnboardingPage() {
       console.error("Failed to load machine limits/usage:", err);
       setMachineUsage(null);
     }
-  }
-
-  async function loadMachineTemplates() {
-    try {
-      const templates = await listMachineTemplates();
-      setMachineTemplates(templates.filter((template) => template.status === "approved"));
-    } catch (err) {
-      console.error("Failed to load machine templates:", err);
-      setMachineTemplates([]);
-    }
-  }
-
-  function applyTemplateFields(machineType: MachineCreate["machine_type"]) {
-    const template = machineTemplates.find((item) => item.machine_type === machineType && item.status === "approved");
-    if (!template) {
-      setDynamicMachineFields([]);
-      return;
-    }
-    const fields = Object.keys({ ...template.base_config, ...template.custom_fields }).map((label) => ({
-      label,
-      value: "",
-      source: "template" as const
-    }));
-    setDynamicMachineFields(fields);
   }
 
   async function saveWorker() {
@@ -243,7 +215,7 @@ export default function OnboardingPage() {
   }
 
   async function saveMachines() {
-    if (machines.length === 0 && !machine.machine_number.trim()) return;
+    if (machines.length === 0 && !(machine.machine_name || machine.machine_type).trim()) return;
     const saveCount = machines.length ? machines.length : 1;
     if (machineUsage && machineUsage.used + saveCount > machineUsage.limit) {
       showUpgradeModal({
@@ -257,19 +229,22 @@ export default function OnboardingPage() {
     }
     setIsSaving(true);
     try {
-      await createMachines(machines.length ? machines : [machine]);
-      if (dynamicMachineFields.length > 0) {
-        await createMachineOnboarding({
-          machine_type: machine.machine_type,
-          base_config: {},
-          custom_fields: dynamicMachineFields.reduce<Record<string, string>>((acc, field) => {
-            if (field.label.trim()) acc[field.label.trim()] = field.value;
-            return acc;
-          }, {})
-        });
-      }
+      const saveList = machines.length ? machines : [machine];
+      await Promise.all(
+        saveList.map((entry) =>
+          setupDynamicMachine({
+            machine_name: (entry.machine_name || entry.machine_type).trim(),
+            default_speed: Number(entry.default_speed ?? entry.speed_per_minute ?? 0),
+            target_output_per_shift: Number(entry.target_output_per_shift ?? 0),
+            raw_materials_mapped: (entry.raw_materials_mapped || []).map((item) => item.trim()).filter(Boolean),
+            is_active: entry.is_active ?? true
+          })
+        )
+      );
       setToast("Machines saved");
       setStep(2);
+      setMachines([]);
+      setMachine(machineDraft);
       await loadMachineUsage();
       await loadSavedMachines();
     } catch (caught) {
@@ -684,59 +659,57 @@ export default function OnboardingPage() {
                 : `Machine usage: ${machineUsage.used}/${machineUsage.limit}`}
             </div>
           ) : null}
-          <div className="grid gap-3 md:grid-cols-6">
-            <TextInput label="Machine no." value={machine.machine_number} onChange={(machine_number) => setMachine({ ...machine, machine_number })} />
-            <SelectInput label="Type" value={machine.machine_type} options={["Paper Cup", "Dona", "Paper Bag"]} onChange={(machine_type) => {
-              const nextType = machine_type as MachineCreate["machine_type"];
-              setMachine({ ...machine, machine_type: nextType });
-              applyTemplateFields(nextType);
-            }} />
-            <TextInput label="Machine Name (Optional)" placeholder="e.g., 100ml-Coffee-A" value={machine.machine_name || ""} onChange={(machine_name) => setMachine({ ...machine, machine_name })} />
-            <NumberInput label="Mould ml" value={machine.mould_size_ml} onChange={(mould_size_ml) => setMachine({ ...machine, mould_size_ml })} />
-            <NumberInput label="Bottom mm" value={machine.bottom_size_mm} onChange={(bottom_size_mm) => setMachine({ ...machine, bottom_size_mm })} />
-            <NumberInput label="Designed Optimal Speed (RPM)" value={machine.speed_per_minute} onChange={(speed_per_minute) => setMachine({ ...machine, speed_per_minute })} />
+          <div className="grid gap-3 md:grid-cols-3">
+            <TextInput
+              label="Machine Name / Custom Type"
+              placeholder="e.g., Hydraulic Plate Press"
+              value={machine.machine_name || machine.machine_type}
+              onChange={(machine_name) => setMachine({ ...machine, machine_name, machine_type: machine_name })}
+            />
+            <NumberInput
+              label="Default Operating Speed"
+              value={Number(machine.default_speed ?? machine.speed_per_minute ?? 0)}
+              onChange={(default_speed) => setMachine({ ...machine, default_speed, speed_per_minute: default_speed })}
+            />
+            <NumberInput
+              label="Target Output / Shift"
+              value={Number(machine.target_output_per_shift ?? 0)}
+              onChange={(target_output_per_shift) => setMachine({ ...machine, target_output_per_shift })}
+            />
           </div>
           <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-zinc-800">Template Fields</p>
-                <p className="mt-1 text-xs text-zinc-500">Fields load from approved machine templates. Add extra parameters when needed.</p>
+                <p className="text-sm font-semibold text-zinc-800">Raw Materials Mapped</p>
+                <p className="mt-1 text-xs text-zinc-500">Add every material this machine can consume in production.</p>
               </div>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700"
                 type="button"
-                onClick={() => setDynamicMachineFields([...dynamicMachineFields, { label: "", value: "", source: "custom" }])}
+                onClick={() => setMachine({ ...machine, raw_materials_mapped: [...(machine.raw_materials_mapped || []), ""] })}
               >
                 <Plus className="h-3.5 w-3.5" />
-                Add Custom Field
+                Add Material
               </button>
             </div>
-            {dynamicMachineFields.length > 0 ? (
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {dynamicMachineFields.map((field, index) => (
-                  <div key={`${field.source}-${field.label}-${index}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                    <input
-                      className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                      placeholder="Label"
-                      value={field.label}
-                      readOnly={field.source === "template"}
-                      onChange={(event) => setDynamicMachineFields(dynamicMachineFields.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
-                    />
-                    <input
-                      className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                      placeholder="Value"
-                      value={field.value}
-                      onChange={(event) => setDynamicMachineFields(dynamicMachineFields.map((item, itemIndex) => itemIndex === index ? { ...item, value: event.target.value } : item))}
-                    />
-                    <button className="grid h-10 w-10 place-items-center rounded-md border border-zinc-200 text-zinc-500 hover:text-red-600" type="button" onClick={() => setDynamicMachineFields(dynamicMachineFields.filter((_, itemIndex) => itemIndex !== index))}>
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-4 text-sm text-zinc-500">No approved template fields found for this machine type yet.</p>
-            )}
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {(machine.raw_materials_mapped || [""]).map((material, index) => (
+                <div key={`material-${index}`} className="grid grid-cols-[1fr_auto] gap-2">
+                  <input
+                    className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                    placeholder="e.g., Bottom Reel, PE Paper Blank"
+                    value={material}
+                    onChange={(event) => setMachine({
+                      ...machine,
+                      raw_materials_mapped: (machine.raw_materials_mapped || [""]).map((item, itemIndex) => itemIndex === index ? event.target.value : item)
+                    })}
+                  />
+                  <button className="grid h-10 w-10 place-items-center rounded-md border border-zinc-200 text-zinc-500 hover:text-red-600" type="button" onClick={() => setMachine({ ...machine, raw_materials_mapped: (machine.raw_materials_mapped || []).filter((_, itemIndex) => itemIndex !== index) })}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="mt-4 flex gap-2">
             <button
@@ -745,7 +718,7 @@ export default function OnboardingPage() {
               disabled={machineUsage ? machineUsage.used + machines.length >= machineUsage.limit : false}
               title={machineUsage && machineUsage.used + machines.length >= machineUsage.limit ? "Machine limit reached" : "Add row"}
               onClick={() => {
-                if (!machine.machine_number.trim()) return;
+                if (!(machine.machine_name || machine.machine_type).trim()) return;
                 if (machineUsage && machineUsage.used + machines.length >= machineUsage.limit) {
                   showUpgradeModal({
                      code: "UPGRADE_REQUIRED",
@@ -757,7 +730,7 @@ export default function OnboardingPage() {
                   return;
                 }
                 setMachines([...machines, machine]);
-                setMachine({ ...machineDraft, machine_number: "" });
+                setMachine(machineDraft);
               }}
             >
               <Plus className="h-4 w-4" />
@@ -765,15 +738,17 @@ export default function OnboardingPage() {
             </button>
             <SaveButton label="Save Machines" isSaving={isSaving} disabled={Boolean(machineUsage?.limit_reached)} onClick={saveMachines} />
           </div>
-          <List rows={machines.map((row) => `${row.machine_number}${row.machine_name ? ` (${row.machine_name})` : ""} / ${row.mould_size_ml}ml / ${row.speed_per_minute} per min`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
+          <List rows={machines.map((row) => `${row.machine_name || row.machine_type} / ${row.default_speed || row.speed_per_minute || 0} speed / ${(row.raw_materials_mapped || []).filter(Boolean).join(", ") || "No materials mapped"}`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
 
           {savedMachines.length > 0 && (
             <div className="mt-6 border-t border-zinc-100 pt-6">
               <h3 className="text-sm font-semibold text-zinc-950 mb-3">Saved Machines ({savedMachines.length})</h3>
               <div className="space-y-4">
                 {savedMachines.map((m) => {
-                  const optimalSpeed = m.speed_per_minute || 55;
-                  const expectedTarget = optimalSpeed * 60 * 8; // 8 hours expected output
+                  const machineLabel = m.machine_name || m.machine_type || m.machine_number || `Machine ${m.id}`;
+                  const mappedMaterials = (m.raw_materials_mapped || []).filter(Boolean);
+                  const optimalSpeed = m.default_speed || m.speed_per_minute || 0;
+                  const expectedTarget = m.target_output_per_shift || optimalSpeed * 60 * 8;
 
                   const state = telemetryStates[m.id] || {
                     status: "Running",
@@ -795,16 +770,15 @@ export default function OnboardingPage() {
                       <div className="flex items-center justify-between text-sm">
                         <div className="flex flex-col">
                           <span className="font-semibold text-zinc-800 flex items-center gap-2">
-                            {m.machine_number || m.machine_sequence_number || `Machine ${m.id}`}
-                            {m.machine_name ? ` (${m.machine_name})` : ""}
+                            {machineLabel}
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              state.status === "Running" ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                              m.is_active === false ? "bg-red-100 text-red-800" : state.status === "Running" ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
                             }`}>
-                              {state.status}
+                              {m.is_active === false ? "Inactive" : state.status}
                             </span>
                           </span>
                           <span className="text-xs text-zinc-500 mt-1">
-                            Type: {m.machine_type} | Mould: {state.activeMould}ml | Speed: {currentSpeedRPM} RPM | OEE: {oeeScore}%
+                            Speed: {optimalSpeed} | Target/shift: {expectedTarget} | Materials: {mappedMaterials.join(", ") || "Not mapped"} | OEE: {oeeScore}%
                           </span>
                         </div>
                         <div className="flex items-center gap-2">

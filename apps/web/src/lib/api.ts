@@ -81,12 +81,29 @@ export type WorkerCreate = {
 };
 
 export type MachineCreate = {
-  machine_type: "Paper Cup" | "Dona" | "Paper Bag";
+  machine_type: string;
   machine_number: string;
-  mould_size_ml: number;
-  bottom_size_mm: number;
+  mould_size_ml?: number | null;
+  bottom_size_mm?: number | null;
   speed_per_minute: number;
   machine_name?: string;
+  default_speed?: number;
+  target_output_per_shift?: number;
+  raw_materials_mapped?: string[];
+  is_active?: boolean;
+};
+
+export type DynamicMachineSetupPayload = {
+  machine_name: string;
+  default_speed: number;
+  target_output_per_shift: number;
+  raw_materials_mapped: string[];
+  is_active?: boolean;
+};
+
+export type DynamicMachineSetupRecord = DynamicMachineSetupPayload & {
+  id: number;
+  factory_id: number;
 };
 
 export type MachineLimitUsage = {
@@ -143,6 +160,16 @@ export async function listMachineTemplates() {
 
 export async function getMachineTemplate(templateId: number) {
   const response = await api.get<MachineTemplateRecord>(`/api/templates/${templateId}`);
+  return response.data;
+}
+
+export async function setupDynamicMachine(payload: DynamicMachineSetupPayload) {
+  const response = await api.post<DynamicMachineSetupRecord>("/api/machines/setup", payload);
+  return response.data;
+}
+
+export async function listActiveMachines() {
+  const response = await api.get<DynamicMachineSetupRecord[]>("/api/machines/active");
   return response.data;
 }
 
@@ -546,6 +573,11 @@ export type OnboardingOverview = {
     mould_size_ml: number | null;
     bottom_size_mm: number | null;
     speed_per_minute: number;
+    machine_name?: string | null;
+    default_speed?: number;
+    target_output_per_shift?: number;
+    raw_materials_mapped?: string[];
+    is_active?: boolean;
   }>;
   raw_material_metrics: Array<{
     id: number;
@@ -795,9 +827,9 @@ export function createMachines(machines: MachineCreate[]) {
   return api.post("/api/onboarding/step2/machines", {
     machines: machines.map((machine) => ({
       machine_sequence_number: machine.machine_number,
-      name: machine.machine_number,
-      cup_size_ml: machine.mould_size_ml,
-      bottom_size_mm: machine.bottom_size_mm,
+      name: machine.machine_name || machine.machine_type || machine.machine_number,
+      cup_size_ml: machine.mould_size_ml || 1,
+      bottom_size_mm: machine.bottom_size_mm || 1,
       speed_cups_per_minute: machine.speed_per_minute,
       can_swap_moulds: false
     }))

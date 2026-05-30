@@ -247,21 +247,29 @@ class FactoryInfoResponse(BaseModel):
 
 
 class MachineCreate(BaseModel):
-    machine_type: str = Field(..., pattern="^(Paper Cup|Dona|Paper Bag)$")
+    machine_type: str = Field(..., min_length=1, max_length=255)
     machine_number: str = Field(..., min_length=1, max_length=50)
-    mould_size_ml: int = Field(..., gt=0)
-    bottom_size_mm: int = Field(..., gt=0)
+    mould_size_ml: Optional[int] = Field(default=None, gt=0)
+    bottom_size_mm: Optional[int] = Field(default=None, gt=0)
     speed_per_minute: int = Field(..., ge=0)
     machine_name: Optional[str] = Field(default=None, max_length=255)
+    default_speed: Optional[float] = Field(default=None, ge=0)
+    target_output_per_shift: Optional[int] = Field(default=0, ge=0)
+    raw_materials_mapped: List[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class MachineUpdate(BaseModel):
-    machine_type: Optional[str] = Field(default=None, pattern="^(Paper Cup|Dona|Paper Bag)$")
+    machine_type: Optional[str] = Field(default=None, min_length=1, max_length=255)
     machine_number: Optional[str] = Field(default=None, min_length=1, max_length=50)
     mould_size_ml: Optional[int] = Field(default=None, gt=0)
     bottom_size_mm: Optional[int] = Field(default=None, gt=0)
     speed_per_minute: Optional[int] = Field(default=None, ge=0)
     machine_name: Optional[str] = Field(default=None, max_length=255)
+    default_speed: Optional[float] = Field(default=None, ge=0)
+    target_output_per_shift: Optional[int] = Field(default=None, ge=0)
+    raw_materials_mapped: Optional[List[str]] = None
+    is_active: Optional[bool] = None
 
 
 class MachineResponse(BaseModel):
@@ -275,6 +283,10 @@ class MachineResponse(BaseModel):
     bottom_size_mm: Optional[int] = None
     speed_per_minute: int
     machine_name: Optional[str] = None
+    default_speed: float = 0
+    target_output_per_shift: int = 0
+    raw_materials_mapped: List[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class BlankBatchInput(BaseModel):

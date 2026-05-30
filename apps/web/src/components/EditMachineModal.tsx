@@ -6,11 +6,14 @@ type EditableMachine = {
   id: number;
   machine_number?: string | null;
   machine_sequence_number?: string | null;
-  machine_type?: "Paper Cup" | "Dona" | "Paper Bag" | string;
+  machine_type?: string;
   mould_size_ml?: number | null;
   bottom_size_mm?: number | null;
   speed_per_minute?: number | null;
   machine_name?: string | null;
+  default_speed?: number | null;
+  target_output_per_shift?: number | null;
+  raw_materials_mapped?: string[];
 };
 
 export function EditMachineModal({
@@ -23,39 +26,41 @@ export function EditMachineModal({
   onSaved: () => Promise<void> | void;
 }) {
   const [machineNumber, setMachineNumber] = useState(machine.machine_number || machine.machine_sequence_number || "");
-  const [machineType, setMachineType] = useState(machine.machine_type || "Paper Cup");
+  const [machineType, setMachineType] = useState(machine.machine_type || machine.machine_name || "");
   const [mouldSizeMl, setMouldSizeMl] = useState(String(machine.mould_size_ml || ""));
   const [bottomSizeMm, setBottomSizeMm] = useState(String(machine.bottom_size_mm || ""));
-  const [speedPerMinute, setSpeedPerMinute] = useState(String(machine.speed_per_minute || ""));
+  const [speedPerMinute, setSpeedPerMinute] = useState(String(machine.default_speed || machine.speed_per_minute || ""));
   const [machineName, setMachineName] = useState(machine.machine_name || "");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     setMachineNumber(machine.machine_number || machine.machine_sequence_number || "");
-    setMachineType(machine.machine_type || "Paper Cup");
+    setMachineType(machine.machine_type || machine.machine_name || "");
     setMouldSizeMl(String(machine.mould_size_ml || ""));
     setBottomSizeMm(String(machine.bottom_size_mm || ""));
-    setSpeedPerMinute(String(machine.speed_per_minute || ""));
+    setSpeedPerMinute(String(machine.default_speed || machine.speed_per_minute || ""));
     setMachineName(machine.machine_name || "");
     setError("");
   }, [machine]);
 
   async function handleSubmit() {
-    if (!machineNumber.trim()) {
-      setError("Machine number is required");
+    const normalizedName = (machineName || machineType).trim();
+    if (!normalizedName) {
+      setError("Machine name is required");
       return;
     }
     setIsSaving(true);
     setError("");
     try {
       await updateMachine(machine.id, {
-        machine_number: machineNumber.trim(),
-        machine_type: machineType as "Paper Cup" | "Dona" | "Paper Bag",
-        mould_size_ml: Number(mouldSizeMl || 0),
-        bottom_size_mm: Number(bottomSizeMm || 0),
+        machine_number: machineNumber.trim() || undefined,
+        machine_type: machineType.trim() || normalizedName,
+        mould_size_ml: mouldSizeMl ? Number(mouldSizeMl) : undefined,
+        bottom_size_mm: bottomSizeMm ? Number(bottomSizeMm) : undefined,
         speed_per_minute: Number(speedPerMinute || 0),
-        machine_name: machineName.trim() || undefined
+        default_speed: Number(speedPerMinute || 0),
+        machine_name: normalizedName
       });
       await onSaved();
       onClose();
@@ -75,22 +80,8 @@ export function EditMachineModal({
           <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 text-sm font-semibold hover:bg-zinc-50" type="button" onClick={onClose}>✕</button>
         </div>
         <div className="grid gap-4">
-          <Field label="Machine No." value={machineNumber} onChange={setMachineNumber} />
-          
-          <label className="grid gap-1 text-sm font-medium text-zinc-700">
-            Type
-            <select 
-              className="h-10 rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-              value={machineType}
-              onChange={(e) => setMachineType(e.target.value)}
-            >
-              <option value="Paper Cup">Paper Cup</option>
-              <option value="Dona">Dona</option>
-              <option value="Paper Bag">Paper Bag</option>
-            </select>
-          </label>
-
-          <Field label="Machine Name (Optional)" value={machineName} onChange={setMachineName} placeholder="e.g., 100ml-Coffee-A" />
+          <Field label="Machine No. (Optional)" value={machineNumber} onChange={setMachineNumber} />
+          <Field label="Machine Name / Custom Type" value={machineName} onChange={(value) => { setMachineName(value); setMachineType(value); }} placeholder="e.g., Hydraulic Plate Press" />
           <Field label="Mould Size (ml)" value={mouldSizeMl} onChange={setMouldSizeMl} type="number" />
           <Field label="Bottom Size (mm)" value={bottomSizeMm} onChange={setBottomSizeMm} type="number" />
           <Field label="Speed per Minute" value={speedPerMinute} onChange={setSpeedPerMinute} type="number" />

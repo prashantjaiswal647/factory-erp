@@ -188,6 +188,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(expenses.router)
     application.include_router(integrations.router)
     application.include_router(machine_onboarding.router)
+    application.include_router(machine_onboarding.machines_router)
     application.include_router(machine_templates.router)
     #application.include_router(ai_invoice_router)
     #application.include_router(internal_automation_router)
@@ -761,6 +762,17 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_created ON invoice_documents(factory_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_date ON invoice_documents(factory_id, invoice_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_customer_id ON invoice_documents(customer_id)",
+        "ALTER TABLE machines DROP CONSTRAINT IF EXISTS ck_machines_machine_type",
+        "ALTER TABLE machines ALTER COLUMN machine_type TYPE VARCHAR(255)",
+        "ALTER TABLE machines ALTER COLUMN machine_type SET DEFAULT 'Custom Machine'",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS machine_name VARCHAR(255)",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS default_speed DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS target_output_per_shift INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS raw_materials_mapped JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE machines ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        "UPDATE machines SET machine_name = COALESCE(NULLIF(machine_name, ''), NULLIF(machine_type, ''), name) WHERE machine_name IS NULL OR trim(machine_name) = ''",
+        "UPDATE machines SET default_speed = COALESCE(NULLIF(default_speed, 0), NULLIF(speed_per_minute, 0), NULLIF(speed_cups_per_minute, 0), NULLIF(speed_bpm, 0), 0)",
+        "CREATE INDEX IF NOT EXISTS idx_machines_factory_active ON machines(factory_id, is_active)",
         "ALTER TABLE customers DROP CONSTRAINT IF EXISTS uq_customers_factory_name",
         "DROP INDEX IF EXISTS uq_customers_factory_name",
         "CREATE TABLE IF NOT EXISTS outstanding_bills (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, customer_id INTEGER NOT NULL REFERENCES customers(id), order_id INTEGER NULL REFERENCES orders(id), invoice_document_id INTEGER NULL REFERENCES invoice_documents(id), source_type VARCHAR(50) NOT NULL DEFAULT 'invoice', tracking_number VARCHAR(100) NOT NULL, bill_date DATE NOT NULL DEFAULT CURRENT_DATE, bill_amount NUMERIC(14,2) NOT NULL DEFAULT 0, amount_paid NUMERIC(14,2) NOT NULL DEFAULT 0, balance_amount NUMERIC(14,2) NOT NULL DEFAULT 0, status VARCHAR(50) NOT NULL DEFAULT 'active', created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT uq_outstanding_bills_factory_tracking UNIQUE (factory_id, tracking_number), CONSTRAINT ck_outstanding_bills_bill_amount_non_negative CHECK (bill_amount >= 0), CONSTRAINT ck_outstanding_bills_amount_paid_non_negative CHECK (amount_paid >= 0), CONSTRAINT ck_outstanding_bills_balance_amount_non_negative CHECK (balance_amount >= 0))",

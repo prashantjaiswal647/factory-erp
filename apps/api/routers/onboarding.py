@@ -109,6 +109,11 @@ class OnboardingMachineSummary(BaseModel):
     mould_size_ml: Optional[int] = None
     bottom_size_mm: Optional[int] = None
     speed_per_minute: int
+    machine_name: Optional[str] = None
+    default_speed: float = 0
+    target_output_per_shift: int = 0
+    raw_materials_mapped: List[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class OnboardingRawMetricSummary(BaseModel):
@@ -169,11 +174,16 @@ def _machine_summary(machine: Machine) -> dict:
     machine_number = machine.machine_number or machine.machine_sequence_number or machine.name or f"M-{machine.id}"
     return {
         "id": machine.id,
-        "machine_type": machine.machine_type or machine.machine_name or machine.name or "Paper Cup Machine",
+        "machine_type": machine.machine_type or machine.machine_name or machine.name or "Custom Machine",
         "machine_number": machine_number,
         "mould_size_ml": machine.mould_size_ml or machine.cup_size_ml or machine.current_mould_size,
         "bottom_size_mm": machine.bottom_size_mm or machine.bottom_size or machine.current_bottom_size,
         "speed_per_minute": int(machine.speed_per_minute or machine.speed_cups_per_minute or machine.speed_bpm or 0),
+        "machine_name": machine.machine_name or machine.machine_type or machine.name,
+        "default_speed": float(machine.default_speed or machine.speed_per_minute or machine.speed_cups_per_minute or machine.speed_bpm or 0),
+        "target_output_per_shift": int(machine.target_output_per_shift or 0),
+        "raw_materials_mapped": machine.raw_materials_mapped or [],
+        "is_active": bool(machine.is_active),
     }
 
 
@@ -1182,12 +1192,15 @@ def onboarding_step2_machines(
         machine = Machine(
             factory_id=factory_id,
             name=item.name or seq,
+            machine_name=item.name or seq,
+            machine_type=item.name or "Custom Machine",
             machine_sequence_number=seq,
             cup_size_ml=item.cup_size_ml,
             bottom_size_mm=item.bottom_size_mm,
             speed_cups_per_minute=item.speed_cups_per_minute,
             speed_per_minute=item.speed_cups_per_minute,
             speed_bpm=item.speed_cups_per_minute,
+            default_speed=float(item.speed_cups_per_minute or 0),
             can_swap_moulds=item.can_swap_moulds,
         )
         db.add(machine)

@@ -112,6 +112,9 @@ def create_machine(
     factory_id = current_user.factory_id
     check_machine_limit(factory_id, db)
     machine_number = normalize_name(payload.machine_number).upper()
+    machine_name = normalize_name(payload.machine_name or payload.machine_type)
+    default_speed = float(payload.default_speed if payload.default_speed is not None else payload.speed_per_minute)
+    mapped_materials = [item.strip() for item in payload.raw_materials_mapped if item and item.strip()]
     existing = (
         db.query(Machine)
         .filter(Machine.factory_id == factory_id)
@@ -133,7 +136,11 @@ def create_machine(
         speed_per_minute=payload.speed_per_minute,
         speed_bpm=payload.speed_per_minute,
         speed_cups_per_minute=payload.speed_per_minute,
-        machine_name=payload.machine_name,
+        default_speed=default_speed,
+        target_output_per_shift=payload.target_output_per_shift or 0,
+        raw_materials_mapped=mapped_materials,
+        is_active=payload.is_active,
+        machine_name=machine_name,
     )
     db.add(machine)
     _log_onboarding_change(db, int(factory_id), "Added", machine.machine_name or machine.machine_number or machine.name)
@@ -201,8 +208,16 @@ def update_machine(
         machine.speed_per_minute = payload.speed_per_minute
         machine.speed_bpm = payload.speed_per_minute
         machine.speed_cups_per_minute = payload.speed_per_minute
+    if payload.default_speed is not None:
+        machine.default_speed = payload.default_speed
+    if payload.target_output_per_shift is not None:
+        machine.target_output_per_shift = payload.target_output_per_shift
+    if payload.raw_materials_mapped is not None:
+        machine.raw_materials_mapped = [item.strip() for item in payload.raw_materials_mapped if item and item.strip()]
+    if payload.is_active is not None:
+        machine.is_active = payload.is_active
     if payload.machine_name is not None or "machine_name" in payload.model_fields_set:
-        machine.machine_name = payload.machine_name
+        machine.machine_name = normalize_name(payload.machine_name) if payload.machine_name else None
 
     _log_onboarding_change(db, int(factory_id), "Updated", machine.machine_name or machine.machine_number or machine.name)
     

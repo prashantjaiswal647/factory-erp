@@ -16,7 +16,7 @@ from sqlalchemy import (
     Index,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import relationship
 
 from db import Base
@@ -252,13 +252,23 @@ class Machine(TenantMixin, Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
-    machine_type = Column(String(50), nullable=False, default="Paper Cup", server_default="Paper Cup", index=True)
+    machine_type = Column(String(255), nullable=False, default="Custom Machine", server_default="Custom Machine", index=True)
+    machine_name = Column(String(255), nullable=True, index=True)
     machine_number = Column(String(50), nullable=True, index=True)
     mould_size_ml = Column(Integer, nullable=True, index=True)
     machine_sequence_number = Column(String(50), nullable=True, index=True)
     speed_per_minute = Column(Integer, nullable=False, default=0, server_default="0")
     speed_bpm = Column(Integer, nullable=False, default=0, server_default="0")
     speed_cups_per_minute = Column(Integer, nullable=False, default=0, server_default="0")
+    default_speed = Column(Float, nullable=False, default=0, server_default="0")
+    target_output_per_shift = Column(Integer, nullable=False, default=0, server_default="0")
+    raw_materials_mapped = Column(
+        MutableList.as_mutable(JSON().with_variant(JSONB, "postgresql")),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
     cup_size_ml = Column(Integer, nullable=True, index=True)
     bottom_size_mm = Column(Integer, nullable=True, index=True)
     default_mould_size = Column(String(100), nullable=True)
@@ -268,7 +278,6 @@ class Machine(TenantMixin, Base):
     can_swap_moulds = Column(Boolean, nullable=False, default=False, server_default="false")
 
     __table_args__ = (
-        CheckConstraint("machine_type IN ('Paper Cup', 'Dona', 'Paper Bag')", name="ck_machines_machine_type"),
         CheckConstraint("mould_size_ml IS NULL OR mould_size_ml > 0", name="ck_machines_mould_size_positive"),
         CheckConstraint("speed_per_minute >= 0", name="ck_machines_speed_non_negative"),
         CheckConstraint("speed_bpm >= 0", name="ck_machines_speed_bpm_non_negative"),
