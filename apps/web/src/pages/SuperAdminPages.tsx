@@ -142,8 +142,12 @@ export function SuperAdminLoginPage() {
   const { token, save } = useAdminToken();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => sessionStorage.getItem("munshi_super_admin_auth_error") || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    sessionStorage.removeItem("munshi_super_admin_auth_error");
+  }, []);
 
   if (token) return <Navigate to="/munshi-control-room/dashboard" replace />;
 
@@ -153,7 +157,9 @@ export function SuperAdminLoginPage() {
     setIsSubmitting(true);
     try {
       const response = await superAdminApi.post<{ access_token: string }>("/api/super-admin/login", { email, password });
-      save(response.data.access_token);
+      const nextToken = response.data.access_token;
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
+      save(nextToken);
       navigate("/munshi-control-room/dashboard", { replace: true });
     } catch {
       setError("Invalid super admin credentials.");
@@ -192,8 +198,40 @@ export function SuperAdminLoginPage() {
 }
 
 export function SuperAdminRoute() {
-  const { token } = useAdminToken();
+  const { token, clear } = useAdminToken();
+  const [isChecking, setChecking] = useState(Boolean(token));
+
+  useEffect(() => {
+    let active = true;
+    if (!token) {
+      setChecking(false);
+      return;
+    }
+    async function verifyToken() {
+      try {
+        await superAdminApi.get("/api/super-admin/me");
+        if (active) setChecking(false);
+      } catch {
+        if (!active) return;
+        clear();
+        sessionStorage.setItem("munshi_super_admin_auth_error", "Session expired, please login again.");
+        setChecking(false);
+      }
+    }
+    void verifyToken();
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
   if (!token) return <Navigate to="/munshi-control-room" replace />;
+  if (isChecking) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-zinc-100 px-4 text-sm font-bold text-zinc-700">
+        Checking control room session...
+      </main>
+    );
+  }
   return <SuperAdminShell />;
 }
 

@@ -80,6 +80,7 @@ class Factory(Base):
     address_place = Column(String(255), nullable=True)
     initial_invoice_number = Column(Integer, default=1, server_default="1")
     current_invoice_counter = Column(Integer, default=1, server_default="1")
+    invoice_prefix = Column(String(50), nullable=False, default="INV-", server_default="INV-")
     advance_payment_discount_percentage = Column(Numeric(5, 2), nullable=False, default=2.00, server_default="2.00")
 
     users = relationship("User", back_populates="factory", foreign_keys="User.factory_id")
@@ -100,6 +101,20 @@ class FactoryAutomationSheet(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now(), index=True)
 
     factory = relationship("Factory", backref="automation_sheets")
+
+
+class RecycledInvoice(Base):
+    __tablename__ = "recycled_invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id", ondelete="CASCADE"), nullable=False, index=True)
+    recycled_number = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "recycled_number", name="uq_recycled_invoices_factory_number"),
+        CheckConstraint("recycled_number > 0", name="ck_recycled_invoices_number_positive"),
+    )
 
 
 class CustomPlanEnquiry(Base):
@@ -988,6 +1003,17 @@ class InvoiceDocument(TenantMixin, Base):
     amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     customer_total_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     status = Column(String(50), nullable=False, default="created", server_default="created", index=True)
+    buyer_gstin = Column(String(50), nullable=True)
+    hsn_code = Column(String(50), nullable=True)
+    transport_mode = Column(String(100), nullable=True)
+    vehicle_number = Column(String(100), nullable=True)
+    state_code = Column(String(50), nullable=True)
+    place_of_supply = Column(String(150), nullable=True)
+    tax_rate = Column(Float, nullable=True)
+    total_taxable_value = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    total_cgst = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    total_sgst = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    total_igst = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     payload_json = Column(
         MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")),
         nullable=False,

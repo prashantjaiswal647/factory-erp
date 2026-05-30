@@ -10,6 +10,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import URLError
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.staticfiles import StaticFiles
@@ -68,6 +69,7 @@ from models import (
     HisabSettlement,
     AppUsageLog,
     InvoiceDocument,
+    RecycledInvoice,
     TokenUsageLog,
 )
 from routers.onboarding import router as onboarding_router, v1_router as onboarding_v1_router
@@ -104,6 +106,8 @@ def parse_cors_origins() -> List[str]:
         "http://127.0.0.1:5174",
         "http://localhost:5175",
         "http://127.0.0.1:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5176",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:4173",
@@ -678,9 +682,38 @@ def seed_default_users(db: Session):
         factory = Factory(name=factory_name)
         db.add(factory)
         db.flush()
+        print(f"AUTH SEED DEBUG: Created default factory id={factory.id}, name={factory_name!r}")
     owner_pw = os.getenv("DEFAULT_OWNER_PASSWORD") or "OwnerPass123"
     if get_user_by_username(db, "owner") is None:
         db.add(User(factory_id=factory.id, username="owner", password_hash=hash_password(owner_pw), role="Owner"))
+        print("AUTH SEED DEBUG: Created legacy default owner username='owner'")
+    admin_email = os.getenv("DEFAULT_ADMIN_EMAIL") or "admin@test.com"
+    admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD") or "admin123"
+    existing_users = db.query(User.id).limit(1).first()
+    existing_admin = (
+        get_user_by_username(db, admin_email)
+        or db.query(User).filter(sql_func.lower(User.email) == admin_email.lower()).first()
+    )
+    if existing_users is None or existing_admin is None:
+        if existing_admin is None:
+            db.add(
+                User(
+                    factory_id=factory.id,
+                    user_id=str(uuid4()),
+                    username=admin_email,
+                    email=admin_email,
+                    phone_number=None,
+                    phone_number_normalized=None,
+                    full_name="Default Admin",
+                    password_hash=hash_password(admin_password),
+                    role="Owner",
+                    is_verified=True,
+                    is_active=True,
+                )
+            )
+            print(f"AUTH SEED DEBUG: Created default admin login email={admin_email!r} password={admin_password!r}")
+        else:
+            print(f"AUTH SEED DEBUG: Default admin already exists email={admin_email!r}")
     db.commit()
 
 def verify_n8n_api_key(x_n8n_api_key: Optional[str] = Header(default=None)) -> None:
@@ -706,11 +739,25 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS address_place VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS initial_invoice_number INTEGER DEFAULT 1",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS current_invoice_counter INTEGER DEFAULT 1",
+        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS invoice_prefix VARCHAR(50) NOT NULL DEFAULT 'INV-'",
         f"INSERT INTO factories (name) VALUES ('{default_factory_name}') ON CONFLICT (name) DO NOTHING",
         "CREATE TABLE IF NOT EXISTS factory_automation_sheets (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, sheet_name VARCHAR(255) NOT NULL, sheet_type VARCHAR(50) NOT NULL DEFAULT 'cron_automation', google_sheet_url VARCHAR(500), google_sheet_id VARCHAR(255) NOT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW())",
         "CREATE INDEX IF NOT EXISTS idx_factory_automation_sheets_factory_id ON factory_automation_sheets(factory_id)",
         "CREATE INDEX IF NOT EXISTS idx_factory_automation_sheets_sheet_type ON factory_automation_sheets(sheet_type)",
+        "CREATE TABLE IF NOT EXISTS recycled_invoices (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, recycled_number INTEGER NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT uq_recycled_invoices_factory_number UNIQUE (factory_id, recycled_number), CONSTRAINT ck_recycled_invoices_number_positive CHECK (recycled_number > 0))",
+        "CREATE INDEX IF NOT EXISTS idx_recycled_invoices_factory_number ON recycled_invoices(factory_id, recycled_number)",
         "CREATE TABLE IF NOT EXISTS invoice_documents (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id), customer_id INTEGER NULL REFERENCES customers(id), order_id INTEGER NULL REFERENCES orders(id), invoice_number VARCHAR(100) NOT NULL, invoice_date DATE NOT NULL, customer_name VARCHAR(255) NOT NULL, customer_phone VARCHAR(50), payment_method VARCHAR(50) NOT NULL DEFAULT 'Cash', bill_total NUMERIC(14,2) NOT NULL DEFAULT 0, amount_paid NUMERIC(14,2) NOT NULL DEFAULT 0, customer_total_due NUMERIC(14,2) NOT NULL DEFAULT 0, status VARCHAR(50) NOT NULL DEFAULT 'created', payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, pdf_generated_count INTEGER NOT NULL DEFAULT 0, last_pdf_generated_at TIMESTAMP WITH TIME ZONE NULL, created_by_user_id INTEGER NULL REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), CONSTRAINT uq_invoice_documents_factory_invoice_number UNIQUE (factory_id, invoice_number), CONSTRAINT ck_invoice_documents_bill_total_non_negative CHECK (bill_total >= 0), CONSTRAINT ck_invoice_documents_amount_paid_non_negative CHECK (amount_paid >= 0), CONSTRAINT ck_invoice_documents_due_non_negative CHECK (customer_total_due >= 0), CONSTRAINT ck_invoice_documents_pdf_count_non_negative CHECK (pdf_generated_count >= 0))",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS buyer_gstin VARCHAR(50)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(50)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS transport_mode VARCHAR(100)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS vehicle_number VARCHAR(100)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS state_code VARCHAR(50)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS place_of_supply VARCHAR(150)",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS tax_rate DOUBLE PRECISION",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS total_taxable_value NUMERIC(14,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS total_cgst NUMERIC(14,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS total_sgst NUMERIC(14,2) NOT NULL DEFAULT 0",
+        "ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS total_igst NUMERIC(14,2) NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_created ON invoice_documents(factory_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_factory_date ON invoice_documents(factory_id, invoice_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_invoice_documents_customer_id ON invoice_documents(customer_id)",
@@ -926,6 +973,14 @@ def on_startup():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/")
+def api_root():
+    return {"status": "ok", "service": "AI ERP API", "login_endpoint": "/api/auth/login"}
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 
 class CustomerVerificationRequest(BaseModel):
     store_token: str

@@ -20,7 +20,7 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
@@ -69,6 +69,110 @@ def effective_rate_per_box(item) -> Decimal:
     if rate_per_box > 0:
         return rate_per_box
     return to_money(to_money(item.rate_per_packet) * Decimal(item.packets_per_box or 0))
+
+
+def clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def gst_state_code(value: str | None) -> str | None:
+    cleaned = clean_optional_text(value)
+    if not cleaned or len(cleaned) < 2:
+        return None
+    return cleaned[:2].upper()
+
+
+def same_place_text(left: str | None, right: str | None) -> bool:
+    left_clean = (left or "").strip().lower()
+    right_clean = (right or "").strip().lower()
+    return bool(left_clean and right_clean and (left_clean in right_clean or right_clean in left_clean))
+
+
+def is_intra_state_supply(factory: Factory | None, buyer_gstin: str | None, place_of_supply: str | None) -> bool:
+    factory_gstin_code = gst_state_code(getattr(factory, "gst_number", None))
+    buyer_gstin_code = gst_state_code(buyer_gstin)
+    if factory_gstin_code and buyer_gstin_code:
+        return factory_gstin_code == buyer_gstin_code
+
+    supply_code = gst_state_code(place_of_supply)
+    if factory_gstin_code and supply_code and supply_code[:2].isdigit():
+        return factory_gstin_code == supply_code
+
+    factory_place = getattr(factory, "address_place", None) or getattr(factory, "address", None)
+    if place_of_supply and factory_place:
+        return same_place_text(place_of_supply, factory_place)
+
+    return True
+
+
+def allocate_invoice_number(db: Session, factory: Factory | None) -> str:
+    if factory is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
+
+    recycled_entry = (
+        db.query(RecycledInvoice)
+        .filter(RecycledInvoice.factory_id == factory.id)
+        .order_by(RecycledInvoice.recycled_number.asc())
+        .with_for_update()
+        .first()
+    )
+    if recycled_entry is not None:
+        invoice_counter = recycled_entry.recycled_number
+        db.delete(recycled_entry)
+        db.flush()
+    else:
+        invoice_counter = factory.current_invoice_counter or factory.initial_invoice_number or 1
+        factory.current_invoice_counter = invoice_counter + 1
+
+    prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
+    return f"{prefix}{invoice_counter}"
+
+
+def preview_invoice_number(db: Session, factory: Factory | None) -> str:
+    if factory is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
+
+    recycled_entry = (
+        db.query(RecycledInvoice)
+        .filter(RecycledInvoice.factory_id == factory.id)
+        .order_by(RecycledInvoice.recycled_number.asc())
+        .first()
+    )
+    prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
+    if recycled_entry is not None:
+        return f"{prefix}{recycled_entry.recycled_number}"
+    return f"{prefix}{factory.current_invoice_counter or factory.initial_invoice_number or 1}"
+
+
+def sync_next_invoice_setting(factory: Factory | None, used_invoice_number: str | None) -> None:
+    if factory is None:
+        return
+    invoice_number = clean_optional_text(used_invoice_number)
+    if not invoice_number:
+        return
+
+    import re
+    match = re.match(r"^(.*?)(\d+)$", invoice_number)
+    if not match:
+        return
+
+    prefix, numeric_part = match.groups()
+    next_counter = int(numeric_part) + 1
+    factory.invoice_prefix = prefix
+    factory.current_invoice_counter = max(next_counter, factory.current_invoice_counter or 0)
+
+
+@router.get("/next-invoice-number")
+def get_next_invoice_number(
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    invoice_number = preview_invoice_number(db, factory)
+    return {"invoice_number": invoice_number}
 
 
 def resolve_factory_google_sheet_id(db: Session, factory_id: str) -> str | None:
@@ -495,6 +599,17 @@ def create_invoice_document(
         amount_paid=to_money(invoice.get("amount_paid")),
         customer_total_due=to_money(invoice.get("customer_total_due")),
         status=invoice.get("status") or "created",
+        buyer_gstin=invoice_payload.get("buyer_gstin"),
+        hsn_code=invoice_payload.get("hsn_code"),
+        transport_mode=invoice_payload.get("transport_mode"),
+        vehicle_number=invoice_payload.get("vehicle_number"),
+        state_code=invoice_payload.get("state_code"),
+        place_of_supply=invoice_payload.get("place_of_supply"),
+        tax_rate=invoice_payload.get("tax_rate"),
+        total_taxable_value=invoice_payload.get("total_taxable_value") or 0.0,
+        total_cgst=invoice_payload.get("total_cgst") or 0.0,
+        total_sgst=invoice_payload.get("total_sgst") or 0.0,
+        total_igst=invoice_payload.get("total_igst") or 0.0,
         payload_json=json_safe(invoice_payload),
         created_by_user_id=current_user.id,
     )
@@ -640,31 +755,8 @@ def add_sale_invoice(
     factory_id = factory_id_text(current_user.factory_id)
 
     try:
-        # Get factory to lock and retrieve counter safely
         factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
-        invoice_num = payload.legal_invoice_number
-        if not invoice_num:
-            if factory:
-                existing_invoice_docs = db.query(InvoiceDocument.invoice_number).filter(
-                    InvoiceDocument.factory_id == current_user.factory_id
-                ).all()
-                max_num = 0
-                for doc in existing_invoice_docs:
-                    try:
-                        num_val = int(doc.invoice_number)
-                        if num_val > max_num:
-                            max_num = num_val
-                    except (ValueError, TypeError):
-                        pass
-                
-                cnt = factory.current_invoice_counter or factory.initial_invoice_number or 1
-                if max_num >= cnt:
-                    cnt = max_num + 1
-                
-                invoice_num = str(cnt)
-                factory.current_invoice_counter = cnt + 1
-            else:
-                invoice_num = str(datetime.now(timezone.utc).timestamp())
+        invoice_num = clean_optional_text(payload.legal_invoice_number) or allocate_invoice_number(db, factory)
 
         customer = (
             db.query(Customer)
@@ -680,6 +772,14 @@ def add_sale_invoice(
         normalized_customer_phone = customer_phone(customer)
         sale_ids: list[int] = []
         current_bill_amount = Decimal("0.00")
+        total_taxable_value = Decimal("0.00")
+        total_cgst = Decimal("0.00")
+        total_sgst = Decimal("0.00")
+        total_igst = Decimal("0.00")
+        max_tax_rate = 0.0
+        line_items: list[dict[str, object]] = []
+        stock_sync_items: list[object] = []
+        is_intra = is_intra_state_supply(factory, payload.buyer_gstin, payload.place_of_supply)
 
         for item in payload.items:
             require_sold_quantity(item.boxes_sold, item.loose_packets_sold)
@@ -692,7 +792,8 @@ def add_sale_invoice(
                 .with_for_update()
                 .first()
             )
-            if stock is None:
+            is_custom_invoice_item = stock is None and item.product_id is None
+            if stock is None and not is_custom_invoice_item:
                 box_stock = (
                     db.query(BoxStock)
                     .filter(factory_id_filter(BoxStock.factory_id, factory_id))
@@ -722,31 +823,59 @@ def add_sale_invoice(
                 db.add(stock)
                 db.flush()
 
-            # Resolve exact live dynamic stock balance
-            from routers.inventory import calculate_live_sku_stock
-            live_boxes, live_loose = calculate_live_sku_stock(
-                db=db,
-                factory_id=str(factory_id),
-                product_size_ml=item.product_size_ml,
-                variety=item.variety,
-                packaging_size_name=item.packaging_size_name,
-                onboarding_boxes=stock.total_boxes or 0,
-                onboarding_loose=stock.loose_packets or 0,
-                packets_per_box_limit=stock.packets_per_box_limit or 1000
-            )
-            available_packets = live_boxes * stock.packets_per_box_limit + live_loose
-            sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
-            if available_packets < sold_packets:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
+            if stock is not None:
+                # Resolve exact live dynamic stock balance
+                from routers.inventory import calculate_live_sku_stock
+                live_boxes, live_loose = calculate_live_sku_stock(
+                    db=db,
+                    factory_id=str(factory_id),
+                    product_size_ml=item.product_size_ml,
+                    variety=item.variety,
+                    packaging_size_name=item.packaging_size_name,
+                    onboarding_boxes=stock.total_boxes or 0,
+                    onboarding_loose=stock.loose_packets or 0,
+                    packets_per_box_limit=stock.packets_per_box_limit or 1000
                 )
+                available_packets = live_boxes * stock.packets_per_box_limit + live_loose
+                sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
+                if available_packets < sold_packets:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
+                    )
+                stock_sync_items.append(item)
 
             # Preserve onboarding totals in stock.total_boxes. Dynamic sync helper recalculates current_quantity.
 
             item_rate_per_box = effective_rate_per_box(item)
-            line_total = to_money(Decimal(item.boxes_sold) * item_rate_per_box)
-            current_bill_amount = to_money(current_bill_amount + line_total)
+            item_taxable = to_money(Decimal(item.boxes_sold) * item_rate_per_box)
+            total_taxable_value += item_taxable
+
+            # Determine tax rates
+            item_tax_rate = getattr(item, "tax_rate", 0.0) or 0.0
+            max_tax_rate = max(max_tax_rate, float(item_tax_rate or 0.0))
+            if payload.legal_invoice_type == "tax_invoice" and item_tax_rate > 0:
+                if is_intra:
+                    cgst_rate = item_tax_rate / 2.0
+                    sgst_rate = item_tax_rate / 2.0
+                    igst_rate = 0.0
+                else:
+                    cgst_rate = 0.0
+                    sgst_rate = 0.0
+                    igst_rate = item_tax_rate
+                
+                cgst_amt = to_money(item_taxable * Decimal(str(cgst_rate / 100.0)))
+                sgst_amt = to_money(item_taxable * Decimal(str(sgst_rate / 100.0)))
+                igst_amt = to_money(item_taxable * Decimal(str(igst_rate / 100.0)))
+            else:
+                cgst_rate = sgst_rate = igst_rate = 0.0
+                cgst_amt = sgst_amt = igst_amt = Decimal("0.00")
+
+            total_cgst += cgst_amt
+            total_sgst += sgst_amt
+            total_igst += igst_amt
+
+            line_total = item_taxable + cgst_amt + sgst_amt + igst_amt
 
             sale = DailySale(
                 factory_id=factory_id,
@@ -769,14 +898,6 @@ def add_sale_invoice(
             db.flush()
             sale_ids.append(sale.id)
 
-        net_outstanding_balance = to_money(previous_remaining_balance + current_bill_amount)
-        customer_due_after_payment = to_money(net_outstanding_balance - to_money(payload.amount_paid))
-        if customer_due_after_payment < 0:
-            customer_due_after_payment = Decimal("0.00")
-
-        line_items: list[dict[str, object]] = []
-        for item in payload.items:
-            item_rate_per_box = effective_rate_per_box(item)
             line_items.append(
                 {
                     "product_size_ml": item.product_size_ml,
@@ -786,9 +907,28 @@ def add_sale_invoice(
                     "loose_packets_sold": item.loose_packets_sold,
                     "rate_per_box": item_rate_per_box,
                     "rate_per_packet": to_money(item.rate_per_packet),
-                    "line_total": to_money(Decimal(item.boxes_sold) * item_rate_per_box),
+                    "line_total": item_taxable,
+                    "hsn_code": getattr(item, "hsn_code", None),
+                    "description": getattr(item, "description", None),
+                    "tax_rate": item_tax_rate,
+                    "cgst_rate": cgst_rate,
+                    "sgst_rate": sgst_rate,
+                    "igst_rate": igst_rate,
+                    "cgst_amount": float(cgst_amt),
+                    "sgst_amount": float(sgst_amt),
+                    "igst_amount": float(igst_amt),
                 }
             )
+
+        if payload.legal_invoice_type == "tax_invoice":
+            current_bill_amount = to_money(total_taxable_value + total_cgst + total_sgst + total_igst)
+        else:
+            current_bill_amount = to_money(total_taxable_value)
+
+        net_outstanding_balance = to_money(previous_remaining_balance + current_bill_amount)
+        customer_due_after_payment = to_money(net_outstanding_balance - to_money(payload.amount_paid))
+        if customer_due_after_payment < 0:
+            customer_due_after_payment = Decimal("0.00")
 
         if sale_ids:
             first_sale = db.query(DailySale).filter(DailySale.id == sale_ids[0]).first()
@@ -816,7 +956,7 @@ def add_sale_invoice(
 
         # Recalculate dynamic live stock balance and sync caches for all sold SKUs
         from routers.inventory import recalculate_and_sync_sku_stock
-        for item in payload.items:
+        for item in stock_sync_items:
             recalculate_and_sync_sku_stock(
                 db=db,
                 factory_id=str(factory_id),
@@ -866,6 +1006,20 @@ def add_sale_invoice(
                 "status": "created",
             },
             "items": line_items,
+            "buyer_gstin": clean_optional_text(payload.buyer_gstin),
+            "transport_mode": clean_optional_text(payload.transport_mode),
+            "vehicle_number": clean_optional_text(payload.vehicle_number),
+            "state_code": gst_state_code(payload.buyer_gstin) or gst_state_code(payload.place_of_supply),
+            "place_of_supply": clean_optional_text(payload.place_of_supply),
+            "tax_rate": max_tax_rate if payload.legal_invoice_type == "tax_invoice" else None,
+            "total_taxable_value": float(total_taxable_value),
+            "total_cgst": float(total_cgst),
+            "total_sgst": float(total_sgst),
+            "total_igst": float(total_igst),
+            "tax_breakup": {
+                "is_intra_state": is_intra,
+                "mode": "CGST_SGST" if is_intra else "IGST",
+            },
         }
 
         invoice_document = create_invoice_document(
@@ -875,6 +1029,7 @@ def add_sale_invoice(
             customer=customer,
             invoice_payload=invoice_payload,
         )
+        sync_next_invoice_setting(factory, invoice_num)
         sync_customer_balance_from_bills(db, current_user.factory_id, customer)
         db.commit()
 
@@ -1805,6 +1960,11 @@ def clear_outstanding_order(
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
+    if current_user.role.lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor role is not authorized to edit or delete operational data",
+        )
     if current_user.role != "Owner":
         return SalesOrderActionResponse(
             status="error",
@@ -1861,10 +2021,32 @@ def clear_outstanding_order(
                 invoice_items_data = []
                 if ledger_bill.invoice_document_id is not None:
                     invoice_doc = db.query(InvoiceDocument).filter(InvoiceDocument.id == ledger_bill.invoice_document_id).first()
-                    if invoice_doc and invoice_doc.payload_json:
-                        invoice_data = invoice_doc.payload_json.get("invoice", {})
-                        sale_ids = invoice_data.get("sale_ids", [])
-                        invoice_items_data = invoice_doc.payload_json.get("items", [])
+                    if invoice_doc:
+                        # Recycle invoice number
+                        import re
+                        from models import RecycledInvoice
+                        match = re.search(r'\d+', invoice_doc.invoice_number or "")
+                        if match:
+                            recycled_num = int(match.group())
+                            exists = db.query(RecycledInvoice).filter(
+                                RecycledInvoice.factory_id == current_user.factory_id,
+                                RecycledInvoice.recycled_number == recycled_num
+                            ).first()
+                            if not exists:
+                                db.add(RecycledInvoice(
+                                    factory_id=current_user.factory_id,
+                                    recycled_number=recycled_num
+                                ))
+                                db.flush()
+                        
+                        # Hard-delete the InvoiceDocument
+                        db.delete(invoice_doc)
+                        db.flush()
+
+                        if invoice_doc.payload_json:
+                            invoice_data = invoice_doc.payload_json.get("invoice", {})
+                            sale_ids = invoice_data.get("sale_ids", [])
+                            invoice_items_data = invoice_doc.payload_json.get("items", [])
 
                 # 1. Delete daily sales from database so they don't count towards live stock calculations
                 if sale_ids:
@@ -1989,6 +2171,19 @@ def clear_outstanding_order(
                     customer.pending_balance = customer.total_due
                     customer.pending_dues = float(customer.total_due)
 
+            # Log to Audit Trail
+            from routers.operations import log_audit_trail
+            log_audit_trail(
+                db=db,
+                factory_id=current_user.factory_id,
+                user_id=current_user.id,
+                user_role=current_user.role,
+                action_type="DELETE",
+                entity_name="Invoice",
+                short_statement=f"Deleted Outstanding Bill/Invoice ID #{bill_id} ({reason})",
+                event_type="payment"
+            )
+            
             db.commit()
         else:
             # Fallback legacy order adjustment if ledger bill was not found
@@ -2073,6 +2268,19 @@ def clear_outstanding_order(
                 order.customer.pending_balance = remaining_customer_balance
                 order.customer.pending_dues = float(remaining_customer_balance)
 
+            # Log to Audit Trail
+            from routers.operations import log_audit_trail
+            log_audit_trail(
+                db=db,
+                factory_id=current_user.factory_id,
+                user_id=current_user.id,
+                user_role=current_user.role,
+                action_type="DELETE",
+                entity_name="Invoice",
+                short_statement=f"Deleted Outstanding Bill/Invoice ID #{bill_id} ({reason})",
+                event_type="payment"
+            )
+            
             db.commit()
             return_order_id = order.id
 

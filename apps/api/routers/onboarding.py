@@ -261,6 +261,7 @@ def get_factory_profile(
         gst_number=getattr(factory, "gst_number", None),
         initial_invoice_number=getattr(factory, "initial_invoice_number", 1) or 1,
         current_invoice_counter=getattr(factory, "current_invoice_counter", 1) or 1,
+        invoice_prefix=getattr(factory, "invoice_prefix", "INV-") or "INV-",
         advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00")
     )
 
@@ -284,6 +285,9 @@ def update_factory_profile(
         factory.initial_invoice_number = payload.initial_invoice_number
         factory.current_invoice_counter = payload.initial_invoice_number
         
+    if payload.invoice_prefix is not None:
+        factory.invoice_prefix = payload.invoice_prefix.strip()
+
     if payload.advance_payment_discount_percentage is not None:
         factory.advance_payment_discount_percentage = payload.advance_payment_discount_percentage
         
@@ -296,6 +300,7 @@ def update_factory_profile(
         gst_number=factory.gst_number,
         initial_invoice_number=factory.initial_invoice_number,
         current_invoice_counter=factory.current_invoice_counter,
+        invoice_prefix=factory.invoice_prefix or "INV-",
         advance_payment_discount_percentage=factory.advance_payment_discount_percentage
     )
 

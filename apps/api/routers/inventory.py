@@ -24,6 +24,7 @@ from models import (
     PackagingProfile,
     PlasticStock,
     PolybagStock,
+    PackagingMetrics,
 )
 
 
@@ -210,6 +211,15 @@ class FinalStockCreate(BaseModel):
     packets_per_box: Optional[int] = Field(default=None, gt=0)
     packets_per_box_limit: Optional[int] = Field(default=None, gt=0)
     category: Optional[str] = None
+
+
+class FinishedGoodsOnboardRequest(BaseModel):
+    product_size_ml: float
+    variety_design: str = Field(..., min_length=1)
+    packaging_size_name: Optional[str] = None
+    pcs_per_packet: int = Field(..., gt=0)
+    packets_per_box: int = Field(..., gt=0)
+    initial_quantity_boxes: int = Field(..., ge=0)
 
 
 @router.get("/")
@@ -732,3 +742,208 @@ async def upload_product_image(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/finished-goods/onboard", response_model=FinalStockRow)
+def onboard_finished_goods(
+    payload: FinishedGoodsOnboardRequest,
+    current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    product_size_ml_int = int(payload.product_size_ml)
+    variety_design = payload.variety_design.strip()
+    
+    pcs_per_packet = payload.pcs_per_packet
+    packets_per_box = payload.packets_per_box
+    initial_quantity_boxes = payload.initial_quantity_boxes
+
+    # Auto-generate packaging_size_name if not provided
+    if not payload.packaging_size_name or not payload.packaging_size_name.strip():
+        size_val = int(payload.product_size_ml) if int(payload.product_size_ml) == payload.product_size_ml else payload.product_size_ml
+        packaging_size_name = f"{size_val}ML_{variety_design}_Box"
+    else:
+        packaging_size_name = payload.packaging_size_name.strip()
+
+    # Enforce safe nested transaction block
+    try:
+        with db.begin(nested=True):
+            # Check if identical product configuration already exists for the same factory_id
+            stock = (
+                db.query(FinalProductStock)
+                .filter(FinalProductStock.factory_id == str(factory_id))
+                .filter(FinalProductStock.product_size_ml == product_size_ml_int)
+                .filter(func.lower(func.trim(FinalProductStock.variety)) == variety_design.lower())
+                .filter(func.lower(func.trim(FinalProductStock.packaging_size_name)) == packaging_size_name.lower())
+                .with_for_update()
+                .first()
+            )
+
+            if stock is not None:
+                # Dynamically append initial_quantity_boxes to the existing rows metrics
+                stock.total_boxes = (stock.total_boxes or 0) + initial_quantity_boxes
+                stock.current_quantity = (stock.current_quantity or 0) + initial_quantity_boxes
+                db.add(stock)
+                db.flush()
+            else:
+                # Instantiate a new product row entry first
+                stock = FinalProductStock(
+                    factory_id=str(factory_id),
+                    product_size_ml=product_size_ml_int,
+                    variety=variety_design,
+                    packaging_size_name=packaging_size_name,
+                    pieces_per_packet=pcs_per_packet,
+                    packets_per_box_limit=packets_per_box,
+                    current_quantity=initial_quantity_boxes,
+                    total_boxes=initial_quantity_boxes,
+                    loose_packets=0,
+                )
+                db.add(stock)
+                db.flush()
+
+            # Automatically log opening balance context inside the asset registry tracking layers
+            def get_or_create_local_inventory(item_name: str, category: str, unit: str) -> Inventory:
+                item = (
+                    db.query(Inventory)
+                    .filter(Inventory.factory_id == str(factory_id))
+                    .filter(func.lower(Inventory.item_name) == item_name.lower())
+                    .first()
+                )
+                if item is None:
+                    item = Inventory(
+                        factory_id=str(factory_id),
+                        item_name=item_name.strip(),
+                        category=category,
+                        unit=unit,
+                        quantity=Decimal("0.000"),
+                        price_per_unit=Decimal("0.00"),
+                    )
+                    db.add(item)
+                    db.flush()
+                return item
+
+            poly_name = f"{product_size_ml_int}ml Polybag"
+            box_name = packaging_size_name
+
+            poly_inventory = get_or_create_local_inventory(poly_name, "Packaging", "pieces")
+            box_inventory = get_or_create_local_inventory(box_name, "Packaging", "pieces")
+
+            # Check if PackagingProfile exists
+            profile = (
+                db.query(PackagingProfile)
+                .filter(PackagingProfile.factory_id == str(factory_id))
+                .filter(func.lower(PackagingProfile.profile_name) == packaging_size_name.lower())
+                .first()
+            )
+            if profile is None:
+                profile = PackagingProfile(
+                    factory_id=str(factory_id),
+                    profile_name=packaging_size_name,
+                    product_name=f"{product_size_ml_int}ml Paper Cup",
+                    product_name_ml=product_size_ml_int,
+                    cup_size_ml=product_size_ml_int,
+                    polybag_capacity=pcs_per_packet,
+                    box_capacity=pcs_per_packet * packets_per_box,
+                    box_size_name=packaging_size_name,
+                    cups_per_poly=pcs_per_packet,
+                    cups_per_polybag=pcs_per_packet,
+                    polys_per_box=packets_per_box,
+                    polybags_per_box=packets_per_box,
+                    box_inventory_id=box_inventory.id,
+                    poly_inventory_id=poly_inventory.id,
+                )
+                db.add(profile)
+                db.flush()
+
+            # Cross-sync FinishedGoodsStock
+            finished = (
+                db.query(FinishedGoodsStock)
+                .filter(FinishedGoodsStock.factory_id == str(factory_id))
+                .filter(FinishedGoodsStock.packaging_profile_id == profile.id)
+                .first()
+            )
+            if finished is None:
+                finished = FinishedGoodsStock(
+                    factory_id=str(factory_id),
+                    cup_size_ml=product_size_ml_int,
+                    packaging_profile_id=profile.id,
+                    boxes_available=initial_quantity_boxes,
+                    category="CUP_FINISHED",
+                    variant_name=f"{product_size_ml_int}ml_{variety_design}"
+                )
+                db.add(finished)
+                db.flush()
+            else:
+                finished.boxes_available = (finished.boxes_available or 0) + initial_quantity_boxes
+                db.add(finished)
+                db.flush()
+
+            # Synchronize PackagingMetrics
+            metric = (
+                db.query(PackagingMetrics)
+                .filter(PackagingMetrics.factory_id == str(factory_id))
+                .filter(PackagingMetrics.cup_size_ml == product_size_ml_int)
+                .filter(func.lower(PackagingMetrics.variant_name) == variety_design.lower())
+                .first()
+            )
+            if metric is None:
+                metric = PackagingMetrics(
+                    factory_id=str(factory_id),
+                    cup_size_ml=product_size_ml_int,
+                    variant_name=variety_design,
+                    kg_per_box=Decimal("10.000"),
+                    cups_per_box=packets_per_box,
+                )
+                db.add(metric)
+                db.flush()
+            else:
+                metric.cups_per_box = packets_per_box
+                db.add(metric)
+                db.flush()
+
+            # Recalculate dynamic stock caches
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(factory_id),
+                product_size_ml=product_size_ml_int,
+                variety=variety_design,
+                packaging_size_name=packaging_size_name,
+            )
+
+        db.commit()
+        db.refresh(stock)
+
+        # Retrieve image details and other info for output mapping
+        fg_stock = (
+            db.query(FinishedGoodsStock)
+            .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+            .filter(
+                FinishedGoodsStock.factory_id == str(factory_id),
+                PackagingProfile.cup_size_ml == stock.product_size_ml,
+                func.lower(PackagingProfile.profile_name) == stock.packaging_size_name.strip().lower()
+            )
+            .first()
+        )
+
+        return FinalStockRow(
+            id=stock.id,
+            product_size_ml=stock.product_size_ml,
+            variety=stock.variety or "Standard/White",
+            packaging_size=stock.packaging_size_name,
+            packaging_size_name=stock.packaging_size_name,
+            pieces_per_packet=stock.pieces_per_packet,
+            packets_per_box=stock.packets_per_box_limit,
+            current_quantity=stock.current_quantity,
+            total_boxes=stock.total_boxes or 0,
+            loose_packets=stock.loose_packets or 0,
+            packets_per_box_limit=stock.packets_per_box_limit,
+            image_url=fg_stock.image_url if fg_stock else None,
+            variant_name=fg_stock.variant_name if fg_stock else f"{stock.product_size_ml}ml_{stock.variety}",
+        )
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to onboard finished goods opening stock: {str(exc)}"
+        )

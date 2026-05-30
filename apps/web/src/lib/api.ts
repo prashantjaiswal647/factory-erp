@@ -372,6 +372,12 @@ export type DailySaleCreate = {
   legal_invoice_number?: string | null;
   rough_bill_enabled: boolean;
   rough_bill_number?: string | null;
+  // B2B Tax Invoice optional fields
+  buyer_gstin?: string | null;
+  transport_mode?: string | null;
+  vehicle_number?: string | null;
+  state_code?: string | null;
+  place_of_supply?: string | null;
   items: Array<{
     product_id?: number | null;
     product_size_ml: number;
@@ -383,6 +389,10 @@ export type DailySaleCreate = {
     rate_per_box: number;
     rate_per_packet: number;
     packets_per_box: number;
+    description?: string | null;
+    // Tax Invoice optional item fields
+    hsn_code?: string | null;
+    tax_rate?: number | null;
   }>;
 };
 
@@ -846,6 +856,10 @@ export function createDailySale(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/invoice", payload);
 }
 
+export function getNextInvoiceNumber() {
+  return api.get<{ invoice_number: string }>("/api/sales/next-invoice-number");
+}
+
 export function getInvoiceDocuments() {
   return api.get<InvoiceDashboardResponse>("/api/sales/invoices");
 }
@@ -1018,6 +1032,7 @@ export type FactoryProfile = {
   initial_invoice_number: number;
   current_invoice_counter: number;
   advance_payment_discount_percentage?: number;
+  invoice_prefix?: string;
 };
 
 export type FactoryProfileUpdate = {
@@ -1026,6 +1041,7 @@ export type FactoryProfileUpdate = {
   gst_number?: string;
   initial_invoice_number?: number;
   advance_payment_discount_percentage?: number;
+  invoice_prefix?: string;
 };
 
 export function getFactoryProfile() {
@@ -1529,5 +1545,42 @@ export function deleteActivityLog(logId: number) {
 
 export function reportMachineBreakdown(payload: { machine_id: number; issue_category: string; custom_notes?: string }) {
   return api.post<ActivityLog>("/api/operations/breakdown", payload);
+}
+
+export type FinishedGoodsOnboardPayload = {
+  product_size_ml: number;
+  variety_design: string;
+  packaging_size_name?: string;
+  pcs_per_packet: number;
+  packets_per_box: number;
+  initial_quantity_boxes: number;
+};
+
+export async function onboardFinishedGoods(payload: FinishedGoodsOnboardPayload) {
+  const response = await api.post<FinalStockOption>("/api/inventory/finished-goods/onboard", payload);
+  return response.data;
+}
+
+export type DailySequenceLogItem = {
+  id: number;
+  event_type: string;
+  description: string;
+  user_id?: number | null;
+  user_role?: string | null;
+  action_type?: string | null;
+  entity_name?: string | null;
+  short_statement?: string | null;
+  created_time?: string | null;
+  timestamp?: string | null;
+};
+
+export type DailySequenceGroup = {
+  date: string;
+  logs: DailySequenceLogItem[];
+};
+
+export async function getDailySequenceLogs() {
+  const response = await api.get<DailySequenceGroup[]>("/api/activity-logs/daily-sequence");
+  return response.data;
 }
 

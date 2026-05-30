@@ -12,26 +12,24 @@ import {
   Clock, 
   History,
   AlertCircle,
-  Wrench
+  Wrench,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import { 
-  getOperationsSequence, 
+  getDailySequenceLogs, 
   createManualActivityLog, 
   updateActivityLog, 
   deleteActivityLog, 
   reportMachineBreakdown,
-  type ActivityLog 
+  type ActivityLog,
+  type DailySequenceGroup,
+  type DailySequenceLogItem
 } from "../lib/api";
 
 export default function OperationsPage() {
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  });
+  const [dailyGroups, setDailyGroups] = useState<DailySequenceGroup[]>([]);
+  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -54,18 +52,28 @@ export default function OperationsPage() {
 
   useEffect(() => {
     void fetchLogs();
-  }, [selectedDate]);
+  }, []);
 
   async function fetchLogs() {
     setIsLoading(true);
     setError("");
     try {
-      const response = await getOperationsSequence(selectedDate);
-      setLogs(Array.isArray(response.data) ? response.data : []);
+      const response = await getDailySequenceLogs();
+      setDailyGroups(response);
+      
+      // Auto-expand the first date (which is usually today/most recent) by default
+      if (response && response.length > 0) {
+        const todayStr = new Date().toISOString().split("T")[0];
+        const initialExpanded: Record<string, boolean> = {};
+        response.forEach((group, idx) => {
+          initialExpanded[group.date] = idx === 0 || group.date === todayStr;
+        });
+        setExpandedDates(initialExpanded);
+      }
     } catch (err) {
       console.error("Failed to load operations logs:", err);
-      setError("Failed to load timeline logs for selected date.");
-      setLogs([]);
+      setError("Failed to load sequence logs.");
+      setDailyGroups([]);
     } finally {
       setIsLoading(false);
     }
@@ -200,22 +208,11 @@ export default function OperationsPage() {
           </div>
           <div>
             <h1 className="text-xl font-black text-zinc-950">Floor Audit Trail</h1>
-            <p className="text-xs text-zinc-500">Unified chronological factory operations sequence timeline</p>
+            <p className="text-xs text-zinc-500">Unified chronological factory operations sequence timeline grouped by date</p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 self-start sm:self-auto">
-          {/* Calendar Picker */}
-          <div className="relative">
-            <CalendarDays className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="h-10 rounded-lg border border-zinc-200 bg-[#FFF7ED] pl-9 pr-3 text-sm font-semibold text-zinc-800 outline-none focus:border-purple-600 focus:bg-white"
-            />
-          </div>
-
           {/* Manual Log Trigger */}
           <button
             onClick={() => setIsCreateOpen(true)}
@@ -253,69 +250,115 @@ export default function OperationsPage() {
             <AlertCircle className="h-8 w-8 mb-2" />
             {error}
           </div>
-        ) : logs.length === 0 ? (
+        ) : dailyGroups.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center text-sm text-zinc-400 border border-dashed border-zinc-200 rounded-xl">
             <History className="h-8 w-8 text-zinc-300 mb-2" />
-            <p className="font-semibold text-zinc-500">No events recorded for this date</p>
+            <p className="font-semibold text-zinc-500">No events recorded yet</p>
             <p className="text-xs text-zinc-400 mt-1 max-w-xs">
               Factory activities (Production runs, attendance checkins, OEE telemetry changes, or expense ledgers) will populate automatically as they occur.
             </p>
           </div>
         ) : (
-          <div className="relative border-l-2 border-zinc-100 ml-4 pl-6 space-y-6">
-            {logs.map((log) => {
-              const cfg = eventConfig[log.event_type] || eventConfig.production;
-              const IconComp = cfg.icon;
-              const timeStr = new Date(log.created_at).toLocaleTimeString("en-IN", {
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: true
-              });
-
+          <div className="space-y-4">
+            {dailyGroups.map((group) => {
+              const isExpanded = !!expandedDates[group.date];
               return (
-                <div key={log.id} className="relative group">
-                  {/* Stepper Bullet Node Icon */}
-                  <span className={`absolute -left-[35px] top-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 bg-white shadow-sm transition group-hover:scale-110 ${cfg.color}`}>
-                    <IconComp className="h-4 w-4" />
-                  </span>
+                <div key={group.date} className="border border-zinc-150 rounded-xl overflow-hidden shadow-sm">
+                  {/* Collapsible Accordion Header */}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedDates(prev => ({ ...prev, [group.date]: !isExpanded }))}
+                    className="w-full flex items-center justify-between bg-zinc-50/50 p-4 border-b border-zinc-100 hover:bg-zinc-50 transition"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="bg-purple-100 text-purple-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                        {new Date(group.date).toLocaleDateString("en-IN", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                      </span>
+                      <span className="text-zinc-500 text-xs font-semibold">
+                        ({group.logs.length} operations logged)
+                      </span>
+                    </div>
+                    {isExpanded ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+                  </button>
 
-                  {/* Log Content Card */}
-                  <div className="rounded-xl border border-zinc-100 bg-zinc-50/50 p-4 transition-all duration-300 hover:border-zinc-200 hover:bg-white hover:shadow-sm flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${cfg.badge}`}>
-                          {cfg.label}
-                        </span>
-                        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-500">
-                          <Clock className="h-3 w-3" />
-                          {timeStr}
+                  {/* Accordion Body */}
+                  {isExpanded && (
+                    <div className="p-5 bg-white space-y-6">
+                      {group.logs.length === 0 ? (
+                        <p className="text-sm text-zinc-400 text-center py-4">No events logged for this date.</p>
+                      ) : (
+                        <div className="relative border-l-2 border-zinc-100 ml-4 pl-6 space-y-6">
+                          {group.logs.map((log) => {
+                            const cfg = eventConfig[log.event_type as keyof typeof eventConfig] || eventConfig.production;
+                            const IconComp = cfg.icon;
+                            
+                            const actionColors: Record<string, string> = {
+                              CREATE: "bg-emerald-500 text-white font-bold px-1.5 py-0.5 rounded text-[9px]",
+                              UPDATE: "bg-amber-500 text-white font-bold px-1.5 py-0.5 rounded text-[9px]",
+                              DELETE: "bg-rose-500 text-white font-bold px-1.5 py-0.5 rounded text-[9px]",
+                            };
+
+                            return (
+                              <div key={log.id} className="relative group">
+                                {/* Stepper Bullet Node Icon */}
+                                <span className={`absolute -left-[35px] top-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 bg-white shadow-sm transition group-hover:scale-110 ${cfg.color}`}>
+                                  <IconComp className="h-4 w-4" />
+                                </span>
+
+                                {/* Log Content Card */}
+                                <div className="rounded-xl border border-zinc-100 bg-zinc-50/50 p-4 transition-all duration-300 hover:border-zinc-200 hover:bg-white hover:shadow-sm flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                  <div className="space-y-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${cfg.badge}`}>
+                                        {cfg.label}
+                                      </span>
+                                      <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-500">
+                                        <Clock className="h-3 w-3" />
+                                        {log.created_time || "Pending"}
+                                      </div>
+                                      {log.action_type && (
+                                        <span className={actionColors[log.action_type] || "bg-zinc-500 text-white font-bold px-1.5 py-0.5 rounded text-[9px]"}>
+                                          {log.action_type}
+                                        </span>
+                                      )}
+                                      {log.user_role && (
+                                        <span className="bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded text-[10px] font-medium border border-zinc-200">
+                                          Role: {log.user_role}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-sm font-medium leading-relaxed text-zinc-800">{log.description}</p>
+                                  </div>
+
+                                  {/* Inline micro buttons */}
+                                  <div className="flex items-center gap-1.5 self-end md:self-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      onClick={() => {
+                                        setEditingLog(log as any);
+                                        setEditDesc(log.description);
+                                        setEditType(log.event_type as any);
+                                      }}
+                                      title="Edit Entry"
+                                      className="grid h-7 w-7 place-items-center rounded border border-zinc-200 text-zinc-600 hover:bg-purple-50 hover:text-purple-700 transition"
+                                    >
+                                      <Edit2 className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete(log.id)}
+                                      title="Delete Entry"
+                                      className="grid h-7 w-7 place-items-center rounded border border-zinc-200 text-zinc-600 hover:bg-red-50 hover:text-red-700 transition"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                      </div>
-                      <p className="text-sm font-medium leading-relaxed text-zinc-800">{log.description}</p>
+                      )}
                     </div>
-
-                    {/* Inline micro buttons */}
-                    <div className="flex items-center gap-1.5 self-end md:self-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => {
-                          setEditingLog(log);
-                          setEditDesc(log.description);
-                          setEditType(log.event_type);
-                        }}
-                        title="Edit Entry"
-                        className="grid h-7 w-7 place-items-center rounded border border-zinc-200 text-zinc-600 hover:bg-purple-50 hover:text-purple-700 transition"
-                      >
-                        <Edit2 className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(log.id)}
-                        title="Delete Entry"
-                        className="grid h-7 w-7 place-items-center rounded border border-zinc-200 text-zinc-600 hover:bg-red-50 hover:text-red-700 transition"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                  )}
                 </div>
               );
             })}

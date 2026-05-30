@@ -1,13 +1,17 @@
-import { Check, Plus, ReceiptText, Search, Trash2 } from "lucide-react";
+import { Check, FileText, Plus, Receipt, ReceiptText, Search, Trash2 } from "lucide-react";
 import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { useAuth } from "../context/AuthContext";
-import { createDailySale, createPendingSaleOrder, getInventory, searchCustomers } from "../lib/api";
+import { createDailySale, createPendingSaleOrder, getInventory, getNextInvoiceNumber, searchCustomers } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
 
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 type SaleItem = DailySaleCreate["items"][number];
+
+const TAX_RATES = [0, 5, 12, 18, 28] as const;
 
 const emptyItem: SaleItem = {
   product_id: null,
@@ -19,8 +23,13 @@ const emptyItem: SaleItem = {
   loose_packets_sold: 0,
   rate_per_box: 0,
   rate_per_packet: 0,
-  packets_per_box: 0
+  packets_per_box: 0,
+  description: "",
+  hsn_code: "",
+  tax_rate: 18,
 };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function apiErrorMessage(error: unknown) {
   const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
@@ -37,6 +46,50 @@ function apiErrorMessage(error: unknown) {
   return "An error occurred";
 }
 
+function itemFromVariation(stock: LiveStockRow, current: SaleItem): SaleItem {
+  return normalizeItem({
+    ...current,
+    product_id: stock.product_id || null,
+    product_size_ml: stock.product_size_ml || 0,
+    variety: stock.variety || "Plain White",
+    packaging_size: stock.packaging_size || stock.packaging_size_name || "",
+    packaging_size_name: stock.packaging_size_name || stock.packaging_size || "",
+    packets_per_box: stock.packets_per_box || stock.packets_per_box_limit || current.packets_per_box || 0,
+  });
+}
+
+function normalizeItem(item: SaleItem): SaleItem {
+  const packetsPerBox = Number(item.packets_per_box || 0);
+  const ratePerPacket = Number(item.rate_per_packet || 0);
+  return {
+    ...item,
+    loose_packets_sold: 0,
+    packets_per_box: packetsPerBox,
+    rate_per_packet: ratePerPacket,
+    rate_per_box: Number((ratePerPacket * packetsPerBox).toFixed(2)),
+  };
+}
+
+function itemTaxableValue(item: SaleItem) {
+  return Number(item.boxes_sold || 0) * Number(item.rate_per_box || 0);
+}
+
+function stateCode(value?: string | null) {
+  const cleaned = (value || "").trim();
+  return cleaned.length >= 2 ? cleaned.slice(0, 2).toUpperCase() : "";
+}
+
+function inferIntraStateSupply(buyerGstin?: string | null, placeOfSupply?: string | null) {
+  const buyerCode = stateCode(buyerGstin);
+  const supplyCode = stateCode(placeOfSupply);
+  if (buyerCode && supplyCode && /^\d{2}$/.test(supplyCode)) {
+    return buyerCode === supplyCode;
+  }
+  return true;
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
 export default function SalesEntryPage() {
   const [toast, setToast] = useState("");
   const [lastInvoiceId, setLastInvoiceId] = useState<number | null>(null);
@@ -48,6 +101,7 @@ export default function SalesEntryPage() {
   const { triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
   const customerSearchRef = useRef<HTMLInputElement>(null);
+
   const [form, setForm] = useState<DailySaleCreate>({
     date: new Date().toISOString().slice(0, 10),
     customer_id: 0,
@@ -56,8 +110,29 @@ export default function SalesEntryPage() {
     legal_invoice_number: "",
     rough_bill_enabled: true,
     rough_bill_number: "",
-    items: [{ ...emptyItem }]
+    buyer_gstin: "",
+    transport_mode: "",
+    vehicle_number: "",
+    place_of_supply: "",
+    items: [{ ...emptyItem }],
   });
+
+  const isTaxInvoice = form.legal_invoice_type === "tax_invoice";
+
+  async function refreshNextInvoiceNumber(overwrite = false) {
+    try {
+      const response = await getNextInvoiceNumber();
+      const invoiceNumber = response.data.invoice_number || "";
+      setForm((current) => ({
+        ...current,
+        legal_invoice_number: overwrite || !current.legal_invoice_number ? invoiceNumber : current.legal_invoice_number,
+      }));
+      return invoiceNumber;
+    } catch (error) {
+      setToast(apiErrorMessage(error));
+      return "";
+    }
+  }
 
   useEffect(() => {
     void getInventory()
@@ -69,6 +144,10 @@ export default function SalesEntryPage() {
         }
       })
       .catch((error) => setToast(apiErrorMessage(error)));
+  }, []);
+
+  useEffect(() => {
+    void refreshNextInvoiceNumber();
   }, []);
 
   useEffect(() => {
@@ -84,11 +163,45 @@ export default function SalesEntryPage() {
     return () => window.clearTimeout(handle);
   }, [customerQuery]);
 
-  const billTotal = useMemo(() => {
-    return form.items.reduce((total, item) => total + item.boxes_sold * item.rate_per_box, 0);
-  }, [form.items]);
+  // ─── Tax Calculations ───────────────────────────────────────────────────────
+  const taxCalc = useMemo(() => {
+    const subtotal = form.items.reduce((sum, item) => sum + itemTaxableValue(item), 0);
+
+    if (!isTaxInvoice) {
+      return { subtotal, cgst: 0, sgst: 0, igst: 0, grandTotal: subtotal };
+    }
+
+    const isIntraState = inferIntraStateSupply(form.buyer_gstin, form.place_of_supply);
+
+    // Accumulate tax per item (items can have different tax rates)
+    let totalCgst = 0;
+    let totalSgst = 0;
+    let totalIgst = 0;
+
+    for (const item of form.items) {
+      const taxable = itemTaxableValue(item);
+      const rate = Number(item.tax_rate ?? 18);
+      if (isIntraState) {
+        totalCgst += (taxable * rate) / 200; // half for CGST
+        totalSgst += (taxable * rate) / 200; // half for SGST
+      } else {
+        totalIgst += (taxable * rate) / 100;
+      }
+    }
+
+    const grandTotal = Math.round(subtotal + totalCgst + totalSgst + totalIgst);
+    return {
+      subtotal,
+      cgst: Number(totalCgst.toFixed(2)),
+      sgst: Number(totalSgst.toFixed(2)),
+      igst: Number(totalIgst.toFixed(2)),
+      grandTotal,
+    };
+  }, [form.items, form.buyer_gstin, form.place_of_supply, isTaxInvoice]);
+
   const hasInsufficientStock = useMemo(() => {
     return form.items.some((item) => {
+      if (!item.product_id) return false;
       const stock = inventoryRows.find((row) => row.product_id === item.product_id);
       const available = Number(stock?.current_quantity ?? stock?.quantity ?? 0);
       return Number(item.boxes_sold || 0) > available;
@@ -98,16 +211,10 @@ export default function SalesEntryPage() {
   async function submit() {
     if (!selectedCustomer) return;
     const billableItems = form.items.filter((item) => Number(item.boxes_sold || 0) > 0 || Number(item.loose_packets_sold || 0) > 0);
-    if (hasInsufficientStock) {
-      setToast("Insufficient Stock");
-      return;
-    }
-    if (billableItems.length === 0) {
-      setToast("Enter boxes quantity for at least one product.");
-      return;
-    }
-    if (billableItems.some((item) => !item.product_id || !item.product_size_ml || !item.packaging_size_name.trim())) {
-      setToast("Please select a valid product variation before saving.");
+    if (hasInsufficientStock) { setToast("Insufficient Stock"); return; }
+    if (billableItems.length === 0) { setToast("Enter boxes quantity for at least one product."); return; }
+    if (billableItems.some((item) => !item.product_size_ml || !item.packaging_size_name.trim() || !item.variety.trim())) {
+      setToast("Please enter product size, variation, and packaging before saving.");
       return;
     }
     setIsSaving(true);
@@ -116,10 +223,13 @@ export default function SalesEntryPage() {
         ...form,
         customer_id: Number(selectedCustomer.id),
         amount_paid: Number(form.amount_paid || 0),
-        legal_invoice_type: form.legal_invoice_type,
         legal_invoice_number: form.legal_invoice_number?.trim() || null,
         rough_bill_enabled: Boolean(form.rough_bill_enabled),
-        rough_bill_number: form.rough_bill_number?.trim() || null,
+        rough_bill_number: null,
+        buyer_gstin: isTaxInvoice ? (form.buyer_gstin?.trim() || null) : null,
+        transport_mode: isTaxInvoice ? (form.transport_mode?.trim() || null) : null,
+        vehicle_number: isTaxInvoice ? (form.vehicle_number?.trim() || null) : null,
+        place_of_supply: isTaxInvoice ? (form.place_of_supply?.trim() || null) : null,
         items: billableItems.map((item) => normalizeItem({
           ...item,
           product_size_ml: Number(item.product_size_ml || 0),
@@ -130,9 +240,13 @@ export default function SalesEntryPage() {
           packets_per_box: Number(item.packets_per_box || 0),
           packaging_size: (item.packaging_size || item.packaging_size_name).trim(),
           packaging_size_name: item.packaging_size_name.trim(),
-          variety: item.variety.trim() || "Plain White"
-        }))
+          variety: item.variety.trim() || "Plain White",
+          description: item.description?.trim() || null,
+          hsn_code: isTaxInvoice ? (item.hsn_code?.trim() || null) : null,
+          tax_rate: isTaxInvoice ? Number(item.tax_rate ?? 18) : null,
+        })),
       };
+
       if (user?.role === "Owner") {
         const response = await createDailySale(payload);
         setLastInvoiceId(response.data.invoice_document_id || null);
@@ -143,6 +257,7 @@ export default function SalesEntryPage() {
         setToast("Order sent to Owner for approval.");
       }
       triggerDataRefresh();
+      const nextInvoiceNumber = await refreshNextInvoiceNumber(true);
       setSelectedCustomer(null);
       setCustomerQuery("");
       setCustomerResults([]);
@@ -151,10 +266,14 @@ export default function SalesEntryPage() {
         customer_id: 0,
         amount_paid: 0,
         legal_invoice_type: form.legal_invoice_type,
-        legal_invoice_number: "",
-        rough_bill_enabled: form.rough_bill_enabled,
+        legal_invoice_number: nextInvoiceNumber,
+        rough_bill_enabled: false,
         rough_bill_number: "",
-        items: inventoryRows[0] ? [itemFromVariation(inventoryRows[0], emptyItem)] : [{ ...emptyItem }]
+        buyer_gstin: "",
+        transport_mode: "",
+        vehicle_number: "",
+        place_of_supply: "",
+        items: inventoryRows[0] ? [itemFromVariation(inventoryRows[0], emptyItem)] : [{ ...emptyItem }],
       });
       window.setTimeout(() => customerSearchRef.current?.focus(), 0);
     } catch (error) {
@@ -167,81 +286,14 @@ export default function SalesEntryPage() {
   function selectCustomer(customer: CustomerSearchResult) {
     setSelectedCustomer(customer);
     setCustomerQuery(`${customer.name} - ${customer.place} (${customer.phone_number})`);
-    setForm({ ...form, customer_id: customer.id });
+    setForm({
+      ...form,
+      customer_id: customer.id,
+      buyer_gstin: form.buyer_gstin || customer.gst_number || "",
+      place_of_supply: form.place_of_supply || customer.place || "",
+    });
     setCustomerResults([]);
   }
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-5">
-      {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
-      {lastInvoiceId ? (
-        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
-          Invoice saved. <Link className="underline" to="/invoices">Open Invoices to download PDF</Link>.
-        </div>
-      ) : null}
-      <header>
-        <h1 className="text-2xl font-semibold text-zinc-950">Sales Entry</h1>
-        <p className="mt-1 text-sm text-zinc-500">Search customer, select stock by size and variety, and generate invoice.</p>
-      </header>
-
-      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
-        <div className="mb-5 flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
-            <ReceiptText className="h-5 w-5" />
-          </span>
-          <h2 className="text-lg font-semibold text-zinc-950">Bill Details</h2>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-[1.4fr_0.7fr_0.7fr]">
-          <CustomerCombobox inputRef={customerSearchRef} query={customerQuery} results={customerResults} onQueryChange={setCustomerQuery} onSelect={selectCustomer} />
-          <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
-          <NumberField label="Amount paid" value={form.amount_paid} onChange={(amount_paid) => setForm({ ...form, amount_paid })} />
-        </div>
-
-        <div className="mt-5 grid gap-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 md:grid-cols-4">
-          <InvoiceModeField value={form.legal_invoice_type} onChange={(legal_invoice_type) => setForm({ ...form, legal_invoice_type })} />
-          <Field label="Legal invoice number" value={form.legal_invoice_number || ""} onChange={(legal_invoice_number) => setForm({ ...form, legal_invoice_number })} />
-          <Field label="Rough bill number" value={form.rough_bill_number || ""} onChange={(rough_bill_number) => setForm({ ...form, rough_bill_number })} />
-          <label className="flex items-end gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700">
-            <input className="h-4 w-4 accent-brand-600" type="checkbox" checked={form.rough_bill_enabled} onChange={(event) => setForm({ ...form, rough_bill_enabled: event.target.checked })} />
-            Generate parallel rough bill
-          </label>
-        </div>
-
-        <div className="mt-5 space-y-3">
-          {form.items.map((item, index) => (
-            <div key={index} className="grid gap-3 rounded-md border border-zinc-200 p-3 md:grid-cols-[1.5fr_0.75fr_0.75fr_0.75fr_0.65fr_0.75fr_auto]">
-              <VariationField value={item.product_id || 0} rows={inventoryRows} onChange={(value) => {
-                const selected = inventoryRows.find((row) => row.product_id === value);
-                if (selected) patchItem(index, itemFromVariation(selected, item));
-              }} />
-              <NumberField label="Rate/packet" value={item.rate_per_packet} onChange={(rate_per_packet) => patchItem(index, { rate_per_packet })} />
-              <NumberField label="Packets/box" value={item.packets_per_box} onChange={(packets_per_box) => patchItem(index, { packets_per_box })} />
-              <NumberField label="Rate/box" value={item.rate_per_box} onChange={() => undefined} readOnly />
-              <NumberField label="Boxes" value={item.boxes_sold} onChange={(boxes_sold) => patchItem(index, { boxes_sold })} />
-              <StockIndicator item={item} rows={inventoryRows} />
-              <button className="mt-auto grid h-10 w-10 place-items-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600" type="button" onClick={() => removeItem(index)}>
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <InvoicePreview customer={selectedCustomer} form={form} billTotal={billTotal} />
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700" type="button" onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], emptyItem) : { ...emptyItem }] })}>
-            <Plus className="h-4 w-4" />
-            Add Product
-          </button>
-          <button className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving || !selectedCustomer || hasInsufficientStock} type="button" onClick={submit}>
-            <Check className="h-4 w-4" />
-            {isSaving ? "Saving..." : "Save Sale"}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
 
   function patchItem(index: number, patch: Partial<SaleItem>) {
     setForm({ ...form, items: form.items.map((item, itemIndex) => (itemIndex === index ? normalizeItem({ ...item, ...patch }) : item)) });
@@ -251,48 +303,305 @@ export default function SalesEntryPage() {
     if (form.items.length === 1) return;
     setForm({ ...form, items: form.items.filter((_, itemIndex) => itemIndex !== index) });
   }
-}
 
-function itemFromVariation(stock: LiveStockRow, current: SaleItem): SaleItem {
-  return normalizeItem({
-    ...current,
-    product_id: stock.product_id || null,
-    product_size_ml: stock.product_size_ml || 0,
-    variety: stock.variety || "Plain White",
-    packaging_size: stock.packaging_size || stock.packaging_size_name || "",
-    packaging_size_name: stock.packaging_size_name || stock.packaging_size || "",
-    packets_per_box: stock.packets_per_box || stock.packets_per_box_limit || current.packets_per_box || 0
-  });
-}
+  const isIntraState = useMemo(() => {
+    return inferIntraStateSupply(form.buyer_gstin, form.place_of_supply);
+  }, [form.buyer_gstin, form.place_of_supply]);
 
-function normalizeItem(item: SaleItem): SaleItem {
-  const packetsPerBox = Number(item.packets_per_box || 0);
-  const ratePerPacket = Number(item.rate_per_packet || 0);
-  return {
-    ...item,
-    loose_packets_sold: 0,
-    packets_per_box: packetsPerBox,
-    rate_per_packet: ratePerPacket,
-    rate_per_box: Number((ratePerPacket * packetsPerBox).toFixed(2))
-  };
-}
-
-function itemTotal(item: SaleItem) {
-  return Number(item.boxes_sold || 0) * Number(item.rate_per_box || 0);
-}
-
-function VariationField({ value, rows, onChange }: { value: number; rows: LiveStockRow[]; onChange: (value: number) => void }) {
   return (
-    <label className="block text-sm">
+    <div className="mx-auto max-w-6xl space-y-5">
+      {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
+      {lastInvoiceId ? (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
+          Invoice saved. <Link className="underline" to="/invoices">Open Invoices to download PDF</Link>.
+        </div>
+      ) : null}
+
+      <header>
+        <h1 className="text-2xl font-semibold text-zinc-950">Sales Entry</h1>
+        <p className="mt-1 text-sm text-zinc-500">Search customer, select stock by size and variety, and generate invoice.</p>
+      </header>
+
+      {/* ── Invoice Type Toggle Tabs ────────────────────────────────────────── */}
+      <div className="flex gap-0 rounded-xl border border-zinc-200 bg-zinc-50 p-1 shadow-sm w-fit">
+        <button
+          type="button"
+          onClick={() => setForm({ ...form, legal_invoice_type: "bill_of_supply" })}
+          className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
+            !isTaxInvoice
+              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-zinc-200"
+              : "text-zinc-500 hover:text-zinc-800"
+          }`}
+        >
+          <Receipt className="h-4 w-4" />
+          Bill of Supply
+        </button>
+        <button
+          type="button"
+          onClick={() => setForm({ ...form, legal_invoice_type: "tax_invoice" })}
+          className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
+            isTaxInvoice
+              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-zinc-200"
+              : "text-zinc-500 hover:text-zinc-800"
+          }`}
+        >
+          <FileText className="h-4 w-4" />
+          Tax Invoice (GST)
+        </button>
+      </div>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="mb-5 flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
+            <ReceiptText className="h-5 w-5" />
+          </span>
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-950">
+              {isTaxInvoice ? "Tax Invoice (B2B GST)" : "Bill of Supply"}
+            </h2>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              {isTaxInvoice ? "GST registered — CGST/SGST or IGST calculated automatically" : "Composition scheme / unregistered — no GST breakdown"}
+            </p>
+          </div>
+        </div>
+
+        {/* ── Core Fields ─────────────────────────────────────────────────── */}
+        <div className="grid gap-4 md:grid-cols-[1.4fr_0.7fr_0.7fr]">
+          <CustomerCombobox inputRef={customerSearchRef} query={customerQuery} results={customerResults} onQueryChange={setCustomerQuery} onSelect={selectCustomer} />
+          <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
+          <NumberField label="Amount paid" value={form.amount_paid} onChange={(amount_paid) => setForm({ ...form, amount_paid })} />
+        </div>
+
+        <div className="mt-4 grid gap-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 md:grid-cols-1">
+          <Field label="Legal invoice number" value={form.legal_invoice_number || ""} onChange={(legal_invoice_number) => setForm({ ...form, legal_invoice_number })} />
+        </div>
+
+        {/* ── Tax Invoice B2B Fields (only visible in Tax Invoice mode) ───── */}
+        {isTaxInvoice && (
+          <div className="mt-4 rounded-xl border border-brand-200 bg-brand-50/40 p-4">
+            <p className="mb-3 text-xs font-bold uppercase tracking-widest text-brand-700">GST & Transport Details <span className="font-normal text-zinc-400 normal-case tracking-normal">(all optional)</span></p>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <Field
+                label="Buyer GSTIN (Optional)"
+                value={form.buyer_gstin || ""}
+                onChange={(buyer_gstin) => setForm({ ...form, buyer_gstin })}
+                placeholder="e.g. 27AABCU9603R1ZX"
+              />
+              <Field
+                label="Place of Supply (Optional)"
+                value={form.place_of_supply || ""}
+                onChange={(place_of_supply) => setForm({ ...form, place_of_supply })}
+                placeholder="e.g. 27 or Maharashtra"
+              />
+              <Field
+                label="Transport Mode (Optional)"
+                value={form.transport_mode || ""}
+                onChange={(transport_mode) => setForm({ ...form, transport_mode })}
+                placeholder="Road / Rail / Air"
+              />
+              <Field
+                label="Vehicle Number (Optional)"
+                value={form.vehicle_number || ""}
+                onChange={(vehicle_number) => setForm({ ...form, vehicle_number })}
+                placeholder="e.g. MH12AB1234"
+              />
+            </div>
+            {(form.buyer_gstin?.trim() || form.place_of_supply?.trim()) && (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold shadow-sm border border-zinc-200">
+                <span className={`h-2 w-2 rounded-full ${isIntraState ? "bg-green-500" : "bg-amber-500"}`} />
+                {isIntraState ? "Intra-State: CGST + SGST will be applied" : "Inter-State: IGST will be applied"}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Items Table ──────────────────────────────────────────────────── */}
+        <div className="mt-5 space-y-3">
+          {form.items.map((item, index) => (
+            <div
+              key={index}
+              className={`rounded-md border border-zinc-200 p-3 ${isTaxInvoice ? "grid gap-3 md:grid-cols-[1.4fr_1fr_0.55fr_0.55fr_0.55fr_0.55fr_0.5fr_0.65fr_auto]" : "grid gap-3 md:grid-cols-[1.5fr_0.75fr_0.75fr_0.75fr_0.65fr_0.75fr_auto]"}`}
+            >
+              <VariationField
+                item={item}
+                rows={inventoryRows}
+                onCustomChange={(value) => patchItem(index, {
+                  product_id: null,
+                  variety: value || "Plain White",
+                  packaging_size: value,
+                  packaging_size_name: value,
+                })}
+                onSelect={(stock) => patchItem(index, itemFromVariation(stock, item))}
+              />
+              {isTaxInvoice && (
+                <Field
+                  label="Product Description"
+                  value={item.description || ""}
+                  onChange={(description) => patchItem(index, { description })}
+                  placeholder="Optional item description"
+                />
+              )}
+              {isTaxInvoice && (
+                <label className="block text-sm">
+                  <span className="font-medium text-zinc-700">HSN Code</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                    placeholder="Optional"
+                    type="text"
+                    value={item.hsn_code || ""}
+                    onChange={(e) => patchItem(index, { hsn_code: e.target.value })}
+                  />
+                </label>
+              )}
+              <NumberField label="Rate/packet" value={item.rate_per_packet} onChange={(rate_per_packet) => patchItem(index, { rate_per_packet })} />
+              <NumberField label="Packets/box" value={item.packets_per_box} onChange={(packets_per_box) => patchItem(index, { packets_per_box })} />
+              <NumberField label="Rate/box" value={item.rate_per_box} onChange={() => undefined} readOnly />
+              <NumberField label="Boxes" value={item.boxes_sold} onChange={(boxes_sold) => patchItem(index, { boxes_sold })} />
+              {isTaxInvoice && (
+                <label className="block text-sm">
+                  <span className="font-medium text-zinc-700">Tax %</span>
+                  <select
+                    className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                    value={item.tax_rate ?? 18}
+                    onChange={(e) => patchItem(index, { tax_rate: Number(e.target.value) })}
+                  >
+                    {TAX_RATES.map((rate) => (
+                      <option key={rate} value={rate}>{rate}%</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <StockIndicator item={item} rows={inventoryRows} />
+              <button className="mt-auto grid h-10 w-10 place-items-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600" type="button" onClick={() => removeItem(index)}>
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Tax Breakdown Card (Tax Invoice only) ────────────────────────── */}
+        {isTaxInvoice && (
+          <div className="mt-5 rounded-xl border border-brand-200 bg-white shadow-sm overflow-hidden">
+            <div className="bg-brand-600 px-4 py-2">
+              <p className="text-xs font-bold uppercase tracking-widest text-white">Live Tax Calculation</p>
+            </div>
+            <div className="divide-y divide-zinc-100">
+              <TaxRow label="Subtotal (Before Tax)" value={taxCalc.subtotal} />
+              {isIntraState ? (
+                <>
+                  <TaxRow label={`CGST (${form.items[0]?.tax_rate ?? 18}% ÷ 2)`} value={taxCalc.cgst} accent />
+                  <TaxRow label={`SGST (${form.items[0]?.tax_rate ?? 18}% ÷ 2)`} value={taxCalc.sgst} accent />
+                </>
+              ) : (
+                <TaxRow label={`IGST (${form.items[0]?.tax_rate ?? 18}%)`} value={taxCalc.igst} accent />
+              )}
+              <div className="flex items-center justify-between px-4 py-3 bg-brand-50">
+                <span className="text-sm font-bold text-brand-900">Grand Total (Rounded)</span>
+                <span className="text-xl font-extrabold text-brand-700">₹{taxCalc.grandTotal.toLocaleString("en-IN")}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Bill of Supply Preview ───────────────────────────────────────── */}
+        {!isTaxInvoice && (
+          <InvoicePreview customer={selectedCustomer} form={form} billTotal={taxCalc.subtotal} />
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700"
+            type="button"
+            onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], { ...emptyItem }) : { ...emptyItem }] })}
+          >
+            <Plus className="h-4 w-4" />
+            Add Product
+          </button>
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+            disabled={isSaving || !selectedCustomer || hasInsufficientStock}
+            type="button"
+            onClick={submit}
+          >
+            <Check className="h-4 w-4" />
+            {isSaving ? "Saving..." : "Save Sale"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─── Sub-Components ──────────────────────────────────────────────────────────
+
+function TaxRow({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between px-4 py-2.5 ${accent ? "bg-brand-50/50" : ""}`}>
+      <span className={`text-sm ${accent ? "font-semibold text-brand-700" : "text-zinc-600"}`}>{label}</span>
+      <span className={`text-sm font-bold tabular-nums ${accent ? "text-brand-700" : "text-zinc-900"}`}>
+        ₹{value.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
+function variationLabel(row: LiveStockRow) {
+  return `${row.variety || "Product"} - ${row.packaging_size || row.packaging_size_name || "Standard"} [${row.pieces_per_packet || 0} Pcs/Pkt]`;
+}
+
+function VariationField({
+  item,
+  rows,
+  onCustomChange,
+  onSelect,
+}: {
+  item: SaleItem;
+  rows: LiveStockRow[];
+  onCustomChange: (value: string) => void;
+  onSelect: (row: LiveStockRow) => void;
+}) {
+  const [isOpen, setOpen] = useState(false);
+  const query = item.product_id
+    ? variationLabel(rows.find((row) => row.product_id === item.product_id) || ({} as LiveStockRow))
+    : item.packaging_size_name || item.variety || "";
+  const normalizedQuery = query.trim().toLowerCase();
+  const suggestions = rows
+    .filter((row) => variationLabel(row).toLowerCase().includes(normalizedQuery))
+    .slice(0, 8);
+
+  return (
+    <label className="relative block text-sm">
       <span className="font-medium text-zinc-700">Product Variation</span>
-      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
-        <option value={0}>Select variation</option>
-        {rows.map((row) => (
-          <option key={String(row.id)} value={row.product_id || 0}>
-            {(row.variety || "Product")} - {row.packaging_size || row.packaging_size_name || "Standard"} [{row.pieces_per_packet || 0} Pcs/Pkt] - Stock {row.current_quantity ?? row.quantity}
-          </option>
-        ))}
-      </select>
+      <input
+        className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+        value={query}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onChange={(event) => {
+          onCustomChange(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="Type or select variation"
+      />
+      {isOpen && suggestions.length > 0 ? (
+        <div className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg">
+          {suggestions.map((row) => (
+            <button
+              key={String(row.id)}
+              className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50"
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onSelect(row);
+                setOpen(false);
+              }}
+            >
+              <span className="font-semibold text-zinc-900">{variationLabel(row)}</span>
+              <span className="block text-xs text-zinc-500">Stock {row.current_quantity ?? row.quantity} boxes</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </label>
   );
 }
@@ -305,7 +614,7 @@ function StockIndicator({ item, rows }: { item: SaleItem; rows: LiveStockRow[] }
     <div className="block text-sm">
       <span className="font-medium text-zinc-700">Stock</span>
       <div className={`mt-1 flex h-10 items-center rounded-md border px-3 font-semibold ${insufficient ? "border-red-200 bg-red-50 text-red-700" : "border-zinc-200 bg-zinc-50 text-zinc-900"}`}>
-        {insufficient ? "Insufficient Stock" : `${available} boxes`}
+        {insufficient ? "Insufficient" : `${available} boxes`}
       </div>
     </div>
   );
@@ -349,44 +658,12 @@ function InvoicePreview({ customer, form, billTotal }: { customer: CustomerSearc
   );
 }
 
-function Field({ label, value, type = "text", onChange }: { label: string; value: string; type?: string; onChange: (value: string) => void }) {
+function Field({ label, value, type = "text", onChange, placeholder }: { label: string; value: string; type?: string; onChange: (value: string) => void; placeholder?: string }) {
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
-      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
     </label>
-  );
-}
-
-function InvoiceModeField({ value, onChange }: { value: DailySaleCreate["legal_invoice_type"]; onChange: (value: DailySaleCreate["legal_invoice_type"]) => void }) {
-  return (
-    <div className="block text-sm">
-      <span className="font-medium text-zinc-700">Legal Invoice Mode</span>
-      <div className="mt-1 flex h-10 w-full rounded-lg bg-zinc-200/70 p-1 transition-all duration-200">
-        <button
-          type="button"
-          onClick={() => onChange("bill_of_supply")}
-          className={`flex-1 rounded-md text-xs font-bold transition-all duration-300 ${
-            value === "bill_of_supply"
-              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.08)] scale-[1.02]"
-              : "text-zinc-600 hover:text-zinc-950 hover:bg-white/30"
-          }`}
-        >
-          Bill of Supply
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange("tax_invoice")}
-          className={`flex-1 rounded-md text-xs font-bold transition-all duration-300 ${
-            value === "tax_invoice"
-              ? "bg-white text-brand-700 shadow-[0_2px_8px_rgba(0,0,0,0.08)] scale-[1.02]"
-              : "text-zinc-600 hover:text-zinc-950 hover:bg-white/30"
-          }`}
-        >
-          Tax Invoice
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -396,15 +673,6 @@ function NumberField({ label, value, onChange, readOnly = false }: { label: stri
       <span className="font-medium text-zinc-700">{label}</span>
       <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-50 disabled:text-zinc-600" disabled={readOnly} placeholder="0" type="number" value={value === 0 ? "" : value} onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))} />
     </label>
-  );
-}
-
-function ReadOnlyValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="block text-sm">
-      <span className="font-medium text-zinc-700">{label}</span>
-      <div className="mt-1 flex h-10 items-center rounded-md border border-zinc-200 bg-zinc-50 px-3 font-semibold text-zinc-900">{value}</div>
-    </div>
   );
 }
 

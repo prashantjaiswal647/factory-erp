@@ -137,6 +137,20 @@ def create_machine(
     )
     db.add(machine)
     _log_onboarding_change(db, int(factory_id), "Added", machine.machine_name or machine.machine_number or machine.name)
+    
+    # Log to Audit Trail
+    from routers.operations import log_audit_trail
+    log_audit_trail(
+        db=db,
+        factory_id=current_user.factory_id,
+        user_id=current_user.id,
+        user_role=current_user.role,
+        action_type="CREATE",
+        entity_name="Machine",
+        short_statement=f"Created Machine {machine.machine_number}",
+        event_type="machine_telemetry"
+    )
+    
     db.commit()
     db.refresh(machine)
     return machine
@@ -191,6 +205,20 @@ def update_machine(
         machine.machine_name = payload.machine_name
 
     _log_onboarding_change(db, int(factory_id), "Updated", machine.machine_name or machine.machine_number or machine.name)
+    
+    # Log to Audit Trail
+    from routers.operations import log_audit_trail
+    log_audit_trail(
+        db=db,
+        factory_id=current_user.factory_id,
+        user_id=current_user.id,
+        user_role=current_user.role,
+        action_type="UPDATE",
+        entity_name="Machine",
+        short_statement=f"Updated Machine {machine.machine_number}",
+        event_type="machine_telemetry"
+    )
+    
     db.commit()
     db.refresh(machine)
     return machine

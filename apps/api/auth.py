@@ -189,8 +189,18 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     user = get_user_by_username(db, identifier) if "@" in identifier else get_user_by_phone(db, identifier)
     if user is None and "@" not in identifier:
         user = get_user_by_username(db, identifier)
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None:
+        print(f"AUTH DEBUG: User not found for identifier={identifier!r}")
         return None
+    try:
+        password_matches = verify_password(password, user.password_hash)
+    except Exception as exc:
+        print(f"AUTH DEBUG: Password hash verification error for user_id={user.id}, identifier={identifier!r}: {exc}")
+        return None
+    if not password_matches:
+        print(f"AUTH DEBUG: Password mismatch for user_id={user.id}, identifier={identifier!r}")
+        return None
+    print(f"AUTH DEBUG: Authentication success for user_id={user.id}, role={user.role}, factory_id={user.factory_id}")
     return user
 
 
@@ -805,6 +815,7 @@ def login_for_access_token(
     x_factory_id: Optional[int] = Header(default=None, alias="X-Factory-ID"),
     db: Session = Depends(get_db),
 ):
+    print(f"AUTH DEBUG: OAuth login attempt username={form_data.username!r}")
     user = authenticate_user(db, form_data.username, form_data.password)
     if user is None:
         raise HTTPException(
@@ -838,13 +849,16 @@ def login_for_access_token(
 @router.post("/login", response_model=LoginResponse)
 @public_router.post("/login", response_model=LoginResponse)
 def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
+    print(f"AUTH DEBUG: JSON login attempt identifier={payload.identifier.strip()!r}")
     user = authenticate_user(db, payload.identifier.strip(), payload.password)
     if user is None:
+        print(f"AUTH DEBUG: JSON login rejected identifier={payload.identifier.strip()!r}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
     if user.factory_id is None or user.factory_id <= 0:
+        print(f"AUTH DEBUG: JSON login rejected, factory missing user_id={user.id}, factory_id={user.factory_id}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Factory is not assigned",

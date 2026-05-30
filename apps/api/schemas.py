@@ -493,7 +493,7 @@ class DailyProductionCreate(BaseModel):
     machine_id: int = Field(default=0, ge=0)
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: Optional[int] = Field(default=None, gt=0)
-    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
+    variety: str = Field(default="Standard/White", min_length=1, max_length=255)
     packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=100)
     packaging_size_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     pieces_per_packet: int = Field(default=1, gt=0)
@@ -807,16 +807,17 @@ class DailyProductionResponse(BaseModel):
 class DailySaleItemCreate(BaseModel):
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: int = Field(..., gt=0)
-    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
-    packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    variety: str = Field(default="Standard/White", min_length=1, max_length=255)
+    packaging_size: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    packaging_size_name: str = Field(..., min_length=1, max_length=255)
     boxes_sold: int = Field(default=0, ge=0)
     loose_packets_sold: int = Field(default=0, ge=0)
     rate_per_box: Decimal = Field(default=Decimal("0.00"), ge=0)
     rate_per_packet: Decimal = Field(default=Decimal("0.00"), ge=0)
     packets_per_box: int = Field(default=0, ge=0)
     hsn_code: Optional[str] = Field(default=None, max_length=50)
-    description: Optional[str] = Field(default=None, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=500)
+    tax_rate: Optional[float] = Field(default=0.0, ge=0.0)
 
 
 SalesOrderItemCreate = DailySaleItemCreate
@@ -831,6 +832,11 @@ class DailySaleCreate(BaseModel):
     rough_bill_enabled: bool = True
     rough_bill_number: Optional[str] = Field(default=None, max_length=50)
     items: List[DailySaleItemCreate] = Field(..., min_length=1)
+    buyer_gstin: Optional[str] = Field(default=None, max_length=50)
+    transport_mode: Optional[str] = Field(default=None, max_length=100)
+    vehicle_number: Optional[str] = Field(default=None, max_length=100)
+    state_code: Optional[str] = Field(default=None, max_length=50)
+    place_of_supply: Optional[str] = Field(default=None, max_length=150)
 
 
 class DailySaleResponse(BaseModel):
@@ -897,6 +903,7 @@ class FactoryProfileUpdate(BaseModel):
     address: Optional[str] = Field(default=None, max_length=500)
     gst_number: Optional[str] = Field(default=None, max_length=50)
     initial_invoice_number: Optional[int] = Field(default=1, ge=1)
+    invoice_prefix: Optional[str] = Field(default="INV-", max_length=50)
     advance_payment_discount_percentage: Optional[Decimal] = Field(default=Decimal('2.00'), ge=0, le=100)
 
 
@@ -907,6 +914,7 @@ class FactoryProfileResponse(BaseModel):
     gst_number: Optional[str] = None
     initial_invoice_number: int
     current_invoice_counter: int
+    invoice_prefix: Optional[str] = "INV-"
     advance_payment_discount_percentage: Decimal = Decimal('2.00')
 
 

@@ -1,7 +1,7 @@
 import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, saveFinalProductOpeningStock, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachineOnboarding, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, listMachineTemplates, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog } from "../lib/api";
 import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, MachineTemplateRecord, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
 import { EditMachineModal } from "../components/EditMachineModal";
 import ConfigurationOverview from "../components/ConfigurationOverview";
@@ -14,7 +14,6 @@ const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20,
 const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
 const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", box_quantity: 0, price_per_box: 0 };
 const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
-const finalProductStockDraft = { product_id: 0, initial_quantity: 0 };
 const machineDraft: MachineCreate = {
   machine_type: "Paper Cup",
   machine_number: "",
@@ -62,7 +61,6 @@ export default function OnboardingPage() {
   const [bottomStock, setBottomStock] = useState(bottomStockDraft);
   const [boxStock, setBoxStock] = useState<BoxPackagingStockCreate>(boxStockDraft);
   const [plasticStock, setPlasticStock] = useState<PlasticStockCreate>(plasticStockDraft);
-  const [finalProductStock, setFinalProductStock] = useState(finalProductStockDraft);
   const [finalProducts, setFinalProducts] = useState<FinalStockOption[]>([]);
   const [machineUsage, setMachineUsage] = useState<MachineLimitUsage | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -70,16 +68,13 @@ export default function OnboardingPage() {
   const { updateUser, user } = useAuth();
   const canDelete = user?.role === "Owner";
 
-  // Dynamic & Custom Final Product opening stock metrics states
-  const [isCustomMode, setIsCustomMode] = useState(false);
-  const [isCustomSizeOverride, setIsCustomSizeOverride] = useState(false);
-  const [customSize, setCustomSize] = useState("");
-  const [selectedSize, setSelectedSize] = useState("");
-  const [customVariety, setCustomVariety] = useState("Standard/White");
-  const [customPackagingName, setCustomPackagingName] = useState("");
-  const [customPiecesPerPacket, setCustomPiecesPerPacket] = useState(100);
-  const [customPacketsPerBox, setCustomPacketsPerBox] = useState(10);
-  const [initialQuantity, setInitialQuantity] = useState(0);
+  // Manual Finished Goods Stock States
+  const [productSizeMl, setProductSizeMl] = useState<number>(0);
+  const [varietyDesign, setVarietyDesign] = useState("Standard/White");
+  const [packagingSizeName, setPackagingSizeName] = useState("");
+  const [pcsPerPacket, setPcsPerPacket] = useState<number>(100);
+  const [packetsPerBox, setPacketsPerBox] = useState<number>(10);
+  const [initialQuantityBoxes, setInitialQuantityBoxes] = useState<number>(0);
 
   // Company Profile states
   const [companyName, setCompanyName] = useState("");
@@ -87,6 +82,7 @@ export default function OnboardingPage() {
   const [companyGST, setCompanyGST] = useState("");
   const [startingInvoiceNum, setStartingInvoiceNum] = useState(1);
   const [advanceDiscountNum, setAdvanceDiscountNum] = useState(2.00);
+  const [invoicePrefix, setInvoicePrefix] = useState("INV-");
 
   useEffect(() => {
     void loadFinalProducts();
@@ -129,10 +125,6 @@ export default function OnboardingPage() {
     try {
       const response = await getFinalStockOptions();
       setFinalProducts(response.data);
-      setFinalProductStock((current) => ({
-        ...current,
-        product_id: current.product_id || response.data[0]?.id || 0
-      }));
     } catch (err) {
       console.error("Failed to load final product options:", err);
       setFinalProducts([]);
@@ -345,63 +337,61 @@ export default function OnboardingPage() {
   }
 
   async function addFinalProductStock() {
+    if (productSizeMl <= 0) {
+      setToast("Please enter a valid Product Size (ML).");
+      return;
+    }
+    if (!varietyDesign.trim()) {
+      setToast("Please enter a variety or design name.");
+      return;
+    }
+    if (pcsPerPacket <= 0 || packetsPerBox <= 0) {
+      setToast("Pcs/Packet and Packets/Box must be greater than 0.");
+      return;
+    }
+
     setIsSaving(true);
     try {
-      let payload: any;
-      if (isCustomMode) {
-        const productSize = isCustomSizeOverride ? Number(customSize) : Number(selectedSize);
-        if (!productSize || isNaN(productSize)) {
-          setToast("Please select or enter a valid Product Size (ML).");
-          setIsSaving(false);
-          return;
+      const payload = {
+        product_size_ml: Number(productSizeMl),
+        variety_design: varietyDesign.trim(),
+        packaging_size_name: packagingSizeName.trim() || undefined,
+        pcs_per_packet: Number(pcsPerPacket),
+        packets_per_box: Number(packetsPerBox),
+        initial_quantity_boxes: Number(initialQuantityBoxes),
+      };
+
+      const result = await onboardFinishedGoods(payload);
+      setToast("Finished goods stock successfully onboarded!");
+
+      // Update finalProducts locally without page refresh
+      setFinalProducts((prev) => {
+        const idx = prev.findIndex(
+          (p) =>
+            p.product_size_ml === result.product_size_ml &&
+            p.variety.toLowerCase() === result.variety.toLowerCase() &&
+            p.packaging_size_name.toLowerCase() === result.packaging_size_name.toLowerCase()
+        );
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = result;
+          return updated;
+        } else {
+          return [...prev, result];
         }
+      });
 
-        payload = {
-          factory_id: String(user?.factory_id || localStorage.getItem("factory_id") || ""),
-          product_size_ml: productSize,
-          variety: String(customVariety || "Standard/White"),
-          packaging_size: String(customPackagingName || `${productSize}ml Standard Box`),
-          packaging_size_name: String(customPackagingName || `${productSize}ml Standard Box`),
-          pieces_per_packet: Number(customPiecesPerPacket) || 100,
-          packets_per_box_limit: Number(customPacketsPerBox) || 1000,
-          initial_quantity: Number(initialQuantity) || 0,
-          current_quantity: Number(initialQuantity) || 0,
-          total_boxes: Number(initialQuantity) || 0,
-          loose_packets: 0
-        };
-      } else {
-        if (!finalProductStock.product_id) {
-          setToast("Please select a product.");
-          setIsSaving(false);
-          return;
-        }
+      // Reset states
+      setProductSizeMl(0);
+      setVarietyDesign("Standard/White");
+      setPackagingSizeName("");
+      setPcsPerPacket(100);
+      setPacketsPerBox(10);
+      setInitialQuantityBoxes(0);
 
-        payload = {
-          factory_id: String(user?.factory_id || localStorage.getItem("factory_id") || ""),
-          product_id: Number(finalProductStock.product_id),
-          initial_quantity: Number(finalProductStock.initial_quantity),
-          current_quantity: Number(finalProductStock.initial_quantity),
-          total_boxes: Number(finalProductStock.initial_quantity)
-        };
-      }
-
-      await saveFinalProductOpeningStock(payload);
-      setToast("Final product opening stock saved");
-      
-      // Reset custom inputs on success
-      setCustomSize("");
-      setSelectedSize("");
-      setCustomVariety("Standard/White");
-      setCustomPackagingName("");
-      setCustomPiecesPerPacket(100);
-      setCustomPacketsPerBox(10);
-      setInitialQuantity(0);
-      setFinalProductStock(finalProductStockDraft);
-      
-      await loadFinalProducts();
-    } catch (caught) {
-      console.error("Failed to save final product opening stock during onboarding:", caught);
-      setToast("Final product stock save failed.");
+    } catch (caught: any) {
+      console.error("Failed to onboard finished goods:", caught);
+      setToast(caught?.response?.data?.detail || "Finished goods onboarding failed.");
     } finally {
       setIsSaving(false);
     }
@@ -419,7 +409,8 @@ export default function OnboardingPage() {
         address: companyAddress.trim(),
         gst_number: companyGST.trim(),
         initial_invoice_number: startingInvoiceNum,
-        advance_payment_discount_percentage: Number(advanceDiscountNum || 0)
+        advance_payment_discount_percentage: Number(advanceDiscountNum || 0),
+        invoice_prefix: invoicePrefix.trim()
       });
       setToast("Company Profile saved successfully");
       setStep(1); // Proceed to Workers
@@ -496,12 +487,18 @@ export default function OnboardingPage() {
                 onChange={setCompanyGST}
               />
             </div>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-4">
               <TextInput
                 label="Factory Address / Place"
                 placeholder="e.g. Wazirpur Industrial Area, New Delhi"
                 value={companyAddress}
                 onChange={setCompanyAddress}
+              />
+              <TextInput
+                label="Invoice Prefix"
+                placeholder="e.g. INV-"
+                value={invoicePrefix}
+                onChange={setInvoicePrefix}
               />
               <NumberInput
                 label="Starting Invoice Number Counter"
@@ -1089,121 +1086,23 @@ export default function OnboardingPage() {
       ) : null}
 
       {step === 4 ? (
-        <Panel icon={PackageCheck} title="Final Product Stock">
-          {/* Mode Selector Tab Group */}
-          <div className="flex rounded-lg bg-zinc-100 p-1 mb-5 max-w-md">
-            <button
-              type="button"
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
-                !isCustomMode
-                  ? "bg-white text-zinc-900 shadow-sm"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-              onClick={() => setIsCustomMode(false)}
-            >
-              Select Existing Product
-            </button>
-            <button
-              type="button"
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${
-                isCustomMode
-                  ? "bg-white text-zinc-900 shadow-sm"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-              onClick={() => setIsCustomMode(true)}
-            >
-              Create Custom Entry
-            </button>
-          </div>
-
-          {!isCustomMode ? (
-            /* Mode 1: Select Existing Product */
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-[2fr_1fr]">
-                <SelectInput
-                  label="Product"
-                  value={String(finalProductStock.product_id)}
-                  options={finalProducts.map((product) => ({
-                    label: `${product.product_size_ml}ml ${product.variety} / ${product.packaging_size_name} - current ${product.current_quantity ?? product.total_boxes} boxes`,
-                    value: String(product.id)
-                  }))}
-                  onChange={(product_id) => setFinalProductStock({ ...finalProductStock, product_id: Number(product_id) })}
-                />
+        <Panel icon={PackageCheck} title="Final Product Stock (Finished Goods)">
+          <div className="space-y-6">
+            <div className="bg-zinc-50/50 p-5 rounded-xl border border-zinc-200 shadow-sm space-y-4">
+              <p className="text-sm font-medium text-zinc-600">Manual Entry (Single Source of Truth for Opening Stock)</p>
+              
+              <div className="grid gap-4 md:grid-cols-3">
                 <NumberInput
-                  label="Initial Quantity (Boxes)"
-                  value={finalProductStock.initial_quantity}
-                  onChange={(initial_quantity) => setFinalProductStock({ ...finalProductStock, initial_quantity })}
+                  label="Product Size (ML)"
+                  value={productSizeMl}
+                  onChange={(val) => setProductSizeMl(val)}
                 />
-              </div>
-              {finalProducts.length === 0 ? (
-                <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-                  No existing finished goods products found in the database. Please use the "Create Custom Entry" tab to enter stock directly, or add product packaging metrics in the previous step.
-                </p>
-              ) : null}
-              <SaveButton
-                label="Save Opening Stock"
-                isSaving={isSaving}
-                disabled={finalProducts.length === 0}
-                onClick={addFinalProductStock}
-              />
-            </div>
-          ) : (
-            /* Mode 2: Create Custom Entry (Hybrid Combo-box Component) */
-            <div className="space-y-5">
-              <div className="grid gap-4 md:grid-cols-2 bg-zinc-50/50 p-5 rounded-xl border border-zinc-200 shadow-sm">
-                {/* Hybrid Combo-box Product Size (ML) block */}
-                <div>
-                  <label className="block text-sm font-semibold text-zinc-700">
-                    Product Size (ML)
-                  </label>
-                  <div className="mt-1 relative">
-                    {!isCustomSizeOverride ? (
-                      <select
-                        className="h-10 w-full rounded-md border border-zinc-200 px-3 outline-none bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-100 text-sm font-medium text-zinc-800"
-                        value={selectedSize}
-                        onChange={(e) => setSelectedSize(e.target.value)}
-                      >
-                        <option value="">-- Choose processed size --</option>
-                        {Array.from(new Set([
-                          ...machines.map(m => Number(m.mould_size_ml)),
-                          ...finalProducts.map(p => Number(p.product_size_ml)).filter(Boolean)
-                        ])).sort((a, b) => a - b).map((size) => (
-                          <option key={size} value={size}>
-                            {size} ml
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        placeholder="Type custom size (e.g. 120)"
-                        className="h-10 w-full rounded-md border border-zinc-200 px-3 outline-none bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-100 text-sm font-medium text-zinc-800"
-                        value={customSize}
-                        onChange={(e) => setCustomSize(e.target.value.replace(/\D/g, ""))}
-                      />
-                    )}
-                  </div>
-                  <label className="flex items-center gap-1.5 mt-2 cursor-pointer select-none text-xs text-brand-600 font-semibold hover:text-brand-700">
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
-                      checked={isCustomSizeOverride}
-                      onChange={(e) => {
-                        setIsCustomSizeOverride(e.target.checked);
-                        if (!e.target.checked) {
-                          setCustomSize("");
-                        }
-                      }}
-                    />
-                    <span>Enter custom size manually (e.g., 120ml override)</span>
-                  </label>
-                </div>
-
+                
                 <div>
                   <TextInput
                     label="Variety / Design"
-                    value={customVariety}
-                    onChange={(val) => setCustomVariety(val)}
+                    value={varietyDesign}
+                    onChange={(val) => setVarietyDesign(val)}
                   />
                   <p className="mt-1 text-[11px] text-zinc-400">e.g., Standard/White, Printed, Brown Kraft</p>
                 </div>
@@ -1211,41 +1110,98 @@ export default function OnboardingPage() {
                 <div>
                   <TextInput
                     label="Packaging Size Name (Optional)"
-                    value={customPackagingName}
-                    onChange={(val) => setCustomPackagingName(val)}
+                    value={packagingSizeName}
+                    onChange={(val) => setPackagingSizeName(val)}
                   />
-                  <p className="mt-1 text-[11px] text-zinc-400">e.g., Big Box, Small Box. (Auto-generates if empty)</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <NumberInput
-                    label="Pcs / Packet"
-                    value={customPiecesPerPacket}
-                    onChange={(val) => setCustomPiecesPerPacket(val)}
-                  />
-                  <NumberInput
-                    label="Packets / Box"
-                    value={customPacketsPerBox}
-                    onChange={(val) => setCustomPacketsPerBox(val)}
-                  />
+                  <p className="mt-1 text-[11px] text-zinc-400">If blank, auto-generates in backend</p>
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <NumberInput
-                  label="Initial Quantity (Boxes)"
-                  value={initialQuantity}
-                  onChange={(val) => setInitialQuantity(val)}
+                  label="Pcs / Packet"
+                  value={pcsPerPacket}
+                  onChange={(val) => setPcsPerPacket(val)}
+                />
+                <NumberInput
+                  label="Packets / Box"
+                  value={packetsPerBox}
+                  onChange={(val) => setPacketsPerBox(val)}
+                />
+                <NumberInput
+                  label="Initial Stock Quantity (Boxes)"
+                  value={initialQuantityBoxes}
+                  onChange={(val) => setInitialQuantityBoxes(val)}
                 />
               </div>
+            </div>
 
+            <div className="flex justify-end border-b border-zinc-100 pb-4">
               <SaveButton
-                label="Save Custom Opening Stock"
+                label="Add Finished Goods Stock"
                 isSaving={isSaving}
                 onClick={addFinalProductStock}
               />
             </div>
-          )}
+
+            {/* Premium rendered cards list for onboarded Finished Goods */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-zinc-800 uppercase tracking-wider">Onboarded Finished Goods Registry</h3>
+                <span className="bg-[#F3E8FF] text-[#4C1D95] text-xs px-2.5 py-0.5 rounded-full font-semibold">
+                  {finalProducts.length} unique configs
+                </span>
+              </div>
+
+              {finalProducts.length === 0 ? (
+                <div className="rounded-lg border-2 border-dashed border-zinc-200 p-8 text-center bg-zinc-50">
+                  <p className="text-zinc-500 text-sm">No finished goods opening stock onboarded yet. Fill details above to register.</p>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {finalProducts.map((product) => {
+                    const totalBoxes = product.total_boxes ?? product.current_quantity ?? 0;
+                    return (
+                      <div
+                        key={product.id}
+                        className="relative overflow-hidden rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition-all duration-200 hover:shadow-md hover:border-zinc-300 flex flex-col justify-between"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-zinc-100 text-zinc-800">
+                              {product.product_size_ml} ml
+                            </span>
+                            <h4 className="text-sm font-bold text-zinc-950 mt-1">
+                              {product.variety}
+                            </h4>
+                            <p className="text-[11px] text-zinc-500 line-clamp-1">
+                              {product.packaging_size_name}
+                            </p>
+                          </div>
+                          
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs font-bold text-zinc-400">STOCK</span>
+                            <span className="text-lg font-black text-[#6D28D9]">
+                              {totalBoxes} <span className="text-xs font-semibold text-zinc-500">Boxes</span>
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-500">
+                          <div>
+                            <span className="font-semibold text-zinc-700">{product.pieces_per_packet}</span> pcs/pkt
+                          </div>
+                          <div>
+                            <span className="font-semibold text-zinc-700">{product.packets_per_box_limit || product.packets_per_box}</span> pkts/box
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </Panel>
       ) : null}
       

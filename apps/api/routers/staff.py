@@ -521,6 +521,20 @@ def core_create_staff(payload: SecureStaffCreateRequest, creator: User, db: Sess
 
         db.commit()
         db.refresh(staff_user)
+        
+        # Log to Audit Trail
+        from routers.operations import log_audit_trail
+        log_audit_trail(
+            db=db,
+            factory_id=creator.factory_id,
+            user_id=creator.id,
+            user_role=creator.role,
+            action_type="CREATE",
+            entity_name="Worker",
+            short_statement=f"Created Staff/Worker profile for {staff_user.full_name}",
+            event_type="attendance"
+        )
+        
         return staff_user
     except IntegrityError as exc:
         db.rollback()
@@ -859,6 +873,11 @@ def update_worker_profile(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role.lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor role is not authorized to edit or delete operational data",
+        )
     worker = (
         db.query(Worker)
         .filter(Worker.id == worker_id)
@@ -933,6 +952,20 @@ def update_worker_profile(
     try:
         db.commit()
         db.refresh(worker)
+        
+        # Log to Audit Trail
+        from routers.operations import log_audit_trail
+        log_audit_trail(
+            db=db,
+            factory_id=current_user.factory_id,
+            user_id=current_user.id,
+            user_role=current_user.role,
+            action_type="UPDATE",
+            entity_name="Worker",
+            short_statement=f"Updated Worker profile for {worker.name}",
+            event_type="attendance"
+        )
+        
         val = int(opening_attendance.present_days or 0) if opening_attendance else 0
         worker.previous_attendance = val
         worker.previous_attendance_count = val
@@ -949,6 +982,11 @@ def delete_worker(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role.lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor role is not authorized to edit or delete operational data",
+        )
     from models import Worker, User, DailyProduction, AttendanceLog, AdvancePayment, HisabSettlement, WorkerOpeningAttendance, AppUsageLog, TokenUsageLog
     
     assert_owner_delete_permission(current_user)
@@ -982,6 +1020,7 @@ def delete_worker(
     )
     
     # Delete the worker
+    worker_name = worker.name
     db.delete(worker)
     
     if staff_user is not None:
@@ -990,6 +1029,19 @@ def delete_worker(
         db.query(TokenUsageLog).filter(TokenUsageLog.user_id == staff_user.id).update({TokenUsageLog.user_id: None})
         db.delete(staff_user)
         
+    # Log to Audit Trail
+    from routers.operations import log_audit_trail
+    log_audit_trail(
+        db=db,
+        factory_id=current_user.factory_id,
+        user_id=current_user.id,
+        user_role=current_user.role,
+        action_type="DELETE",
+        entity_name="Worker",
+        short_statement=f"Deleted Worker {worker_name}",
+        event_type="attendance"
+    )
+    
     db.commit()
 
     background_tasks.add_task(

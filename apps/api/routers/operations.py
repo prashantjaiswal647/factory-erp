@@ -43,6 +43,26 @@ logger = logging.getLogger(__name__)
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 
 
+def to_money(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def to_qty(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(QTY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def to_lower(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def require_non_empty_work(boxes, loose) -> None:
+    if (boxes or 0) == 0 and (loose or 0) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one box or loose packet must be entered",
+        )
+
+
 def log_factory_operation(
     db: Session,
     *,
@@ -87,24 +107,65 @@ def log_factory_operation(
         logger.exception("Activity logging failed and was suppressed: %s", log_error)
 
 
-def to_money(value) -> Decimal:
-    return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+def log_audit_trail(
+    db: Session,
+    *,
+    factory_id: int,
+    user_id: Optional[int] = None,
+    user_role: Optional[str] = None,
+    action_type: Optional[str] = None,
+    entity_name: Optional[str] = None,
+    short_statement: Optional[str] = None,
+    event_type: str = "machine_telemetry",
+    description: str = "",
+    log_date: Optional[date_cls] = None,
+) -> None:
+    """Best-effort activity audit insert that includes audit fields and must never break the caller."""
+    try:
+        normalized_event_type = (event_type or "").strip()
+        if normalized_event_type not in VALID_ACTIVITY_EVENT_TYPES:
+            normalized_event_type = "machine_telemetry"
+        normalized_description = (description or short_statement or "").strip()
+        if not normalized_description:
+            return
 
-
-def to_qty(value) -> Decimal:
-    return Decimal(str(value or 0)).quantize(QTY_QUANT, rounding=ROUND_HALF_UP)
-
-
-def to_lower(value: str) -> str:
-    return (value or "").strip().lower()
-
-
-def require_non_empty_work(payload_boxes: int, payload_loose: int) -> None:
-    if (payload_boxes or 0) == 0 and (payload_loose or 0) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="At least one box or loose packet must be entered",
-        )
+        created_at = datetime.now(LOCAL_TZ)
+        effective_log_date = log_date or created_at.date()
+        savepoint = db.connection().begin_nested()
+        try:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO activity_logs (
+                        factory_id, event_type, description, log_date, created_at,
+                        user_id, user_role, action_type, entity_name, short_statement, timestamp
+                    )
+                    VALUES (
+                        :factory_id, :event_type, :description, :log_date, :created_at,
+                        :user_id, :user_role, :action_type, :entity_name, :short_statement, :timestamp
+                    )
+                    """
+                ),
+                {
+                    "factory_id": int(factory_id),
+                    "event_type": normalized_event_type,
+                    "description": normalized_description,
+                    "log_date": effective_log_date,
+                    "created_at": created_at,
+                    "user_id": user_id,
+                    "user_role": user_role,
+                    "action_type": action_type,
+                    "entity_name": entity_name,
+                    "short_statement": short_statement,
+                    "timestamp": created_at,
+                },
+            )
+            savepoint.commit()
+        except Exception:
+            savepoint.rollback()
+            raise
+    except Exception as log_error:
+        logger.exception("Audit trail logging failed and was suppressed: %s", log_error)
 
 
 def average_bottom_weight_per_roll(bottom_stock: BottomStock) -> Decimal:
@@ -751,6 +812,11 @@ def delete_daily_production(
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
+    if current_user.role.lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor role is not authorized to edit or delete operational data",
+        )
     assert_owner_delete_permission(current_user)
     production = (
         db.query(DailyProduction)
@@ -770,6 +836,7 @@ def delete_daily_production(
     factory_id = production.factory_id
     
     try:
+        statement = f"Deleted Daily Production Log ID #{log_id} for {product_size_ml}ML {variety} ({packaging_size_name})"
         db.delete(production)
         db.flush()
         
@@ -781,6 +848,17 @@ def delete_daily_production(
             product_size_ml=product_size_ml,
             variety=variety,
             packaging_size_name=packaging_size_name,
+        )
+        
+        log_audit_trail(
+            db=db,
+            factory_id=int(factory_id),
+            user_id=current_user.id,
+            user_role=current_user.role,
+            action_type="DELETE",
+            entity_name="Production",
+            short_statement=statement,
+            event_type="production"
         )
         
         db.commit()
@@ -799,9 +877,6 @@ def delete_daily_production(
             detail=f"Failed to delete production log: {exc}"
         )
     return None
-
-
-# ==================== OPERATIONS SEQUENCE TIMELINE ENDPOINTS ====================
 
 
 class SequenceLogCreate(BaseModel):
@@ -1009,3 +1084,63 @@ def report_machine_breakdown(
     db.refresh(activity)
     return _activity_to_dict(activity)
 
+
+@router.get("/activity-logs/daily-sequence")
+def get_daily_sequence_logs(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor", "Operator"])),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    
+    distinct_dates = (
+        db.query(ActivityLog.log_date)
+        .filter(ActivityLog.factory_id == factory_id)
+        .group_by(ActivityLog.log_date)
+        .order_by(ActivityLog.log_date.desc())
+        .limit(5)
+        .all()
+    )
+    
+    active_dates = [d[0] for d in distinct_dates]
+    if not active_dates:
+        active_dates = [datetime.now(LOCAL_TZ).date()]
+        
+    logs = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.factory_id == factory_id)
+        .filter(ActivityLog.log_date.in_(active_dates))
+        .order_by(ActivityLog.log_date.desc(), ActivityLog.created_at.desc())
+        .all()
+    )
+    
+    grouped = {}
+    for log_date in active_dates:
+        grouped[log_date.isoformat()] = []
+        
+    for log in logs:
+        date_str = log.log_date.isoformat() if log.log_date else datetime.now(LOCAL_TZ).date().isoformat()
+        if date_str not in grouped:
+            grouped[date_str] = []
+        
+        local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
+        grouped[date_str].append({
+            "id": log.id,
+            "event_type": log.event_type,
+            "description": log.description,
+            "user_id": log.user_id,
+            "user_role": log.user_role,
+            "action_type": log.action_type,
+            "entity_name": log.entity_name,
+            "short_statement": log.short_statement,
+            "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
+            "timestamp": local_created_at.isoformat() if local_created_at else None,
+        })
+        
+    response_data = []
+    for date_str in sorted(grouped.keys(), reverse=True):
+        response_data.append({
+            "date": date_str,
+            "logs": grouped[date_str]
+        })
+        
+    return response_data

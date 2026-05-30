@@ -1,5 +1,8 @@
 {
   "dependencies": {
     "lucide-react": "^1.14.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }
