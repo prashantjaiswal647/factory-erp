@@ -47,6 +47,7 @@ from models import (
     Customer,
     CustomerActivity,
     DailyProduction,
+    DailySequenceLog,
     Employee,
     ExpenseLog,
     FactoryExpense,
@@ -150,12 +151,16 @@ def parse_cors_origins() -> List[str]:
             
     return final_origins
 
+from fastapi.middleware.cors import CORSMiddleware
+
+# Apne FastAPI application instance par CORS configuration lagayein
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=parse_cors_origins(),
+    allow_origins=["*"],  # Production par safety ke liye isme exact browser domains dal sakte hain
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],  # GET, POST, PUT, DELETE saare actions allow karne ke liye
     allow_headers=["*"],
+)
 )
 
 # ==================== ROUTERS LOGIC SYSTEM REGISTRY ====================
@@ -846,7 +851,11 @@ def ensure_runtime_schema():
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_created ON activity_logs (factory_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_log_date ON activity_logs (factory_id, log_date DESC)",
         "ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS ck_activity_logs_event_type",
-        "ALTER TABLE activity_logs ADD CONSTRAINT ck_activity_logs_event_type CHECK (event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry'))"
+        "ALTER TABLE activity_logs ADD CONSTRAINT ck_activity_logs_event_type CHECK (event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry'))",
+        "CREATE TABLE IF NOT EXISTS daily_sequence_logs (id SERIAL PRIMARY KEY, factory_id INTEGER NOT NULL REFERENCES factories(id) ON DELETE CASCADE, user_id INTEGER NULL, user_role VARCHAR(50), action_type VARCHAR(50) NOT NULL, short_statement VARCHAR(500) NOT NULL, timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW())",
+        "CREATE INDEX IF NOT EXISTS idx_daily_sequence_logs_factory_timestamp ON daily_sequence_logs(factory_id, timestamp DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_daily_sequence_logs_factory_role ON daily_sequence_logs(factory_id, user_role)",
+        "CREATE INDEX IF NOT EXISTS idx_daily_sequence_logs_factory_action ON daily_sequence_logs(factory_id, action_type)"
     ]
     with engine.begin() as connection:
         for stmt in statements: connection.execute(text(stmt))

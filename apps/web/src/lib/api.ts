@@ -1564,7 +1564,11 @@ export type ActivityLog = {
   factory_id: number;
   event_type: "production" | "attendance" | "expense" | "payment" | "machine_telemetry";
   description: string;
+  log_date?: string | null;
   created_at: string;
+  created_time?: string | null;
+  user_role?: string | null;
+  action_type?: string | null;
 };
 
 export function getOperationsSequence(dateString?: string) {
@@ -1604,13 +1608,11 @@ export async function onboardFinishedGoods(payload: FinishedGoodsOnboardPayload)
 
 export type DailySequenceLogItem = {
   id: number;
-  event_type: string;
-  description: string;
+  factory_id?: number;
   user_id?: number | null;
   user_role?: string | null;
   action_type?: string | null;
-  entity_name?: string | null;
-  short_statement?: string | null;
+  short_statement: string;
   created_time?: string | null;
   timestamp?: string | null;
 };

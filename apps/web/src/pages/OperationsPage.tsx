@@ -17,26 +17,22 @@ import {
   ChevronUp
 } from "lucide-react";
 import { 
-  getDailySequenceLogs, 
+  getOperationsSequence, 
   createManualActivityLog, 
   updateActivityLog, 
   deleteActivityLog, 
   reportMachineBreakdown,
   uploadCustomersSeed,
-  type ActivityLog,
-  type DailySequenceGroup,
-  type DailySequenceLogItem
+  type ActivityLog
 } from "../lib/api";
 
-interface DailySequenceLogItem {
-  // ...existing fields...
-  relative_day?: number | string | null;  // yeh add karo
-}
-
-
+type OperationsLogGroup = {
+  date: string;
+  logs: ActivityLog[];
+};
 
 export default function OperationsPage() {
-  const [dailyGroups, setDailyGroups] = useState<DailySequenceGroup[]>([]);
+  const [dailyGroups, setDailyGroups] = useState<OperationsLogGroup[]>([]);
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -86,19 +82,19 @@ export default function OperationsPage() {
     setIsLoading(true);
     setError("");
     try {
-      const response = await getDailySequenceLogs();
+      const response = await getOperationsSequence();
       
       // Parse elements to group flat sequence logs array by day dividers
-      const groups: Record<string, DailySequenceLogItem[]> = {};
-      response.forEach((log) => {
-        const key = log.relative_day || "Today";
+      const groups: Record<string, ActivityLog[]> = {};
+      response.data.forEach((log) => {
+        const key = log.log_date || "Today";
         if (!groups[key]) {
           groups[key] = [];
         }
         groups[key].push(log);
       });
 
-      const parsedGroups: DailySequenceGroup[] = Object.entries(groups).map(([date, logs]) => ({
+      const parsedGroups: OperationsLogGroup[] = Object.entries(groups).map(([date, logs]) => ({
         date,
         logs
       }));

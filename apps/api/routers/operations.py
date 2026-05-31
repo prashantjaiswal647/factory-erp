@@ -1,4 +1,4 @@
-from datetime import date as date_cls, datetime, timedelta, timezone
+from datetime import date as date_cls, datetime, time as time_cls, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from typing import List, Optional
@@ -26,6 +26,7 @@ from models import (
     Worker,
     Payment,
     ActivityLog,
+    DailySequenceLog,
     AppUsageLog,
 )
 from pydantic import BaseModel, Field
@@ -70,6 +71,9 @@ def log_factory_operation(
     event_type: str,
     description: str,
     log_date: Optional[date_cls] = None,
+    user_id: Optional[int] = None,
+    user_role: Optional[str] = None,
+    action_type: str = "CREATE",
 ) -> None:
     """Best-effort activity audit insert that must never break the caller."""
     try:
@@ -99,6 +103,25 @@ def log_factory_operation(
                     "created_at": created_at,
                 },
             )
+            if user_id is not None or user_role:
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO daily_sequence_logs (
+                            factory_id, user_id, user_role, action_type, short_statement, timestamp
+                        )
+                        VALUES (:factory_id, :user_id, :user_role, :action_type, :short_statement, :timestamp)
+                        """
+                    ),
+                    {
+                        "factory_id": int(factory_id),
+                        "user_id": user_id,
+                        "user_role": user_role,
+                        "action_type": (action_type or "CREATE").strip().upper(),
+                        "short_statement": normalized_description[:500],
+                        "timestamp": created_at,
+                    },
+                )
             savepoint.commit()
         except Exception:
             savepoint.rollback()
@@ -120,43 +143,31 @@ def log_audit_trail(
     description: str = "",
     log_date: Optional[date_cls] = None,
 ) -> None:
-    """Best-effort activity audit insert that includes audit fields and must never break the caller."""
+    """Best-effort daily sequence audit insert that must never break the caller."""
     try:
-        normalized_event_type = (event_type or "").strip()
-        if normalized_event_type not in VALID_ACTIVITY_EVENT_TYPES:
-            normalized_event_type = "machine_telemetry"
         normalized_description = (description or short_statement or "").strip()
         if not normalized_description:
             return
+        normalized_action = (action_type or "CREATE").strip().upper()
 
         created_at = datetime.now(LOCAL_TZ)
-        effective_log_date = log_date or created_at.date()
         savepoint = db.connection().begin_nested()
         try:
             db.execute(
                 text(
                     """
-                    INSERT INTO activity_logs (
-                        factory_id, event_type, description, log_date, created_at,
-                        user_id, user_role, action_type, entity_name, short_statement, timestamp
+                    INSERT INTO daily_sequence_logs (
+                        factory_id, user_id, user_role, action_type, short_statement, timestamp
                     )
-                    VALUES (
-                        :factory_id, :event_type, :description, :log_date, :created_at,
-                        :user_id, :user_role, :action_type, :entity_name, :short_statement, :timestamp
-                    )
+                    VALUES (:factory_id, :user_id, :user_role, :action_type, :short_statement, :timestamp)
                     """
                 ),
                 {
                     "factory_id": int(factory_id),
-                    "event_type": normalized_event_type,
-                    "description": normalized_description,
-                    "log_date": effective_log_date,
-                    "created_at": created_at,
                     "user_id": user_id,
                     "user_role": user_role,
-                    "action_type": action_type,
-                    "entity_name": entity_name,
-                    "short_statement": short_statement,
+                    "action_type": normalized_action,
+                    "short_statement": normalized_description[:500],
                     "timestamp": created_at,
                 },
             )
@@ -535,10 +546,13 @@ def create_daily_production(
             log_factory_operation(
                 db,
                 factory_id=int(factory_id),
-                event_type="production",
-                description=f"\U0001F4E6 Production Update: Machine {machine.id} completed {total_boxes_completed} boxes of {product_size_ml} cups (Wastage: {wastage_percent}%)",
-                log_date=payload.date,
-            )
+            event_type="production",
+            description=f"\U0001F4E6 Production Update: Machine {machine.id} completed {total_boxes_completed} boxes of {product_size_ml} cups (Wastage: {wastage_percent}%)",
+            log_date=payload.date,
+            user_id=current_user.id,
+            user_role=current_user.role,
+            action_type="CREATE",
+        )
         except Exception as log_error:
             logger.exception("Suppressed activity log failure for production entry: %s", log_error)
 
@@ -773,6 +787,9 @@ def create_daily_sale(
                 event_type="payment",
                 description=f"\U0001F4B0 Sale Logged: Sold {sold_boxes} boxes to {customer.name} - Value: \u20B9{bill_total:,.2f}",
                 log_date=payload.date,
+                user_id=current_user.id,
+                user_role=current_user.role,
+                action_type="CREATE",
             )
         except Exception as log_error:
             logger.exception("Suppressed activity log failure for daily sale: %s", log_error)
@@ -1103,26 +1120,28 @@ def get_daily_sequence_logs(
             )
     else:
         target_date = datetime.now(LOCAL_TZ).date()
-        
+
+    start_at = datetime.combine(target_date, time_cls.min, tzinfo=LOCAL_TZ)
+    end_at = start_at + timedelta(days=1)
     logs = (
-        db.query(ActivityLog)
-        .filter(ActivityLog.factory_id == factory_id)
-        .filter(ActivityLog.log_date == target_date)
-        .order_by(ActivityLog.created_at.desc())
+        db.query(DailySequenceLog)
+        .filter(DailySequenceLog.factory_id == factory_id)
+        .filter(DailySequenceLog.timestamp >= start_at)
+        .filter(DailySequenceLog.timestamp < end_at)
+        .order_by(DailySequenceLog.timestamp.desc())
         .all()
     )
     
     response_data = []
     for log in logs:
-        local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
+        local_created_at = log.timestamp.astimezone(LOCAL_TZ) if log.timestamp else None
         response_data.append({
             "id": log.id,
-            "event_type": log.event_type,
-            "description": log.description,
+            "factory_id": log.factory_id,
             "user_id": log.user_id,
-            "user_role": log.user_role or "owner",
+            "user_role": log.user_role or "Owner",
             "action_type": log.action_type or "CREATE",
-            "short_statement": log.short_statement or log.description,
+            "short_statement": log.short_statement,
             "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
             "timestamp": local_created_at.isoformat() if local_created_at else None,
         })

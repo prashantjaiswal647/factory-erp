@@ -2,12 +2,9 @@ import React, { useState, useEffect } from "react";
 import { 
   CalendarDays, 
   Clock, 
-  UserCheck, 
-  Boxes, 
-  IndianRupee, 
-  AlertTriangle,
   History,
-  AlertCircle
+  AlertCircle,
+  ShieldCheck
 } from "lucide-react";
 import { getDailySequenceLogs, type DailySequenceLogItem } from "../lib/api";
 
@@ -35,40 +32,6 @@ export default function DailySequencePage() {
       setIsLoading(false);
     }
   }
-
-  // Visual helper configuration per Event Type
-  const eventConfig = {
-    production: {
-      color: "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400",
-      icon: Boxes,
-      badge: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
-      label: "Production"
-    },
-    attendance: {
-      color: "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400",
-      icon: UserCheck,
-      badge: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-      label: "Attendance"
-    },
-    expense: {
-      color: "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400",
-      icon: IndianRupee,
-      badge: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-      label: "Expense"
-    },
-    payment: {
-      color: "border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950/20 dark:text-teal-400",
-      icon: IndianRupee,
-      badge: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
-      label: "Payment Log"
-    },
-    machine_telemetry: {
-      color: "border-rose-500 bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400",
-      icon: AlertTriangle,
-      badge: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400",
-      label: "Machine Telemetry"
-    }
-  };
 
   const getRoleBadgeColor = (role?: string | null) => {
     const r = (role || "").toLowerCase().trim();
@@ -127,22 +90,19 @@ export default function DailySequencePage() {
         ) : (
           <div className="relative border-l-2 border-zinc-100 ml-4 pl-6 space-y-6">
             {logs.map((log) => {
-              const cfg = eventConfig[log.event_type as keyof typeof eventConfig] || eventConfig.production;
-              const IconComp = cfg.icon;
-
               return (
                 <div key={log.id} className="relative group">
                   {/* Stepper Bullet icon */}
-                  <span className={`absolute -left-[35px] top-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 bg-white shadow-sm transition group-hover:scale-110 ${cfg.color}`}>
-                    <IconComp className="h-4 w-4" />
+                  <span className="absolute -left-[35px] top-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-purple-500 bg-white text-purple-700 shadow-sm transition group-hover:scale-110">
+                    <ShieldCheck className="h-4 w-4" />
                   </span>
 
                   {/* Card item */}
                   <div className="rounded-xl border border-zinc-100 bg-zinc-50/50 p-4 transition-all duration-300 hover:border-zinc-200 hover:bg-white hover:shadow-sm flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${cfg.badge}`}>
-                          {cfg.label}
+                        <span className="inline-flex items-center rounded-full bg-zinc-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-700">
+                          {log.action_type || "CREATE"}
                         </span>
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${getRoleBadgeColor(log.user_role)}`}>
                           {log.user_role}
@@ -152,7 +112,7 @@ export default function DailySequencePage() {
                           {log.created_time || "Pending"}
                         </div>
                       </div>
-                      <p className="text-sm font-medium leading-relaxed text-zinc-800">{log.short_statement || log.description}</p>
+                      <p className="text-sm font-medium leading-relaxed text-zinc-800">{log.short_statement}</p>
                     </div>
                   </div>
                 </div>

@@ -1341,6 +1341,17 @@ class ActivityLog(TenantMixin, Base):
     )
 
 
+class DailySequenceLog(TenantMixin, Base):
+    __tablename__ = "daily_sequence_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    user_role = Column(String(50), nullable=True, index=True)
+    action_type = Column(String(50), nullable=False, index=True)
+    short_statement = Column(String(500), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
 class BillPayment(TenantMixin, Base):
     __tablename__ = "bill_payments"
 
