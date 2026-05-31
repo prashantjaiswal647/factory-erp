@@ -354,6 +354,9 @@ class FactorySettings(TenantMixin, Base):
     last_month_electricity_bill = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     number_of_machines = Column(Integer, nullable=False, default=0, server_default="0")
     default_shift_hours = Column(Float, nullable=False, default=8.0, server_default="8.0")
+    bill_of_supply_start_seq = Column(Integer, nullable=False, default=1, server_default="1")
+    tax_invoice_start_seq = Column(Integer, nullable=False, default=1, server_default="1")
+    bill_of_supply_simple_start_seq = Column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
         CheckConstraint("last_month_electricity_bill >= 0", name="ck_factory_settings_electricity_bill_non_negative"),

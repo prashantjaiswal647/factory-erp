@@ -20,7 +20,7 @@ from starlette.datastructures import UploadFile
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile, FactorySettings
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
@@ -137,11 +137,26 @@ def allocate_invoice_number(db: Session, factory: Factory | None, invoice_type: 
         db.flush()
     else:
         attr = _invoice_counter_attr(invoice_type)
-        invoice_counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+        has_previous = db.query(InvoiceDocument).filter(InvoiceDocument.factory_id == str(factory.id)).first() is not None
+        
+        start_seq = 1
+        if not has_previous:
+            settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory.id).first()
+            if settings:
+                if invoice_type == "tax_invoice":
+                    start_seq = settings.tax_invoice_start_seq
+                elif invoice_type in ("bill_of_supply",):
+                    start_seq = settings.bill_of_supply_start_seq
+                elif invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
+                    start_seq = settings.bill_of_supply_simple_start_seq
+
+        invoice_counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or start_seq
+        if invoice_counter == 1 and start_seq > 1:
+            invoice_counter = start_seq
+            
         setattr(factory, attr, invoice_counter + 1)
-        # Keep legacy counter in sync for backward compatibility
         if attr != "current_invoice_counter":
-            factory.current_invoice_counter = (factory.current_invoice_counter or 1)
+            factory.current_invoice_counter = (factory.current_invoice_counter or start_seq)
 
     prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
     return f"{prefix}{invoice_counter}"
@@ -161,7 +176,22 @@ def preview_invoice_number(db: Session, factory: Factory | None, invoice_type: s
     if recycled_entry is not None:
         return f"{prefix}{recycled_entry.recycled_number}"
     attr = _invoice_counter_attr(invoice_type)
-    counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+    
+    has_previous = db.query(InvoiceDocument).filter(InvoiceDocument.factory_id == str(factory.id)).first() is not None
+    start_seq = 1
+    if not has_previous:
+        settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory.id).first()
+        if settings:
+            if invoice_type == "tax_invoice":
+                start_seq = settings.tax_invoice_start_seq
+            elif invoice_type in ("bill_of_supply",):
+                start_seq = settings.bill_of_supply_start_seq
+            elif invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
+                start_seq = settings.bill_of_supply_simple_start_seq
+                
+    counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or start_seq
+    if counter == 1 and start_seq > 1:
+        counter = start_seq
     return f"{prefix}{counter}"
 
 
