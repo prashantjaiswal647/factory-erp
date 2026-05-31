@@ -287,7 +287,7 @@ def update_factory_profile(
 ):
     if not current_user.factory_id:
         raise HTTPException(status_code=404, detail="No factory linked to this user")
-    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
     

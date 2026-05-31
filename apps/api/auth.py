@@ -1067,17 +1067,32 @@ def update_user_profile(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+    user = (
+        db.query(User)
+        .filter(User.id == current_user.id)
+        .filter(User.factory_id == current_user.factory_id)
+        .with_for_update()
+        .first()
+    )
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
     full_phone_number, phone_number_normalized = normalize_phone_number(payload.phone_number, payload.country_code)
-    existing_phone = get_user_by_phone(db, full_phone_number)
+    existing_phone = (
+        db.query(User)
+        .filter(User.phone_number == full_phone_number)
+        .filter(User.factory_id == current_user.factory_id)
+        .first()
+    )
     if existing_phone is not None and existing_phone.id != current_user.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already exists")
 
-    current_user.phone_number = full_phone_number
-    current_user.phone_number_normalized = phone_number_normalized
+    user.phone_number = full_phone_number
+    user.phone_number_normalized = phone_number_normalized
     if payload.full_name is not None:
-        current_user.full_name = payload.full_name.strip() or current_user.full_name
+        user.full_name = payload.full_name.strip() or user.full_name
     db.commit()
-    db.refresh(current_user)
+    db.refresh(user)
     return AuthUserProfile(
         id=current_user.id,
         user_id=current_user.user_id,
