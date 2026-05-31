@@ -1087,60 +1087,44 @@ def report_machine_breakdown(
 
 @router.get("/activity-logs/daily-sequence")
 def get_daily_sequence_logs(
+    date: Optional[str] = None,
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor", "Operator"])),
     db: Session = Depends(get_db),
 ):
     factory_id = current_user.factory_id
     
-    distinct_dates = (
-        db.query(ActivityLog.log_date)
-        .filter(ActivityLog.factory_id == factory_id)
-        .group_by(ActivityLog.log_date)
-        .order_by(ActivityLog.log_date.desc())
-        .limit(5)
-        .all()
-    )
-    
-    active_dates = [d[0] for d in distinct_dates]
-    if not active_dates:
-        active_dates = [datetime.now(LOCAL_TZ).date()]
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format. Expected YYYY-MM-DD."
+            )
+    else:
+        target_date = datetime.now(LOCAL_TZ).date()
         
     logs = (
         db.query(ActivityLog)
         .filter(ActivityLog.factory_id == factory_id)
-        .filter(ActivityLog.log_date.in_(active_dates))
-        .order_by(ActivityLog.log_date.desc(), ActivityLog.created_at.desc())
+        .filter(ActivityLog.log_date == target_date)
+        .order_by(ActivityLog.created_at.desc())
         .all()
     )
     
-    grouped = {}
-    for log_date in active_dates:
-        grouped[log_date.isoformat()] = []
-        
+    response_data = []
     for log in logs:
-        date_str = log.log_date.isoformat() if log.log_date else datetime.now(LOCAL_TZ).date().isoformat()
-        if date_str not in grouped:
-            grouped[date_str] = []
-        
         local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
-        grouped[date_str].append({
+        response_data.append({
             "id": log.id,
             "event_type": log.event_type,
             "description": log.description,
             "user_id": log.user_id,
-            "user_role": log.user_role,
-            "action_type": log.action_type,
-            "entity_name": log.entity_name,
-            "short_statement": log.short_statement,
+            "user_role": log.user_role or "owner",
+            "action_type": log.action_type or "CREATE",
+            "short_statement": log.short_statement or log.description,
             "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
             "timestamp": local_created_at.isoformat() if local_created_at else None,
-        })
-        
-    response_data = []
-    for date_str in sorted(grouped.keys(), reverse=True):
-        response_data.append({
-            "date": date_str,
-            "logs": grouped[date_str]
         })
         
     return response_data

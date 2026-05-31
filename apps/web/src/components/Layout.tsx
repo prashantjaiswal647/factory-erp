@@ -18,7 +18,8 @@ type NavigationItem = {
 
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner", "Sub-Owner"] },
-  { label: "Daily Sequence", href: "/operations", icon: CalendarDays, roles: ["Owner", "Sub-Owner"] },
+  { label: "Manual Floor Audits", href: "/operations", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
+  { label: "Daily Sequence", href: "/daily-sequence", icon: CalendarDays, roles: ["Owner", "Sub-Owner"] },
   { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
   { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
   { label: "Machine Setup", href: "/machine-onboarding", icon: Settings2, roles: ["Owner", "Sub-Owner"] },

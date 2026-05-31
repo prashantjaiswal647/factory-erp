@@ -1620,8 +1620,9 @@ export type DailySequenceGroup = {
   logs: DailySequenceLogItem[];
 };
 
-export async function getDailySequenceLogs() {
-  const response = await api.get<DailySequenceLogItem[]>("/api/v1/operations/daily-sequence");
+export async function getDailySequenceLogs(date?: string) {
+  const url = date ? `/api/activity-logs/daily-sequence?date=${date}` : "/api/activity-logs/daily-sequence";
+  const response = await api.get<DailySequenceLogItem[]>(url);
   return response.data;
 }
 

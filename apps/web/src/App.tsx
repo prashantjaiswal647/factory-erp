@@ -20,6 +20,7 @@ import LoginPage from "./pages/LoginPage";
 import MachineOnboardingPage from "./pages/MachineOnboardingPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import OperationsPage from "./pages/OperationsPage";
+import DailySequencePage from "./pages/DailySequencePage";
 import OutstandingPage from "./pages/OutstandingPage";
 import PaymentCollectionPage from "./pages/PaymentCollectionPage";
 import ProductionPage from "./pages/ProductionPage";
@@ -124,6 +125,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <OperationsPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="daily-sequence"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <DailySequencePage />
             </PrivateRoute>
           }
         />
