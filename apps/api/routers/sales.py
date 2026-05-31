@@ -6,7 +6,7 @@ import os
 
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from reportlab.lib import colors
@@ -2441,3 +2441,148 @@ def get_customer_balance(
         previous_due=float(customer.previous_due or 0),
         total_due=float(customer.total_due or 0),
     )
+
+
+@router.post("/v1/customers/upload-seed")
+def upload_customers_seed(
+    file: UploadFile = File(...),
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    import pandas as pd
+    import json
+    import csv
+    from io import StringIO, BytesIO
+    
+    factory_id = current_user.factory_id
+    filename = file.filename or "upload.csv"
+    
+    try:
+        contents = file.file.read()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read file contents: {exc}"
+        )
+        
+    records = []
+    
+    # 1. Tabular data extraction with fallback support
+    try:
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            df = pd.read_excel(BytesIO(contents))
+            records = df.to_dict(orient="records")
+        else:
+            try:
+                df = pd.read_csv(BytesIO(contents))
+                records = df.to_dict(orient="records")
+            except Exception:
+                text_data = contents.decode("utf-8", errors="ignore")
+                reader = csv.DictReader(StringIO(text_data))
+                records = list(reader)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Spreadsheet parser extraction failed: {exc}"
+        )
+
+    count = 0
+    skipped = 0
+    
+    for row in records:
+        if row is None or not isinstance(row, dict):
+            continue
+            
+        normalized_row = {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k is not None}
+        
+        # Match name
+        name = ""
+        for name_key in ["name", "customer name", "customer_name", "full name", "fullname", "buyer"]:
+            if name_key in normalized_row:
+                name = normalized_row[name_key]
+                break
+                
+        # Match phone_number
+        phone_number = ""
+        for phone_key in ["phone", "phone number", "phone_number", "mobile", "mobile number", "contact", "contact_number"]:
+            if phone_key in normalized_row:
+                phone_number = normalized_row[phone_key]
+                break
+                
+        if not phone_number or not name:
+            skipped += 1
+            continue
+            
+        # Clean phone digits
+        cleaned_phone = "".join(filter(str.isdigit, phone_number))
+        if len(cleaned_phone) > 10:
+            cleaned_phone = cleaned_phone[-10:]
+            
+        if not cleaned_phone:
+            skipped += 1
+            continue
+            
+        # Extract remaining fields as details
+        metadata = {}
+        for k, v in row.items():
+            if k is None:
+                continue
+            k_clean = str(k).strip()
+            if k_clean.lower() not in ["name", "customer name", "customer_name", "full name", "fullname", "buyer", "phone", "phone number", "phone_number", "mobile", "mobile number", "contact", "contact_number"]:
+                metadata[k_clean] = str(v).strip()
+                
+        place = metadata.get("place", metadata.get("address", ""))
+        
+        # Multi-Tenancy Guardrail check matching context factory_id
+        existing = (
+            db.query(Customer)
+            .filter(Customer.factory_id == str(factory_id))
+            .filter((Customer.phone_number == cleaned_phone) | (Customer.phone == cleaned_phone))
+            .first()
+        )
+        if existing is not None:
+            skipped += 1
+            continue
+            
+        new_customer = Customer(
+            factory_id=str(factory_id),
+            name=name,
+            phone_number=cleaned_phone,
+            phone=cleaned_phone,
+            contact_number=cleaned_phone,
+            place=place,
+            address=place,
+            previous_due=Decimal("0.00"),
+            total_due=Decimal("0.00"),
+            pending_balance=Decimal("0.00"),
+            balance_amount=Decimal("0.00"),
+            pending_dues=0.0
+        )
+        db.add(new_customer)
+        count += 1
+
+    if count > 0:
+        try:
+            db.commit()
+            
+            # Write audit activity log
+            activity = ActivityLog(
+                factory_id=int(factory_id),
+                event_type="payment",
+                description=f"Successfully imported {count} customers via batch spreadsheet seed upload."
+            )
+            db.add(activity)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database transaction commit failed: {exc}"
+            )
+            
+    return {
+        "status": "success",
+        "message": f"Successfully imported {count} customers. Skipped {skipped} duplicates or invalid rows.",
+        "imported_count": count,
+        "skipped_count": skipped
+    }

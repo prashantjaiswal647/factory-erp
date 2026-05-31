@@ -1625,3 +1625,14 @@ export async function getDailySequenceLogs() {
   return response.data;
 }
 
+export async function uploadCustomersSeed(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await api.post<{ status: string; message: string; imported_count: number; skipped_count: number }>("/api/v1/customers/upload-seed", formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+  return response.data;
+}
+

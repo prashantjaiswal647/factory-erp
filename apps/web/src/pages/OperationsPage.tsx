@@ -22,6 +22,7 @@ import {
   updateActivityLog, 
   deleteActivityLog, 
   reportMachineBreakdown,
+  uploadCustomersSeed,
   type ActivityLog,
   type DailySequenceGroup,
   type DailySequenceLogItem
@@ -33,6 +34,26 @@ export default function OperationsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    showToast("Parsing batch spreadsheet...");
+    try {
+      const res = await uploadCustomersSeed(file);
+      showToast(res.message || "Batch customers imported successfully!");
+      await fetchLogs();
+    } catch (err: any) {
+      console.error("Batch seed upload error:", err);
+      showToast(err?.response?.data?.detail || "Seed customer upload failed.");
+    } finally {
+      setIsUploading(false);
+      e.target.value = "";
+    }
+  }
 
   // Edit Modal State
   const [editingLog, setEditingLog] = useState<ActivityLog | null>(null);
@@ -235,6 +256,18 @@ export default function OperationsPage() {
             <Plus className="h-4 w-4" />
             Log Floor Event
           </button>
+
+          {/* Unstyled Seed Customer Batch Upload Dropzone */}
+          <label className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-300 px-4 text-sm font-bold text-zinc-700 bg-zinc-50 hover:bg-zinc-100 transition cursor-pointer relative">
+            <span className="truncate max-w-[150px]">{isUploading ? "Uploading..." : "Seed Customers (.csv/.xlsx)"}</span>
+            <input 
+              type="file" 
+              accept=".csv,.xlsx,.xls" 
+              onChange={handleFileUpload} 
+              disabled={isUploading}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+          </label>
 
           <button
             onClick={() => setIsBreakdownOpen(true)}
