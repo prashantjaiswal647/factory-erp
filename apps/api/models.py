@@ -1323,10 +1323,15 @@ class ActivityLog(TenantMixin, Base):
     __tablename__ = "activity_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    event_type = Column(String(50), nullable=False, index=True)  # production, attendance, expense, payment, machine_telemetry
+    event_type = Column(String(50), nullable=False, index=True)
     description = Column(Text, nullable=False)
     log_date = Column(Date, nullable=False, server_default=func.current_date(), index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    user_role = Column(String(50), nullable=True)
+    action_type = Column(String(50), nullable=True)
+    entity_name = Column(String(255), nullable=True)
+    short_statement = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(

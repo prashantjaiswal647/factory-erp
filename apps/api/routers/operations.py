@@ -1198,6 +1198,8 @@ def get_daily_sequence_logs_v1(
             "timestamp": local_created_at.isoformat() if local_created_at else None,
             "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
             "relative_day": relative_day,
+            "user_role": log.user_role or "owner",
+            "short_statement": log.short_statement or log.description,
             "created_at_obj": log.created_at
         })
 
@@ -1229,6 +1231,8 @@ def get_daily_sequence_logs_v1(
             "timestamp": local_created_at.isoformat() if local_created_at else None,
             "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
             "relative_day": relative_day,
+            "user_role": "owner",
+            "short_statement": description,
             "created_at_obj": log.created_at
         })
 
