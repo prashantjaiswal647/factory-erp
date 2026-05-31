@@ -273,7 +273,10 @@ def get_factory_profile(
         current_invoice_counter=getattr(factory, "current_invoice_counter", 1) or 1,
         invoice_prefix=getattr(factory, "invoice_prefix", "INV-") or "INV-",
         advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00"),
-        digital_signature_url=getattr(factory, "digital_signature_url", None)
+        digital_signature_url=getattr(factory, "digital_signature_url", None),
+        next_tax_invoice_number=getattr(factory, "next_tax_invoice_number", 1) or 1,
+        next_bill_of_supply_number=getattr(factory, "next_bill_of_supply_number", 1) or 1,
+        next_bill_of_supply_simple_number=getattr(factory, "next_bill_of_supply_simple_number", 1) or 1,
     )
 
 @router.post("/factory-profile", response_model=FactoryProfileResponse)
@@ -295,16 +298,23 @@ def update_factory_profile(
     if payload.initial_invoice_number is not None:
         factory.initial_invoice_number = payload.initial_invoice_number
         factory.current_invoice_counter = payload.initial_invoice_number
-        
+
+    if payload.next_tax_invoice_number is not None:
+        factory.next_tax_invoice_number = payload.next_tax_invoice_number
+    if payload.next_bill_of_supply_number is not None:
+        factory.next_bill_of_supply_number = payload.next_bill_of_supply_number
+    if payload.next_bill_of_supply_simple_number is not None:
+        factory.next_bill_of_supply_simple_number = payload.next_bill_of_supply_simple_number
+
     if payload.invoice_prefix is not None:
         factory.invoice_prefix = payload.invoice_prefix.strip()
 
     if payload.advance_payment_discount_percentage is not None:
         factory.advance_payment_discount_percentage = payload.advance_payment_discount_percentage
-        
+
     if payload.digital_signature_url is not None:
         factory.digital_signature_url = payload.digital_signature_url.strip() if payload.digital_signature_url else None
-        
+
     db.commit()
     db.refresh(factory)
     return FactoryProfileResponse(
@@ -316,7 +326,10 @@ def update_factory_profile(
         current_invoice_counter=factory.current_invoice_counter,
         invoice_prefix=factory.invoice_prefix or "INV-",
         advance_payment_discount_percentage=factory.advance_payment_discount_percentage,
-        digital_signature_url=factory.digital_signature_url
+        digital_signature_url=factory.digital_signature_url,
+        next_tax_invoice_number=getattr(factory, "next_tax_invoice_number", 1) or 1,
+        next_bill_of_supply_number=getattr(factory, "next_bill_of_supply_number", 1) or 1,
+        next_bill_of_supply_simple_number=getattr(factory, "next_bill_of_supply_simple_number", 1) or 1,
     )
 
 

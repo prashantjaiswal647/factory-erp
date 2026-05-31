@@ -108,7 +108,19 @@ def is_intra_state_supply(factory: Factory | None, buyer_gstin: str | None, plac
     return True
 
 
-def allocate_invoice_number(db: Session, factory: Factory | None) -> str:
+def _invoice_counter_attr(invoice_type: str | None) -> str:
+    """Map invoice_type string to the Factory column name for that counter."""
+    if invoice_type == "tax_invoice":
+        return "next_tax_invoice_number"
+    if invoice_type in ("bill_of_supply",):
+        return "next_bill_of_supply_number"
+    if invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
+        return "next_bill_of_supply_simple_number"
+    # Legacy fallback — uses the shared counter
+    return "current_invoice_counter"
+
+
+def allocate_invoice_number(db: Session, factory: Factory | None, invoice_type: str | None = None) -> str:
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
 
@@ -124,14 +136,18 @@ def allocate_invoice_number(db: Session, factory: Factory | None) -> str:
         db.delete(recycled_entry)
         db.flush()
     else:
-        invoice_counter = factory.current_invoice_counter or factory.initial_invoice_number or 1
-        factory.current_invoice_counter = invoice_counter + 1
+        attr = _invoice_counter_attr(invoice_type)
+        invoice_counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+        setattr(factory, attr, invoice_counter + 1)
+        # Keep legacy counter in sync for backward compatibility
+        if attr != "current_invoice_counter":
+            factory.current_invoice_counter = (factory.current_invoice_counter or 1)
 
     prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
     return f"{prefix}{invoice_counter}"
 
 
-def preview_invoice_number(db: Session, factory: Factory | None) -> str:
+def preview_invoice_number(db: Session, factory: Factory | None, invoice_type: str | None = None) -> str:
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
 
@@ -144,7 +160,20 @@ def preview_invoice_number(db: Session, factory: Factory | None) -> str:
     prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
     if recycled_entry is not None:
         return f"{prefix}{recycled_entry.recycled_number}"
-    return f"{prefix}{factory.current_invoice_counter or factory.initial_invoice_number or 1}"
+    attr = _invoice_counter_attr(invoice_type)
+    counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+    return f"{prefix}{counter}"
+
+
+@router.get("/next-invoice-number")
+def get_next_invoice_number(
+    invoice_type: str | None = None,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    invoice_number = preview_invoice_number(db, factory, invoice_type)
+    return {"invoice_number": invoice_number}
 
 
 def sync_next_invoice_setting(factory: Factory | None, used_invoice_number: str | None) -> None:
@@ -165,14 +194,6 @@ def sync_next_invoice_setting(factory: Factory | None, used_invoice_number: str 
     factory.current_invoice_counter = max(next_counter, factory.current_invoice_counter or 0)
 
 
-@router.get("/next-invoice-number")
-def get_next_invoice_number(
-    current_user: User = Depends(check_permissions(SALES_ROLES)),
-    db: Session = Depends(get_db),
-):
-    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
-    invoice_number = preview_invoice_number(db, factory)
-    return {"invoice_number": invoice_number}
 
 
 def resolve_factory_google_sheet_id(db: Session, factory_id: str) -> str | None:
@@ -756,7 +777,7 @@ def add_sale_invoice(
 
     try:
         factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
-        invoice_num = clean_optional_text(payload.legal_invoice_number) or allocate_invoice_number(db, factory)
+        invoice_num = clean_optional_text(payload.legal_invoice_number) or allocate_invoice_number(db, factory, payload.legal_invoice_type)
 
         customer = (
             db.query(Customer)

@@ -187,7 +187,7 @@ export default function SalesEntryPage() {
 
   async function refreshNextInvoiceNumber(overwrite = false) {
     try {
-      const response = await getNextInvoiceNumber();
+      const response = await getNextInvoiceNumber(form.legal_invoice_type);
       const invoiceNumber = response.data.invoice_number || "";
       setForm((current) => ({
         ...current,
@@ -199,6 +199,20 @@ export default function SalesEntryPage() {
       return "";
     }
   }
+
+  // Compute the invoice number to show in the Simple tab's readonly field
+  // by reading directly from the profile counter for the active invoice type.
+  const simpleTabInvoiceNumber: string = (() => {
+    if (!profile) return form.legal_invoice_number || "Auto";
+    const prefix = profile.invoice_prefix || "INV-";
+    if (form.legal_invoice_type === "tax_invoice") {
+      return `${prefix}${profile.next_tax_invoice_number ?? 1}`;
+    }
+    if (form.legal_invoice_type === "BILL_OF_SUPPLY_SIMPLE" || form.legal_invoice_type === "bill_of_supply_simple") {
+      return `${prefix}${profile.next_bill_of_supply_simple_number ?? 1}`;
+    }
+    return `${prefix}${profile.next_bill_of_supply_number ?? 1}`;
+  })();
 
   useEffect(() => {
     void getInventory()
@@ -693,7 +707,7 @@ export default function SalesEntryPage() {
                 <ReadonlyField label="GST Number" value={profile?.gst_number || "—"} />
                 <ReadonlyField label="Address" value={profile?.address || "—"} />
                 <ReadonlyField label="Mobile Number" value={profile?.mobile_number || "—"} />
-                <ReadonlyField label="Invoice Number" value={form.legal_invoice_number || "Auto"} />
+                <ReadonlyField label="Invoice Number" value={simpleTabInvoiceNumber} />
               </div>
             </div>
 

@@ -918,6 +918,9 @@ class FactoryProfileUpdate(BaseModel):
     invoice_prefix: Optional[str] = Field(default="INV-", max_length=50)
     advance_payment_discount_percentage: Optional[Decimal] = Field(default=Decimal('2.00'), ge=0, le=100)
     digital_signature_url: Optional[str] = Field(default=None, max_length=500)
+    next_tax_invoice_number: Optional[int] = Field(default=None, ge=1)
+    next_bill_of_supply_number: Optional[int] = Field(default=None, ge=1)
+    next_bill_of_supply_simple_number: Optional[int] = Field(default=None, ge=1)
 
 
 class FactoryProfileResponse(BaseModel):
@@ -930,6 +933,9 @@ class FactoryProfileResponse(BaseModel):
     invoice_prefix: Optional[str] = "INV-"
     advance_payment_discount_percentage: Decimal = Decimal('2.00')
     digital_signature_url: Optional[str] = None
+    next_tax_invoice_number: int = 1
+    next_bill_of_supply_number: int = 1
+    next_bill_of_supply_simple_number: int = 1
 
 
 class AccountantSummaryResponse(BaseModel):

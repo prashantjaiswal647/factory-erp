@@ -888,8 +888,9 @@ export function createDailySale(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/invoice", payload);
 }
 
-export function getNextInvoiceNumber() {
-  return api.get<{ invoice_number: string }>("/api/sales/next-invoice-number");
+export function getNextInvoiceNumber(invoiceType?: string) {
+  const params = invoiceType ? `?invoice_type=${encodeURIComponent(invoiceType)}` : "";
+  return api.get<{ invoice_number: string }>(`/api/sales/next-invoice-number${params}`);
 }
 
 export function getInvoiceDocuments() {
@@ -1066,6 +1067,9 @@ export type FactoryProfile = {
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
+  next_tax_invoice_number: number;
+  next_bill_of_supply_number: number;
+  next_bill_of_supply_simple_number: number;
 };
 
 export type FactoryProfileUpdate = {
@@ -1076,6 +1080,9 @@ export type FactoryProfileUpdate = {
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
+  next_tax_invoice_number?: number;
+  next_bill_of_supply_number?: number;
+  next_bill_of_supply_simple_number?: number;
 };
 
 export function getFactoryProfile() {
