@@ -28,6 +28,13 @@ import {
   type DailySequenceLogItem
 } from "../lib/api";
 
+interface DailySequenceLogItem {
+  // ...existing fields...
+  relative_day?: number | string | null;  // yeh add karo
+}
+
+
+
 export default function OperationsPage() {
   const [dailyGroups, setDailyGroups] = useState<DailySequenceGroup[]>([]);
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
