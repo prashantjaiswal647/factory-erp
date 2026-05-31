@@ -59,14 +59,28 @@ export default function OperationsPage() {
     setError("");
     try {
       const response = await getDailySequenceLogs();
-      setDailyGroups(response);
       
-      // Auto-expand the first date (which is usually today/most recent) by default
-      if (response && response.length > 0) {
-        const todayStr = new Date().toISOString().split("T")[0];
+      // Parse elements to group flat sequence logs array by day dividers
+      const groups: Record<string, DailySequenceLogItem[]> = {};
+      response.forEach((log) => {
+        const key = log.relative_day || "Today";
+        if (!groups[key]) {
+          groups[key] = [];
+        }
+        groups[key].push(log);
+      });
+
+      const parsedGroups: DailySequenceGroup[] = Object.entries(groups).map(([date, logs]) => ({
+        date,
+        logs
+      }));
+
+      setDailyGroups(parsedGroups);
+      
+      if (parsedGroups.length > 0) {
         const initialExpanded: Record<string, boolean> = {};
-        response.forEach((group, idx) => {
-          initialExpanded[group.date] = idx === 0 || group.date === todayStr;
+        parsedGroups.forEach((group, idx) => {
+          initialExpanded[group.date] = idx === 0 || group.date === "Today";
         });
         setExpandedDates(initialExpanded);
       }
@@ -272,7 +286,12 @@ export default function OperationsPage() {
                   >
                     <div className="flex items-center gap-3">
                       <span className="bg-purple-100 text-purple-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
-                        {new Date(group.date).toLocaleDateString("en-IN", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                        {group.date === "Today" || group.date === "Yesterday"
+                          ? group.date
+                          : (() => {
+                              const d = new Date(group.date);
+                              return isNaN(d.getTime()) ? group.date : d.toLocaleDateString("en-IN", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+                            })()}
                       </span>
                       <span className="text-zinc-500 text-xs font-semibold">
                         ({group.logs.length} operations logged)

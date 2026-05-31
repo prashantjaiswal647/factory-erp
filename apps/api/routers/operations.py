@@ -25,8 +25,8 @@ from models import (
     User,
     Worker,
     Payment,
-    MaterialYield,
     ActivityLog,
+    AppUsageLog,
 )
 from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
@@ -1144,3 +1144,93 @@ def get_daily_sequence_logs(
         })
         
     return response_data
+
+
+@router.get("/v1/operations/daily-sequence")
+def get_daily_sequence_logs_v1(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor", "Operator"])),
+    db: Session = Depends(get_db),
+):
+    factory_id = current_user.factory_id
+    current_time = datetime.now(LOCAL_TZ)
+    start_date = (current_time - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 1. Fetch tracking actions from ActivityLog
+    activity_logs = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.factory_id == factory_id)
+        .filter(ActivityLog.created_at >= start_date)
+        .all()
+    )
+
+    # 2. Fetch tracking actions from AppUsageLog
+    app_usage_logs = (
+        db.query(AppUsageLog)
+        .filter(AppUsageLog.factory_id == factory_id)
+        .filter(AppUsageLog.created_at >= start_date)
+        .all()
+    )
+
+    combined = []
+
+    # Map ActivityLog
+    for log in activity_logs:
+        local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
+        local_date = local_created_at.date() if local_created_at else None
+        
+        if local_date == current_time.date():
+            relative_day = "Today"
+        elif local_date == (current_time - timedelta(days=1)).date():
+            relative_day = "Yesterday"
+        else:
+            relative_day = local_date.isoformat() if local_date else "Past Date"
+
+        combined.append({
+            "id": log.id,
+            "event_type": log.event_type,
+            "description": log.description,
+            "timestamp": local_created_at.isoformat() if local_created_at else None,
+            "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
+            "relative_day": relative_day,
+            "created_at_obj": log.created_at
+        })
+
+    # Map AppUsageLog
+    for log in app_usage_logs:
+        local_created_at = log.created_at.astimezone(LOCAL_TZ) if log.created_at else None
+        local_date = local_created_at.date() if local_created_at else None
+        
+        if local_date == current_time.date():
+            relative_day = "Today"
+        elif local_date == (current_time - timedelta(days=1)).date():
+            relative_day = "Yesterday"
+        else:
+            relative_day = local_date.isoformat() if local_date else "Past Date"
+
+        description = log.meta.get("description") if log.meta and isinstance(log.meta, dict) else None
+        if not description:
+            if log.event_type == "login":
+                description = "User logged in to the dashboard."
+            elif log.event_type == "signup":
+                description = "New user signed up and validated space."
+            else:
+                description = f"User operation: {log.event_type.replace('_', ' ').capitalize()} in {log.route_or_module or 'system'}."
+
+        combined.append({
+            "id": log.id,
+            "event_type": "production" if log.event_type not in ["production", "attendance", "expense", "payment", "machine_telemetry"] else log.event_type,
+            "description": description,
+            "timestamp": local_created_at.isoformat() if local_created_at else None,
+            "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
+            "relative_day": relative_day,
+            "created_at_obj": log.created_at
+        })
+
+    # Sort descending by created_at_obj
+    combined.sort(key=lambda x: x["created_at_obj"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    for item in combined:
+        item.pop("created_at_obj", None)
+
+    return combined
+

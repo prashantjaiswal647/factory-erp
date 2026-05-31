@@ -1621,7 +1621,7 @@ export type DailySequenceGroup = {
 };
 
 export async function getDailySequenceLogs() {
-  const response = await api.get<DailySequenceGroup[]>("/api/activity-logs/daily-sequence");
+  const response = await api.get<DailySequenceLogItem[]>("/api/v1/operations/daily-sequence");
   return response.data;
 }
 
