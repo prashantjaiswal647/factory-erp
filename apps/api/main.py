@@ -183,6 +183,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(staff.staff_v1_router)
     application.include_router(staff.security_v1_router)
     application.include_router(staff.workers_router)
+    application.include_router(staff.workers_v1_router)
     application.include_router(super_admin.router)
     application.include_router(super_admin.admin_router)
     application.include_router(expenses.router)

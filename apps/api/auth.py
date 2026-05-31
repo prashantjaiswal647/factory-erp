@@ -847,7 +847,9 @@ def login_for_access_token(
 
 
 @router.post("/login", response_model=LoginResponse)
+@router.post("/login/", response_model=LoginResponse, include_in_schema=False)
 @public_router.post("/login", response_model=LoginResponse)
+@public_router.post("/login/", response_model=LoginResponse, include_in_schema=False)
 def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
     print(f"AUTH DEBUG: JSON login attempt identifier={payload.identifier.strip()!r}")
     user = authenticate_user(db, payload.identifier.strip(), payload.password)
@@ -937,8 +939,9 @@ def signup_json(payload: SignupRequest, background_tasks: BackgroundTasks, db: S
             detail="Signup failed",
         ) from exc
 
-    # Enqueue Google Sheet initialization in background task
-    background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+    # Legacy Google Sheet task commented out (now handled by n8n sheets automation)
+    # background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+    print(f"[SIGNUP] Skipping legacy google sheets task for factory_id={factory.id} - handled by n8n flow")
 
     return {
         "message": "Signup successful. Please log in.",
@@ -1051,8 +1054,9 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, background_task
     db.commit()
     db.refresh(user)
 
-    # Enqueue Google Sheet initialization in background task
-    background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+    # Legacy Google Sheet task commented out (now handled by n8n sheets automation)
+    # background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
+    print(f"[GOOGLE SIGNUP] Skipping legacy google sheets task for factory_id={factory.id} - handled by n8n flow")
 
     return build_login_response(user, db)
 

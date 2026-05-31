@@ -1010,7 +1010,7 @@ export function getWorkerLedger(workerId: number, month: string) {
 }
 
 export function updateWorkerProfile(workerId: number, payload: WorkerUpdatePayload) {
-  return api.patch<WorkerProfile>(`/api/workers/${workerId}`, payload);
+  return api.patch<WorkerProfile>(`/api/v1/workers/${workerId}`, payload);
 }
 
 export function upsertWorkerAttendance(workerId: number, payload: { date: string; status: WorkerLedgerDay["status"]; production_qty?: number | null }) {

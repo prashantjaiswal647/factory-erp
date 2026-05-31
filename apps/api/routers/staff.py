@@ -863,6 +863,106 @@ def delete_staff_opening_attendance(
 # Explicit Workers Router (Principal Security Specs)
 # ---------------------------------------------------------------------------
 workers_router = APIRouter(prefix="/api/workers", tags=["workers"])
+workers_v1_router = APIRouter(prefix="/api/v1/workers", tags=["workers-v1"])
+
+class WorkerEditSchema(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    phone_number: Optional[str] = Field(default=None, max_length=50)
+    previous_attendance: Optional[int] = Field(default=None, ge=0)
+
+@workers_v1_router.patch("/{worker_id}", response_model=WorkerProfileResponse)
+def update_worker_profile_v1(
+    worker_id: int,
+    payload: WorkerEditSchema,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role.lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor role is not authorized to edit or delete operational data",
+        )
+    worker = (
+        db.query(Worker)
+        .filter(Worker.id == worker_id)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .with_for_update()
+        .first()
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+
+    if payload.name is not None:
+        clean_name = payload.name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name cannot be blank")
+        duplicate = (
+            db.query(Worker.id)
+            .filter(Worker.factory_id == current_user.factory_id)
+            .filter(Worker.id != worker_id)
+            .filter(sql_func.lower(Worker.name) == clean_name.lower())
+            .first()
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Worker name already exists")
+        worker.name = clean_name
+
+    if payload.phone_number is not None:
+        worker.phone = payload.phone_number.strip() or None
+
+    if payload.previous_attendance is not None:
+        opening_attendance = (
+            db.query(WorkerOpeningAttendance)
+            .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+            .filter(WorkerOpeningAttendance.worker_id == worker.id)
+            .with_for_update()
+            .first()
+        )
+        if opening_attendance is None:
+            today = date.today()
+            opening_attendance = WorkerOpeningAttendance(
+                factory_id=current_user.factory_id,
+                worker_id=worker.id,
+                period_start=today,
+                period_end=today,
+                present_days=payload.previous_attendance,
+                created_by_user_id=current_user.id,
+            )
+            db.add(opening_attendance)
+        else:
+            opening_attendance.present_days = payload.previous_attendance
+
+    try:
+        db.commit()
+        db.refresh(worker)
+        
+        # Log to Audit Trail
+        from routers.operations import log_audit_trail
+        log_audit_trail(
+            db=db,
+            factory_id=current_user.factory_id,
+            user_id=current_user.id,
+            user_role=current_user.role,
+            action_type="UPDATE",
+            entity_name="Worker",
+            short_statement=f"Updated Worker profile for {worker.name}",
+            event_type="attendance"
+        )
+        
+        opening_attendance = (
+            db.query(WorkerOpeningAttendance)
+            .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
+            .filter(WorkerOpeningAttendance.worker_id == worker.id)
+            .first()
+        )
+        val = int(opening_attendance.present_days or 0) if opening_attendance else 0
+        worker.previous_attendance = val
+        worker.previous_attendance_count = val
+        return worker
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Worker update conflicts with existing data") from exc
+
 
 
 @workers_router.patch("/{worker_id}", response_model=WorkerProfileResponse)
