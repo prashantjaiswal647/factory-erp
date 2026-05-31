@@ -1151,6 +1151,12 @@ def get_daily_sequence_logs_v1(
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor", "Operator"])),
     db: Session = Depends(get_db),
 ):
+    if (current_user.role or "").strip().lower() == "supervisor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Supervisors are restricted from viewing operational sequence log metrics."
+        )
+        
     factory_id = current_user.factory_id
     current_time = datetime.now(LOCAL_TZ)
     start_date = (current_time - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)

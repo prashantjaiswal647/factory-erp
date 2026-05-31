@@ -1327,7 +1327,7 @@ class ActivityLog(TenantMixin, Base):
 
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry')",
+            "event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry', 'customer', 'invoice', 'finance', 'management')",
             name="ck_activity_logs_event_type",
         ),
     )

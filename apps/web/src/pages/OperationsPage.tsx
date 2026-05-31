@@ -230,6 +230,30 @@ export default function OperationsPage() {
       icon: AlertTriangle,
       badge: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400",
       label: "Machine Telemetry"
+    },
+    customer: {
+      color: "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/20 dark:text-indigo-400",
+      icon: UserCheck,
+      badge: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400",
+      label: "Customer Addition"
+    },
+    invoice: {
+      color: "border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-950/20 dark:text-violet-400",
+      icon: Boxes,
+      badge: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400",
+      label: "Sales & Invoicing"
+    },
+    finance: {
+      color: "border-cyan-500 bg-cyan-50 text-cyan-700 dark:bg-cyan-950/20 dark:text-cyan-400",
+      icon: IndianRupee,
+      badge: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",
+      label: "Financial Log"
+    },
+    management: {
+      color: "border-fuchsia-500 bg-fuchsia-50 text-fuchsia-700 dark:bg-fuchsia-950/20 dark:text-fuchsia-400",
+      icon: Wrench,
+      badge: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/30 dark:text-fuchsia-400",
+      label: "Management"
     }
   };
 

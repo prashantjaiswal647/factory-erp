@@ -122,7 +122,7 @@ export default function App() {
         <Route
           path="operations"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <OperationsPage />
             </PrivateRoute>
           }
