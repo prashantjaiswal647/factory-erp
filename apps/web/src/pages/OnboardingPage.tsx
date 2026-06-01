@@ -528,11 +528,6 @@ export default function OnboardingPage() {
               isSaving={isSaving}
               onClick={saveCompanyProfile}
             />
-            <BulkUploadSection
-              subTabType="factory_profile"
-              onUploaded={refreshBulkOnboardingState}
-              onToast={setToast}
-            />
           </div>
         </Panel>
       ) : null}
@@ -689,11 +684,6 @@ export default function OnboardingPage() {
           </div>
 
           <SaveButton label="Save Worker" isSaving={isSaving} onClick={saveWorker} />
-          <BulkUploadSection
-            subTabType="worker"
-            onUploaded={refreshBulkOnboardingState}
-            onToast={setToast}
-          />
         </Panel>
       ) : null}
 
@@ -786,11 +776,6 @@ export default function OnboardingPage() {
             <SaveButton label="Save Machines" isSaving={isSaving} disabled={Boolean(machineUsage?.limit_reached)} onClick={saveMachines} />
           </div>
           <List rows={machines.map((row) => `${row.machine_name || row.machine_type} / ${row.default_speed || row.speed_per_minute || 0} speed / ${(row.raw_materials_mapped || []).filter(Boolean).join(", ") || "No materials mapped"}`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
-          <BulkUploadSection
-            subTabType="machine"
-            onUploaded={refreshBulkOnboardingState}
-            onToast={setToast}
-          />
 
           {savedMachines.length > 0 && (
             <div className="mt-6 border-t border-zinc-100 pt-6">
@@ -1108,18 +1093,6 @@ export default function OnboardingPage() {
               <StockButton label="Add Plastic Stock" color="purple" isSaving={isSaving} onClick={addPlasticStock} />
             </MaterialCard>
           </div>
-          <div className="mt-6 grid gap-4 xl:grid-cols-2">
-            <BulkUploadSection
-              subTabType="raw_material"
-              onUploaded={refreshBulkOnboardingState}
-              onToast={setToast}
-            />
-            <BulkUploadSection
-              subTabType="packaging_material"
-              onUploaded={refreshBulkOnboardingState}
-              onToast={setToast}
-            />
-          </div>
         </Panel>
       ) : null}
 
@@ -1242,6 +1215,11 @@ export default function OnboardingPage() {
           </div>
         </Panel>
       ) : null}
+
+      <BulkUploadSection
+        onUploaded={refreshBulkOnboardingState}
+        onToast={setToast}
+      />
       
       {editingMachine ? (
         <EditMachineModal

@@ -4,23 +4,13 @@ import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 
 import {
-  downloadOnboardingTemplate,
-  uploadOnboardingBulkSheet
+  downloadMasterOnboardingTemplate,
+  uploadMasterOnboardingSheet
 } from "../lib/api";
-import type { OnboardingBulkUploadType } from "../lib/api";
 
 type BulkUploadSectionProps = {
-  subTabType: OnboardingBulkUploadType;
   onUploaded?: () => Promise<void> | void;
   onToast?: (message: string) => void;
-};
-
-const TAB_LABELS: Record<OnboardingBulkUploadType, string> = {
-  factory_profile: "Factory Profile",
-  worker: "Worker Profile",
-  machine: "Machine Config",
-  raw_material: "Raw Material",
-  packaging_material: "Packaging Material"
 };
 
 function extractErrors(error: unknown): Array<Record<string, unknown>> {
@@ -31,7 +21,7 @@ function extractErrors(error: unknown): Array<Record<string, unknown>> {
   return [{ error: detail || error.message || "Bulk upload failed" }];
 }
 
-export default function BulkUploadSection({ subTabType, onUploaded, onToast }: BulkUploadSectionProps) {
+export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSectionProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [errorRows, setErrorRows] = useState<Array<Record<string, unknown>>>([]);
@@ -39,11 +29,11 @@ export default function BulkUploadSection({ subTabType, onUploaded, onToast }: B
   async function handleDownload() {
     setIsBusy(true);
     try {
-      const response = await downloadOnboardingTemplate(subTabType);
+      const response = await downloadMasterOnboardingTemplate();
       const blobUrl = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = `${subTabType}_bulk_upload_template.xlsx`;
+      link.download = "master_onboarding_bulk_upload.xlsx";
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -63,8 +53,8 @@ export default function BulkUploadSection({ subTabType, onUploaded, onToast }: B
     setIsBusy(true);
     setErrorRows([]);
     try {
-      const response = await uploadOnboardingBulkSheet(subTabType, file);
-      onToast?.(`${TAB_LABELS[subTabType]} bulk upload completed: ${response.data.rows_inserted} rows imported.`);
+      const response = await uploadMasterOnboardingSheet(file);
+      onToast?.(`Master onboarding upload completed: ${response.data.rows_inserted} rows imported.`);
       await onUploaded?.();
     } catch (error) {
       setErrorRows(extractErrors(error));
@@ -77,8 +67,8 @@ export default function BulkUploadSection({ subTabType, onUploaded, onToast }: B
     <div className="mt-6 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm font-semibold text-zinc-900">{TAB_LABELS[subTabType]} Bulk Upload</p>
-          <p className="mt-1 text-xs text-zinc-500">Use the generated sheet headers exactly as downloaded.</p>
+          <p className="text-sm font-semibold text-zinc-900">Master Onboarding Bulk Upload</p>
+          <p className="mt-1 text-xs text-zinc-500">One workbook covers Factory Profile, Workers, Machines, Raw Materials, and Packaging Materials.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button
@@ -88,7 +78,7 @@ export default function BulkUploadSection({ subTabType, onUploaded, onToast }: B
             disabled={isBusy}
           >
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            Download Bulk Upload Sheet
+            Download Master Onboarding Sheet
           </button>
           <button
             type="button"
@@ -97,14 +87,14 @@ export default function BulkUploadSection({ subTabType, onUploaded, onToast }: B
             disabled={isBusy}
           >
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
-            Upload Bulk Update Sheet
+            Upload Completed Master Sheet
           </button>
         </div>
       </div>
       <input
         ref={fileInputRef}
         type="file"
-        accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
         onChange={handleFileChange}
       />
