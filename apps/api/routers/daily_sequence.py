@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
+from dependencies import FACTORY_VIEW_ROLES, check_permissions
 from db import get_db
 from models import ActivityLog, User
 
@@ -38,7 +38,7 @@ def relative_day_label(target_date: date_cls, today: date_cls) -> str:
 @router.get("/daily-sequence", response_model=list[DailySequenceItem])
 def list_daily_sequence(
     date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    current_user: User = Depends(check_permissions(OWNER_ROLES + SALES_ROLES + ["Supervisor", "Worker"])),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ) -> list[DailySequenceItem]:
     if date:

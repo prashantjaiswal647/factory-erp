@@ -8,7 +8,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from auth import assert_owner_delete_permission, normalize_phone_number, require_owner, require_owner_delete
-from dependencies import OWNER_ROLES, check_permissions
+from dependencies import FACTORY_VIEW_ROLES, OWNER_ROLES, check_permissions
 from db import get_db
 from models import (
     BlankStock,
@@ -283,7 +283,7 @@ def get_factory_profile(
 @router.post("/factory-profile", response_model=FactoryProfileResponse)
 def update_factory_profile(
     payload: FactoryProfileUpdate,
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db)
 ):
     if not current_user.factory_id:
@@ -336,7 +336,7 @@ def update_factory_profile(
 
 @router.get("/overview", response_model=OnboardingOverviewResponse)
 def onboarding_overview(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
@@ -597,7 +597,7 @@ def save_final_product_opening_stock(
 
 @router.get("/workers", response_model=List[OnboardingWorkerSummary])
 def list_onboarding_workers(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     workers = (
@@ -619,7 +619,7 @@ def list_onboarding_workers(
 
 @router.get("/machines", response_model=List[OnboardingMachineSummary])
 def list_onboarding_machines(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     machines = (
@@ -633,7 +633,7 @@ def list_onboarding_machines(
 
 @router.get("/machines/limits", response_model=MachineLimitResponse)
 def get_machine_limits(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     usage = get_machine_limit_usage(db, str(current_user.factory_id))
@@ -648,7 +648,7 @@ def get_machine_limits(
 
 @router.get("/materials")
 def list_onboarding_materials(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
@@ -670,7 +670,7 @@ def list_onboarding_materials(
 
 @router.get("/customers", response_model=List[OnboardingCustomerSummary])
 def list_onboarding_customers(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     return (

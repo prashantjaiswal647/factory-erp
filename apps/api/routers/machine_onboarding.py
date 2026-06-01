@@ -6,7 +6,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from dependencies import OWNER_ROLES, check_permissions
+from dependencies import MACHINE_VIEW_ROLES, OWNER_ROLES, check_permissions
 from db import get_db
 from models import Machine, MachineOnboarding, User
 
@@ -94,7 +94,7 @@ def list_machine_onboardings(
 @machines_router.post("/setup", response_model=DynamicMachineSetupResponse, status_code=status.HTTP_201_CREATED)
 def setup_dynamic_machine(
     payload: DynamicMachineSetupCreate,
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(MACHINE_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     machine_name = " ".join(payload.machine_name.strip().split())

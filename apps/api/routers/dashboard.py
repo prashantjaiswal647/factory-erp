@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
-from dependencies import OWNER_ROLES, check_permissions
+from dependencies import DASHBOARD_ROLES, check_permissions
 from db import get_db
 from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, Payment, User, ExpenseLog, Worker, Machine, WastageLog
 from schemas import AnalyticsSummaryResponse
@@ -143,7 +143,7 @@ def dashboard_subscription_status(
 
 @router.get("/summary", response_model=AiDashboardStats)
 def get_dashboard_summary(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(DASHBOARD_ROLES)),
     db: Session = Depends(get_db),
 ):
     import redis
@@ -222,7 +222,7 @@ def get_dashboard_summary(
 
 @router.get("/ai-insights", response_model=AiInsightsResponse)
 def ai_insights(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(DASHBOARD_ROLES)),
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
@@ -301,7 +301,7 @@ class AnalyticsBIResponse(BaseModel):
 
 @router.get("/analytics", response_model=AnalyticsBIResponse)
 def get_dashboard_analytics(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(DASHBOARD_ROLES)),
     db: Session = Depends(get_db)
 ):
     factory_id = str(current_user.factory_id)
@@ -417,7 +417,7 @@ def get_dashboard_analytics(
 
 @router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
 def get_analytics_summary(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(DASHBOARD_ROLES)),
     db: Session = Depends(get_db),
 ):
     import redis
