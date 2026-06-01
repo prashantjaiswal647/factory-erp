@@ -257,7 +257,7 @@ class BlankStockCreate(BaseModel):
 
 @router.get("/factory-profile", response_model=FactoryProfileResponse)
 def get_factory_profile(
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db)
 ):
     if not current_user.factory_id:
