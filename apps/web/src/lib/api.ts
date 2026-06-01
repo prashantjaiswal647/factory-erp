@@ -767,6 +767,7 @@ export type WorkerProfile = {
   duty_hours?: number | null;
   previous_attendance?: number;
   previous_attendance_count?: number;
+  opening_attendance_count?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
   is_active: boolean;
@@ -780,6 +781,7 @@ export type WorkerUpdatePayload = {
   duty_hours?: number;
   previous_attendance?: number;
   previous_attendance_count?: number;
+  opening_attendance_count?: number;
   shift_timing?: string | null;
   shift_type?: string | null;
 };
@@ -1010,7 +1012,7 @@ export function getWorkerLedger(workerId: number, month: string) {
 }
 
 export function updateWorkerProfile(workerId: number, payload: WorkerUpdatePayload) {
-  return api.patch<WorkerProfile>(`/api/v1/workers/${workerId}`, payload);
+  return api.put<WorkerProfile>(`/api/workers/${workerId}`, payload);
 }
 
 export function upsertWorkerAttendance(workerId: number, payload: { date: string; status: WorkerLedgerDay["status"]; production_qty?: number | null }) {

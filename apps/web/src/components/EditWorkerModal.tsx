@@ -15,6 +15,7 @@ type EditableWorker = {
   duty_hours?: string | number | null;
   previous_attendance?: string | number | null;
   previous_attendance_count?: string | number | null;
+  opening_attendance_count?: string | number | null;
   opening_attendance?: { present_days?: string | number | null } | null;
   shift_timing?: string | null;
   shift_type?: string | null;
@@ -41,7 +42,7 @@ export function EditWorkerModal({
   const [phone, setPhone] = useState(worker.phone ?? "");
   const [dailyWageRate, setDailyWageRate] = useState(String(worker.daily_wage_rate ?? worker.daily_wages ?? ""));
   const [dutyHours, setDutyHours] = useState(String(worker.duty_hours ?? ""));
-  const [previousAttendance, setPreviousAttendance] = useState(String(worker.previous_attendance ?? worker.previous_attendance_count ?? worker.opening_attendance?.present_days ?? ""));
+  const [openingAttendanceCount, setOpeningAttendanceCount] = useState(String(worker.opening_attendance_count ?? worker.previous_attendance ?? worker.previous_attendance_count ?? worker.opening_attendance?.present_days ?? ""));
   const [shiftType, setShiftType] = useState(worker.shift_type ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -51,7 +52,7 @@ export function EditWorkerModal({
     setPhone(worker.phone ?? "");
     setDailyWageRate(String(worker.daily_wage_rate ?? worker.daily_wages ?? ""));
     setDutyHours(String(worker.duty_hours ?? ""));
-    setPreviousAttendance(String(worker.previous_attendance ?? worker.previous_attendance_count ?? worker.opening_attendance?.present_days ?? ""));
+    setOpeningAttendanceCount(String(worker.opening_attendance_count ?? worker.previous_attendance ?? worker.previous_attendance_count ?? worker.opening_attendance?.present_days ?? ""));
     setShiftType(worker.shift_type ?? "");
     setError("");
   }, [worker]);
@@ -68,8 +69,9 @@ export function EditWorkerModal({
         daily_wage_rate: Number(dailyWageRate || 0),
         daily_wages: Number(dailyWageRate || 0),
         duty_hours: dutyHours ? Number(dutyHours) : undefined,
-        previous_attendance: Number(previousAttendance || 0),
-        previous_attendance_count: Number(previousAttendance || 0),
+        previous_attendance: Number(openingAttendanceCount || 0),
+        previous_attendance_count: Number(openingAttendanceCount || 0),
+        opening_attendance_count: Number(openingAttendanceCount || 0),
         shift_type: shiftType.trim() || null
       });
       
@@ -96,7 +98,7 @@ export function EditWorkerModal({
           <Field label="Phone Number" value={phone} onChange={setPhone} placeholder="Enter phone number" />
           <Field label="Daily Wage" value={dailyWageRate} onChange={setDailyWageRate} type="number" placeholder="Enter daily wage rate" />
           <Field label="Duty Hours" value={dutyHours} onChange={setDutyHours} type="number" placeholder="Enter standard duty hours" />
-          <Field label="Previous Attendance Days" value={previousAttendance} onChange={setPreviousAttendance} type="number" placeholder="Enter previous attendance days" />
+          <Field label="Opening Attendance Count" value={openingAttendanceCount} onChange={setOpeningAttendanceCount} type="number" placeholder="Enter historical attendance balance" />
           <Field label="Shift Type" value={shiftType} onChange={setShiftType} placeholder="Enter shift type" />
         </div>
         {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p> : null}
@@ -117,6 +119,7 @@ function Field({ label, value, onChange, type = "text", placeholder }: { label: 
       <span className="font-semibold text-zinc-700">{label}</span>
       <input
         type={type}
+        min={type === "number" ? 0 : undefined}
         className="mt-1 h-11 w-full rounded-lg border border-zinc-200 px-3 text-sm outline-none transition focus:border-[#6D28D9] focus:ring-2 focus:ring-[#F3E8FF]"
         placeholder={placeholder}
         value={value}

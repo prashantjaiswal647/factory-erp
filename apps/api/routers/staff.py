@@ -112,6 +112,7 @@ class WorkerUpdateRequest(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_attendance: Optional[int] = Field(default=None, ge=0)
     previous_attendance_count: Optional[int] = Field(default=None, ge=0)
+    opening_attendance_count: Optional[int] = Field(default=None, ge=0)
     daily_wage_rate: Optional[float] = Field(default=None, ge=0)
     daily_wages: Optional[float] = Field(default=None, ge=0)
     duty_hours: Optional[float] = Field(default=None, gt=0)
@@ -932,6 +933,7 @@ class WorkerEditSchema(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     phone_number: Optional[str] = Field(default=None, max_length=50)
     previous_attendance: Optional[int] = Field(default=None, ge=0)
+    opening_attendance_count: Optional[int] = Field(default=None, ge=0)
 
 @workers_v1_router.patch("/{worker_id}", response_model=WorkerProfileResponse)
 def update_worker_profile_v1(
@@ -974,7 +976,11 @@ def update_worker_profile_v1(
     if payload.phone_number is not None:
         worker.phone = payload.phone_number.strip() or None
 
-    if payload.previous_attendance is not None:
+    opening_count = payload.previous_attendance
+    if opening_count is None:
+        opening_count = payload.opening_attendance_count
+
+    if opening_count is not None:
         opening_attendance = (
             db.query(WorkerOpeningAttendance)
             .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
@@ -989,12 +995,12 @@ def update_worker_profile_v1(
                 worker_id=worker.id,
                 period_start=today,
                 period_end=today,
-                present_days=payload.previous_attendance,
+                present_days=opening_count,
                 created_by_user_id=current_user.id,
             )
             db.add(opening_attendance)
         else:
-            opening_attendance.present_days = payload.previous_attendance
+            opening_attendance.present_days = opening_count
 
     try:
         db.commit()
@@ -1088,8 +1094,11 @@ def update_worker_profile(
 
     previous_attendance = updates.pop("previous_attendance", None)
     previous_attendance_count = updates.pop("previous_attendance_count", None)
+    opening_attendance_count = updates.pop("opening_attendance_count", None)
     if previous_attendance is None:
         previous_attendance = previous_attendance_count
+    if previous_attendance is None:
+        previous_attendance = opening_attendance_count
 
     opening_attendance = (
         db.query(WorkerOpeningAttendance)
