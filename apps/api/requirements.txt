@@ -23,4 +23,6 @@ reportlab
 fastapi-mail
 redis
 Pillow
-
+pandas
+openpyxl
+xlrd

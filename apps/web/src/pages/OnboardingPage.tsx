@@ -1,8 +1,10 @@
 import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from "lucide-react";
+import type React from "react";
 import { useEffect, useState } from "react";
 
 import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog, setupDynamicMachine } from "../lib/api";
 import type { BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
+import BulkUploadSection from "../components/BulkUploadSection";
 import { EditMachineModal } from "../components/EditMachineModal";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
@@ -92,27 +94,36 @@ export default function OnboardingPage() {
     void loadFinalProducts();
     void loadMachineUsage();
     void loadSavedMachines();
-    
-    async function loadFactoryProfile() {
-      try {
-        const response = await getFactoryProfile();
-        const profile = response.data;
-        if (profile) {
-          setCompanyName(profile.factory_name || "");
-          setCompanyAddress(profile.address || "");
-          setCompanyGST(profile.gst_number || "");
-          setStartingInvoiceNum(profile.initial_invoice_number || 1);
-          setBillOfSupplyStartSeq(profile.bill_of_supply_start_seq || profile.next_bill_of_supply_number || 1);
-          setTaxInvoiceStartSeq(profile.tax_invoice_start_seq || profile.next_tax_invoice_number || 1);
-          setBillOfSupplySimpleStartSeq(profile.bill_of_supply_simple_start_seq || profile.next_bill_of_supply_simple_number || 1);
-          setAdvanceDiscountNum(profile.advance_payment_discount_percentage || 2.00);
-        }
-      } catch (err) {
-        console.error("Failed to load factory profile:", err);
-      }
-    }
     void loadFactoryProfile();
   }, []);
+
+  async function loadFactoryProfile() {
+    try {
+      const response = await getFactoryProfile();
+      const profile = response.data;
+      if (profile) {
+        setCompanyName(profile.factory_name || "");
+        setCompanyAddress(profile.address || "");
+        setCompanyGST(profile.gst_number || "");
+        setStartingInvoiceNum(profile.initial_invoice_number || 1);
+        setBillOfSupplyStartSeq(profile.bill_of_supply_start_seq || profile.next_bill_of_supply_number || 1);
+        setTaxInvoiceStartSeq(profile.tax_invoice_start_seq || profile.next_tax_invoice_number || 1);
+        setBillOfSupplySimpleStartSeq(profile.bill_of_supply_simple_start_seq || profile.next_bill_of_supply_simple_number || 1);
+        setAdvanceDiscountNum(profile.advance_payment_discount_percentage || 2.00);
+      }
+    } catch (err) {
+      console.error("Failed to load factory profile:", err);
+    }
+  }
+
+  async function refreshBulkOnboardingState() {
+    await Promise.allSettled([
+      loadFactoryProfile(),
+      loadMachineUsage(),
+      loadSavedMachines(),
+      loadFinalProducts()
+    ]);
+  }
 
   async function loadSavedMachines() {
     try {
@@ -517,6 +528,11 @@ export default function OnboardingPage() {
               isSaving={isSaving}
               onClick={saveCompanyProfile}
             />
+            <BulkUploadSection
+              subTabType="factory_profile"
+              onUploaded={refreshBulkOnboardingState}
+              onToast={setToast}
+            />
           </div>
         </Panel>
       ) : null}
@@ -673,6 +689,11 @@ export default function OnboardingPage() {
           </div>
 
           <SaveButton label="Save Worker" isSaving={isSaving} onClick={saveWorker} />
+          <BulkUploadSection
+            subTabType="worker"
+            onUploaded={refreshBulkOnboardingState}
+            onToast={setToast}
+          />
         </Panel>
       ) : null}
 
@@ -765,6 +786,11 @@ export default function OnboardingPage() {
             <SaveButton label="Save Machines" isSaving={isSaving} disabled={Boolean(machineUsage?.limit_reached)} onClick={saveMachines} />
           </div>
           <List rows={machines.map((row) => `${row.machine_name || row.machine_type} / ${row.default_speed || row.speed_per_minute || 0} speed / ${(row.raw_materials_mapped || []).filter(Boolean).join(", ") || "No materials mapped"}`)} onRemove={(index) => setMachines(machines.filter((_, itemIndex) => itemIndex !== index))} />
+          <BulkUploadSection
+            subTabType="machine"
+            onUploaded={refreshBulkOnboardingState}
+            onToast={setToast}
+          />
 
           {savedMachines.length > 0 && (
             <div className="mt-6 border-t border-zinc-100 pt-6">
@@ -1082,6 +1108,18 @@ export default function OnboardingPage() {
               <StockButton label="Add Plastic Stock" color="purple" isSaving={isSaving} onClick={addPlasticStock} />
             </MaterialCard>
           </div>
+          <div className="mt-6 grid gap-4 xl:grid-cols-2">
+            <BulkUploadSection
+              subTabType="raw_material"
+              onUploaded={refreshBulkOnboardingState}
+              onToast={setToast}
+            />
+            <BulkUploadSection
+              subTabType="packaging_material"
+              onUploaded={refreshBulkOnboardingState}
+              onToast={setToast}
+            />
+          </div>
         </Panel>
       ) : null}
 
@@ -1349,8 +1387,6 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 }
 // React Form Data State Validation Hook
 // apps/web/src/pages/Onboarding.tsx (or matching component setup)
-
-import React, { useState } from 'react';
 
 interface OnboardingFormData {
   company_name: string;

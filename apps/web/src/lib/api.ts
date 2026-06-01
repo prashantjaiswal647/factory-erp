@@ -1139,6 +1139,32 @@ export function getDashboardMaterials() {
   return api.get<DashboardMaterials>("/api/onboarding/materials");
 }
 
+export type OnboardingBulkUploadType =
+  | "factory_profile"
+  | "worker"
+  | "machine"
+  | "raw_material"
+  | "packaging_material";
+
+export type OnboardingBulkUploadResponse = {
+  message: string;
+  sub_tab_type: OnboardingBulkUploadType;
+  rows_inserted: number;
+  failed_rows: Array<Record<string, unknown>>;
+};
+
+export function downloadOnboardingTemplate(subTabType: OnboardingBulkUploadType) {
+  return api.get<Blob>(`/api/v1/onboarding/template/${subTabType}`, { responseType: "blob" });
+}
+
+export function uploadOnboardingBulkSheet(subTabType: OnboardingBulkUploadType, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return api.post<OnboardingBulkUploadResponse>(`/api/v1/onboarding/bulk-upload/${subTabType}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" }
+  });
+}
+
 export function getDashboardCustomers() {
   return api.get<DashboardCustomer[]>("/api/onboarding/customers");
 }
