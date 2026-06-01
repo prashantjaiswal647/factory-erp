@@ -18,6 +18,7 @@ from models import (
     Customer,
     Employee,
     Factory,
+    FactorySettings,
     FinalProductStock,
     FinishedGoodsStock,
     Inventory,
@@ -77,6 +78,20 @@ from subscription_limits import check_machine_limit, get_machine_limit_usage
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 v1_router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 logger = logging.getLogger(__name__)
+
+
+def get_or_create_factory_settings(db: Session, factory_id: int) -> FactorySettings:
+    settings = (
+        db.query(FactorySettings)
+        .filter(FactorySettings.factory_id == int(factory_id))
+        .with_for_update()
+        .first()
+    )
+    if settings is None:
+        settings = FactorySettings(factory_id=int(factory_id))
+        db.add(settings)
+        db.flush()
+    return settings
 
 
 def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
@@ -265,6 +280,11 @@ def get_factory_profile(
     factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
+    settings = (
+        db.query(FactorySettings)
+        .filter(FactorySettings.factory_id == int(factory.id))
+        .first()
+    )
     return FactoryProfileResponse(
         id=factory.id,
         factory_name=factory.factory_name or factory.name,
@@ -275,6 +295,9 @@ def get_factory_profile(
         invoice_prefix=getattr(factory, "invoice_prefix", "INV-") or "INV-",
         advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00"),
         digital_signature_url=getattr(factory, "digital_signature_url", None),
+        bill_of_supply_start_seq=(settings.bill_of_supply_start_seq if settings else getattr(factory, "next_bill_of_supply_number", 1)) or 1,
+        tax_invoice_start_seq=(settings.tax_invoice_start_seq if settings else getattr(factory, "next_tax_invoice_number", 1)) or 1,
+        bill_of_supply_simple_start_seq=(settings.bill_of_supply_simple_start_seq if settings else getattr(factory, "next_bill_of_supply_simple_number", 1)) or 1,
         next_tax_invoice_number=getattr(factory, "next_tax_invoice_number", 1) or 1,
         next_bill_of_supply_number=getattr(factory, "next_bill_of_supply_number", 1) or 1,
         next_bill_of_supply_simple_number=getattr(factory, "next_bill_of_supply_simple_number", 1) or 1,
@@ -291,6 +314,7 @@ def update_factory_profile(
     factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
     if not factory:
         raise HTTPException(status_code=404, detail="Factory not found")
+    settings = get_or_create_factory_settings(db, factory.id)
     
     factory.factory_name = payload.factory_name.strip()
     factory.address = payload.address.strip() if payload.address else None
@@ -300,12 +324,25 @@ def update_factory_profile(
         factory.initial_invoice_number = payload.initial_invoice_number
         factory.current_invoice_counter = payload.initial_invoice_number
 
+    if payload.bill_of_supply_start_seq is not None:
+        settings.bill_of_supply_start_seq = payload.bill_of_supply_start_seq
+        factory.next_bill_of_supply_number = payload.bill_of_supply_start_seq
+    if payload.tax_invoice_start_seq is not None:
+        settings.tax_invoice_start_seq = payload.tax_invoice_start_seq
+        factory.next_tax_invoice_number = payload.tax_invoice_start_seq
+    if payload.bill_of_supply_simple_start_seq is not None:
+        settings.bill_of_supply_simple_start_seq = payload.bill_of_supply_simple_start_seq
+        factory.next_bill_of_supply_simple_number = payload.bill_of_supply_simple_start_seq
+
     if payload.next_tax_invoice_number is not None:
         factory.next_tax_invoice_number = payload.next_tax_invoice_number
+        settings.tax_invoice_start_seq = payload.next_tax_invoice_number
     if payload.next_bill_of_supply_number is not None:
         factory.next_bill_of_supply_number = payload.next_bill_of_supply_number
+        settings.bill_of_supply_start_seq = payload.next_bill_of_supply_number
     if payload.next_bill_of_supply_simple_number is not None:
         factory.next_bill_of_supply_simple_number = payload.next_bill_of_supply_simple_number
+        settings.bill_of_supply_simple_start_seq = payload.next_bill_of_supply_simple_number
 
     if payload.invoice_prefix is not None:
         factory.invoice_prefix = payload.invoice_prefix.strip()
@@ -328,6 +365,9 @@ def update_factory_profile(
         invoice_prefix=factory.invoice_prefix or "INV-",
         advance_payment_discount_percentage=factory.advance_payment_discount_percentage,
         digital_signature_url=factory.digital_signature_url,
+        bill_of_supply_start_seq=settings.bill_of_supply_start_seq or 1,
+        tax_invoice_start_seq=settings.tax_invoice_start_seq or 1,
+        bill_of_supply_simple_start_seq=settings.bill_of_supply_simple_start_seq or 1,
         next_tax_invoice_number=getattr(factory, "next_tax_invoice_number", 1) or 1,
         next_bill_of_supply_number=getattr(factory, "next_bill_of_supply_number", 1) or 1,
         next_bill_of_supply_simple_number=getattr(factory, "next_bill_of_supply_simple_number", 1) or 1,

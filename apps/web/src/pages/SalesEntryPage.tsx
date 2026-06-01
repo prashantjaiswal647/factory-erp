@@ -206,12 +206,12 @@ export default function SalesEntryPage() {
     if (!profile) return form.legal_invoice_number || "Auto";
     const prefix = profile.invoice_prefix || "INV-";
     if (form.legal_invoice_type === "tax_invoice") {
-      return `${prefix}${profile.next_tax_invoice_number ?? 1}`;
+      return `${prefix}${profile.tax_invoice_start_seq ?? profile.next_tax_invoice_number ?? 1}`;
     }
     if (form.legal_invoice_type === "BILL_OF_SUPPLY_SIMPLE" || form.legal_invoice_type === "bill_of_supply_simple") {
-      return `${prefix}${profile.next_bill_of_supply_simple_number ?? 1}`;
+      return `${prefix}${profile.bill_of_supply_simple_start_seq ?? profile.next_bill_of_supply_simple_number ?? 1}`;
     }
-    return `${prefix}${profile.next_bill_of_supply_number ?? 1}`;
+    return `${prefix}${profile.bill_of_supply_start_seq ?? profile.next_bill_of_supply_number ?? 1}`;
   })();
 
   useEffect(() => {

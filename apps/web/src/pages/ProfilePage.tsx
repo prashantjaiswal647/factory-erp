@@ -107,6 +107,9 @@ export default function ProfilePage() {
         gst_number: factoryProfile.gst_number || '',
         advance_payment_discount_percentage: Number(factoryProfile.advance_payment_discount_percentage || 0),
         digital_signature_url: factoryProfile.digital_signature_url || '',
+        bill_of_supply_start_seq: Number(factoryProfile.bill_of_supply_start_seq || 1),
+        tax_invoice_start_seq: Number(factoryProfile.tax_invoice_start_seq || 1),
+        bill_of_supply_simple_start_seq: Number(factoryProfile.bill_of_supply_simple_start_seq || 1),
         next_tax_invoice_number: Number(factoryProfile.next_tax_invoice_number || 1),
         next_bill_of_supply_number: Number(factoryProfile.next_bill_of_supply_number || 1),
         next_bill_of_supply_simple_number: Number(factoryProfile.next_bill_of_supply_simple_number || 1),
@@ -354,36 +357,36 @@ export default function ProfilePage() {
               <p className="mb-4 text-xs text-zinc-500">Set the starting number for each invoice type. The system will auto-increment from this value on each new save.</p>
               <div className="grid gap-4 md:grid-cols-3">
                 <label className="block rounded-md border border-zinc-200 bg-white p-4">
-                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Tax Invoice No.</span>
+                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Invoice Number for Tax Invoice (GST)</span>
                   <input
                     type="number"
                     min="1"
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    value={factoryProfile.next_tax_invoice_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, next_tax_invoice_number: Number(e.target.value) })}
+                    value={factoryProfile.tax_invoice_start_seq ?? factoryProfile.next_tax_invoice_number ?? 1}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, tax_invoice_start_seq: Number(e.target.value), next_tax_invoice_number: Number(e.target.value) })}
                   />
                 </label>
                 <label className="block rounded-md border border-zinc-200 bg-white p-4">
-                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Bill of Supply No.</span>
+                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Invoice Number for Bill of Supply</span>
                   <input
                     type="number"
                     min="1"
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    value={factoryProfile.next_bill_of_supply_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, next_bill_of_supply_number: Number(e.target.value) })}
+                    value={factoryProfile.bill_of_supply_start_seq ?? factoryProfile.next_bill_of_supply_number ?? 1}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_start_seq: Number(e.target.value), next_bill_of_supply_number: Number(e.target.value) })}
                   />
                 </label>
                 <label className="block rounded-md border border-zinc-200 bg-white p-4">
-                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Bill of Supply Simple No.</span>
+                  <span className="text-xs font-semibold uppercase text-zinc-500">Starting Invoice Number for Bill of Supply Simple</span>
                   <input
                     type="number"
                     min="1"
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    value={factoryProfile.next_bill_of_supply_simple_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, next_bill_of_supply_simple_number: Number(e.target.value) })}
+                    value={factoryProfile.bill_of_supply_simple_start_seq ?? factoryProfile.next_bill_of_supply_simple_number ?? 1}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_simple_start_seq: Number(e.target.value), next_bill_of_supply_simple_number: Number(e.target.value) })}
                   />
                 </label>
               </div>

@@ -121,6 +121,26 @@ def _invoice_counter_attr(invoice_type: str | None) -> str:
     return "current_invoice_counter"
 
 
+def _settings_counter_attr(invoice_type: str | None) -> str:
+    if invoice_type == "tax_invoice":
+        return "tax_invoice_start_seq"
+    if invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
+        return "bill_of_supply_simple_start_seq"
+    return "bill_of_supply_start_seq"
+
+
+def get_or_create_factory_settings(db: Session, factory_id: int, for_update: bool = False) -> FactorySettings:
+    query = db.query(FactorySettings).filter(FactorySettings.factory_id == int(factory_id))
+    if for_update:
+        query = query.with_for_update()
+    settings = query.first()
+    if settings is None:
+        settings = FactorySettings(factory_id=int(factory_id))
+        db.add(settings)
+        db.flush()
+    return settings
+
+
 def allocate_invoice_number(db: Session, factory: Factory | None, invoice_type: str | None = None) -> str:
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
@@ -138,26 +158,13 @@ def allocate_invoice_number(db: Session, factory: Factory | None, invoice_type: 
         db.flush()
     else:
         attr = _invoice_counter_attr(invoice_type)
-        has_previous = db.query(InvoiceDocument).filter(InvoiceDocument.factory_id == str(factory.id)).first() is not None
-        
-        start_seq = 1
-        if not has_previous:
-            settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory.id).first()
-            if settings:
-                if invoice_type == "tax_invoice":
-                    start_seq = settings.tax_invoice_start_seq
-                elif invoice_type in ("bill_of_supply",):
-                    start_seq = settings.bill_of_supply_start_seq
-                elif invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
-                    start_seq = settings.bill_of_supply_simple_start_seq
-
-        invoice_counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or start_seq
-        if invoice_counter == 1 and start_seq > 1:
-            invoice_counter = start_seq
-            
-        setattr(factory, attr, invoice_counter + 1)
+        settings_attr = _settings_counter_attr(invoice_type)
+        settings = get_or_create_factory_settings(db, factory.id, for_update=True)
+        invoice_counter = getattr(settings, settings_attr, None) or getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+        setattr(settings, settings_attr, int(invoice_counter) + 1)
+        setattr(factory, attr, int(invoice_counter) + 1)
         if attr != "current_invoice_counter":
-            factory.current_invoice_counter = (factory.current_invoice_counter or start_seq)
+            factory.current_invoice_counter = factory.current_invoice_counter or int(invoice_counter)
 
     prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
     return f"{prefix}{invoice_counter}"
@@ -177,22 +184,13 @@ def preview_invoice_number(db: Session, factory: Factory | None, invoice_type: s
     if recycled_entry is not None:
         return f"{prefix}{recycled_entry.recycled_number}"
     attr = _invoice_counter_attr(invoice_type)
-    
-    has_previous = db.query(InvoiceDocument).filter(InvoiceDocument.factory_id == str(factory.id)).first() is not None
-    start_seq = 1
-    if not has_previous:
-        settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory.id).first()
-        if settings:
-            if invoice_type == "tax_invoice":
-                start_seq = settings.tax_invoice_start_seq
-            elif invoice_type in ("bill_of_supply",):
-                start_seq = settings.bill_of_supply_start_seq
-            elif invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
-                start_seq = settings.bill_of_supply_simple_start_seq
-                
-    counter = getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or start_seq
-    if counter == 1 and start_seq > 1:
-        counter = start_seq
+    settings_attr = _settings_counter_attr(invoice_type)
+    settings = db.query(FactorySettings).filter(FactorySettings.factory_id == int(factory.id)).first()
+    counter = (
+        getattr(settings, settings_attr, None)
+        if settings is not None
+        else getattr(factory, attr, None)
+    ) or getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
     return f"{prefix}{counter}"
 
 
@@ -207,7 +205,7 @@ def get_next_invoice_number(
     return {"invoice_number": invoice_number}
 
 
-def sync_next_invoice_setting(factory: Factory | None, used_invoice_number: str | None) -> None:
+def sync_next_invoice_setting(db: Session, factory: Factory | None, used_invoice_number: str | None, invoice_type: str | None = None) -> None:
     if factory is None:
         return
     invoice_number = clean_optional_text(used_invoice_number)
@@ -222,6 +220,11 @@ def sync_next_invoice_setting(factory: Factory | None, used_invoice_number: str 
     prefix, numeric_part = match.groups()
     next_counter = int(numeric_part) + 1
     factory.invoice_prefix = prefix
+    attr = _invoice_counter_attr(invoice_type)
+    settings_attr = _settings_counter_attr(invoice_type)
+    settings = get_or_create_factory_settings(db, factory.id, for_update=True)
+    setattr(settings, settings_attr, max(next_counter, getattr(settings, settings_attr, 1) or 1))
+    setattr(factory, attr, max(next_counter, getattr(factory, attr, 1) or 1))
     factory.current_invoice_counter = max(next_counter, factory.current_invoice_counter or 0)
 
 
@@ -1085,7 +1088,7 @@ def add_sale_invoice(
             customer=customer,
             invoice_payload=invoice_payload,
         )
-        sync_next_invoice_setting(factory, invoice_num)
+        sync_next_invoice_setting(db, factory, invoice_num, payload.legal_invoice_type)
         sync_customer_balance_from_bills(db, current_user.factory_id, customer)
         db.commit()
 

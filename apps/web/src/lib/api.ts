@@ -1067,6 +1067,9 @@ export type FactoryProfile = {
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
+  bill_of_supply_start_seq: number;
+  tax_invoice_start_seq: number;
+  bill_of_supply_simple_start_seq: number;
   next_tax_invoice_number: number;
   next_bill_of_supply_number: number;
   next_bill_of_supply_simple_number: number;
@@ -1080,6 +1083,9 @@ export type FactoryProfileUpdate = {
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
+  bill_of_supply_start_seq?: number;
+  tax_invoice_start_seq?: number;
+  bill_of_supply_simple_start_seq?: number;
   next_tax_invoice_number?: number;
   next_bill_of_supply_number?: number;
   next_bill_of_supply_simple_number?: number;

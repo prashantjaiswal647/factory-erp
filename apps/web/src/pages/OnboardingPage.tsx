@@ -82,6 +82,9 @@ export default function OnboardingPage() {
   const [companyAddress, setCompanyAddress] = useState("");
   const [companyGST, setCompanyGST] = useState("");
   const [startingInvoiceNum, setStartingInvoiceNum] = useState(1);
+  const [billOfSupplyStartSeq, setBillOfSupplyStartSeq] = useState(1);
+  const [taxInvoiceStartSeq, setTaxInvoiceStartSeq] = useState(1);
+  const [billOfSupplySimpleStartSeq, setBillOfSupplySimpleStartSeq] = useState(1);
   const [advanceDiscountNum, setAdvanceDiscountNum] = useState(2.00);
   const [invoicePrefix, setInvoicePrefix] = useState("INV-");
 
@@ -99,6 +102,9 @@ export default function OnboardingPage() {
           setCompanyAddress(profile.address || "");
           setCompanyGST(profile.gst_number || "");
           setStartingInvoiceNum(profile.initial_invoice_number || 1);
+          setBillOfSupplyStartSeq(profile.bill_of_supply_start_seq || profile.next_bill_of_supply_number || 1);
+          setTaxInvoiceStartSeq(profile.tax_invoice_start_seq || profile.next_tax_invoice_number || 1);
+          setBillOfSupplySimpleStartSeq(profile.bill_of_supply_simple_start_seq || profile.next_bill_of_supply_simple_number || 1);
           setAdvanceDiscountNum(profile.advance_payment_discount_percentage || 2.00);
         }
       } catch (err) {
@@ -384,6 +390,9 @@ export default function OnboardingPage() {
         address: companyAddress.trim(),
         gst_number: companyGST.trim(),
         initial_invoice_number: startingInvoiceNum,
+        bill_of_supply_start_seq: billOfSupplyStartSeq || 1,
+        tax_invoice_start_seq: taxInvoiceStartSeq || 1,
+        bill_of_supply_simple_start_seq: billOfSupplySimpleStartSeq || 1,
         advance_payment_discount_percentage: Number(advanceDiscountNum || 0),
         invoice_prefix: invoicePrefix.trim()
       });
@@ -484,6 +493,23 @@ export default function OnboardingPage() {
                 label="Advance UPI Discount (%)"
                 value={advanceDiscountNum}
                 onChange={setAdvanceDiscountNum}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <NumberInput
+                label="Starting Invoice Number for Bill of Supply"
+                value={billOfSupplyStartSeq}
+                onChange={setBillOfSupplyStartSeq}
+              />
+              <NumberInput
+                label="Starting Invoice Number for Tax Invoice (GST)"
+                value={taxInvoiceStartSeq}
+                onChange={setTaxInvoiceStartSeq}
+              />
+              <NumberInput
+                label="Starting Invoice Number for Bill of Supply Simple"
+                value={billOfSupplySimpleStartSeq}
+                onChange={setBillOfSupplySimpleStartSeq}
               />
             </div>
             <SaveButton
