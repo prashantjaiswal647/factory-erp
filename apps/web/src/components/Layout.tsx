@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, WalletCards, X } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -18,7 +18,7 @@ type NavigationItem = {
 
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner", "Sub-Owner"] },
-  { label: "Manual Floor Audits", href: "/operations", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
+  { label: "Manual Operations", href: "https://munshiai.co.in/operations", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
   { label: "Daily Sequence", href: "/daily-sequence", icon: CalendarDays, roles: ["Owner", "Sub-Owner"] },
   { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
   { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
@@ -30,7 +30,6 @@ const navigation: NavigationItem[] = [
   { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Invoices", href: "/invoices", icon: FileText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
-  { label: "Outstanding", href: "/outstanding", icon: WalletCards, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner"], section: "Admin" },
   { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },
@@ -198,6 +197,8 @@ export default function Layout() {
 
   const navItems = visibleNavigation.map((item, index) => {
     const showSection = item.section && visibleNavigation[index - 1]?.section !== item.section;
+    const isExternal = item.href.startsWith("http");
+    const linkClassName = "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-[#4B5563] transition hover:bg-[#FFF7ED] hover:text-[#111827]";
 
     return (
       <div key={item.href} className={showSection ? "pt-3" : undefined}>
@@ -206,22 +207,29 @@ export default function Layout() {
             {item.section}
           </p>
         ) : null}
-        <NavLink
-          to={item.href}
-          end={item.href === "/"}
-          onClick={() => setIsMobileNavOpen(false)}
-          className={({ isActive }) =>
-            [
-              "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
-              isActive
-                ? "bg-[#F3E8FF] text-[#4C1D95]"
-                : "text-[#4B5563] hover:bg-[#FFF7ED] hover:text-[#111827]"
-            ].join(" ")
-          }
-        >
-          <item.icon className="h-4 w-4" aria-hidden="true" />
-          {item.label}
-        </NavLink>
+        {isExternal ? (
+          <a href={item.href} className={linkClassName} onClick={() => setIsMobileNavOpen(false)}>
+            <item.icon className="h-4 w-4" aria-hidden="true" />
+            {item.label}
+          </a>
+        ) : (
+          <NavLink
+            to={item.href}
+            end={item.href === "/"}
+            onClick={() => setIsMobileNavOpen(false)}
+            className={({ isActive }) =>
+              [
+                "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
+                isActive
+                  ? "bg-[#F3E8FF] text-[#4C1D95]"
+                  : "text-[#4B5563] hover:bg-[#FFF7ED] hover:text-[#111827]"
+              ].join(" ")
+            }
+          >
+            <item.icon className="h-4 w-4" aria-hidden="true" />
+            {item.label}
+          </NavLink>
+        )}
       </div>
     );
   });
