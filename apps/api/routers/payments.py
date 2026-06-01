@@ -15,6 +15,7 @@ from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
 from models import Customer, DailySale, Order, OutstandingBill, Payment, PaymentCollection, User
 from services.accounting import apply_payment_to_outstanding_bills, sync_customer_balance_from_bills
+from services.activity_logger import log_activity
 
 
 router = APIRouter(tags=["payments"])
@@ -419,6 +420,19 @@ def record_payment(
             "remaining_balance": str(balance),
             "collected_by": current_user.full_name or current_user.username,
         }
+    )
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "PAYMENT_COLLECTED",
+        f"\u20B9{payment.amount_paid:,.2f} collected from {customer.name}",
+        "payment",
+        payment.id,
+        {"customer_id": customer.id, "payment_mode": payment.payment_mode, "remaining_balance": str(balance)},
     )
 
     return PaymentResponse(

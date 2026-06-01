@@ -24,6 +24,7 @@ from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationShee
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
+from services.activity_logger import log_activity
 from services.invoice_pdf import build_invoice_pdf_bytes
 from services.n8n_sync import sync_data_to_n8n_bg
 
@@ -1087,6 +1088,20 @@ def add_sale_invoice(
         sync_next_invoice_setting(factory, invoice_num)
         sync_customer_balance_from_bills(db, current_user.factory_id, customer)
         db.commit()
+
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "SALE_RECORDED",
+            f"Sale of \u20B9{current_bill_amount:,.2f} to {customer.name}",
+            "sale",
+            invoice_document.id,
+            {"invoice_number": invoice_num, "customer_id": customer.id, "sale_ids": sale_ids},
+        )
 
         background_tasks.add_task(
             sync_data_to_n8n_bg,
@@ -2479,6 +2494,7 @@ def get_customer_balance(
 
 @router.post("/v1/customers/upload-seed", response_model=None)
 def upload_customers_seed(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(check_permissions(SALES_ROLES)),
     db: Session = Depends(get_db),
@@ -2598,15 +2614,19 @@ def upload_customers_seed(
     if count > 0:
         try:
             db.commit()
-            
-            # Write audit activity log
-            activity = ActivityLog(
-                factory_id=int(factory_id),
-                event_type="payment",
-                description=f"Successfully imported {count} customers via batch spreadsheet seed upload."
+            background_tasks.add_task(
+                log_activity,
+                db,
+                int(current_user.factory_id),
+                current_user.id,
+                current_user.full_name or current_user.username,
+                current_user.role,
+                "CUSTOMER_SEED_UPLOADED",
+                f"Uploaded customer seed with {count} imported and {skipped} skipped rows",
+                "customer",
+                None,
+                {"filename": filename, "imported_count": count, "skipped_count": skipped},
             )
-            db.add(activity)
-            db.commit()
         except Exception as exc:
             db.rollback()
             raise HTTPException(
