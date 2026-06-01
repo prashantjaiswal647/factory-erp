@@ -99,6 +99,8 @@ BULK_MASTER_SHEETS = {
     "Packaging Materials": "packaging_material",
 }
 
+MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
+
 
 class FactoryProfileBulkRow(BaseModel):
     factory_name: str = Field(..., min_length=1, max_length=255)
@@ -170,44 +172,6 @@ def normalize_bulk_value(value):
     return value
 
 
-def read_bulk_excel(file_bytes: bytes, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
-    try:
-        import pandas as pd
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Excel parser dependencies are not installed") from exc
-
-    expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
-    try:
-        frame = pd.read_excel(BytesIO(file_bytes), dtype=object)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Unable to read Excel file: {exc}") from exc
-
-    headers = [str(column).strip() for column in frame.columns.tolist()]
-    if headers != expected:
-        raise HTTPException(
-            status_code=422,
-            detail=[{
-                "row": 1,
-                "error": "Header mismatch",
-                "expected_headers": expected,
-                "received_headers": headers,
-            }],
-        )
-
-    model = BULK_ROW_MODELS[sub_tab_type]
-    valid_rows: list[dict] = []
-    failed_rows: list[dict] = []
-    for index, raw_row in enumerate(frame.to_dict(orient="records"), start=2):
-        row = {key: normalize_bulk_value(raw_row.get(key)) for key in expected}
-        if all(value is None or value == "" for value in row.values()):
-            continue
-        try:
-            valid_rows.append(model.model_validate(row).model_dump())
-        except Exception as exc:
-            failed_rows.append({"row": index, "error": str(exc), "values": row})
-    return valid_rows, failed_rows
-
-
 def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None) -> tuple[list[dict], list[dict]]:
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
     headers = [str(column).strip() for column in frame.columns.tolist()]
@@ -255,6 +219,18 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
         valid_by_type[sub_tab_type] = valid_rows
         failed_rows.extend(sheet_errors)
     return valid_by_type, failed_rows
+
+
+def build_master_onboarding_workbook() -> BytesIO:
+    import pandas as pd
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
+            frame = pd.DataFrame(columns=BULK_TEMPLATE_COLUMNS[sub_tab_type])
+            frame.to_excel(writer, index=False, sheet_name=sheet_name)
+    output.seek(0)
+    return output
 
 
 def log_bulk_upload(background_tasks: BackgroundTasks, db: Session, current_user: User, sub_tab_type: str, row_count: int) -> None:
@@ -409,41 +385,10 @@ def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: s
 def download_master_onboarding_template(
     current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
 ):
-    import pandas as pd
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
-            frame = pd.DataFrame(columns=BULK_TEMPLATE_COLUMNS[sub_tab_type])
-            frame.to_excel(writer, index=False, sheet_name=sheet_name)
-    output.seek(0)
-
     return StreamingResponse(
-        output,
+        build_master_onboarding_workbook(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="master_onboarding_bulk_upload.xlsx"'},
-    )
-
-
-@v1_router.get("/template/{sub_tab_type}")
-def download_onboarding_template(
-    sub_tab_type: str,
-    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
-):
-    if sub_tab_type not in BULK_TEMPLATE_COLUMNS:
-        raise HTTPException(status_code=404, detail="Unsupported onboarding template type")
-
-    import pandas as pd
-    output = BytesIO()
-    frame = pd.DataFrame(columns=BULK_TEMPLATE_COLUMNS[sub_tab_type])
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        frame.to_excel(writer, index=False, sheet_name=sub_tab_type[:31])
-    output.seek(0)
-
-    filename = f"{sub_tab_type}_bulk_upload_template.xlsx"
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{MASTER_ONBOARDING_FILENAME}"'},
     )
 
 
@@ -485,156 +430,6 @@ async def bulk_upload_master_onboarding(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=[{"sheet": "Database", "row": None, "error": str(exc)}]) from exc
-
-
-@v1_router.post("/bulk-upload/{sub_tab_type}")
-async def bulk_upload_onboarding(
-    sub_tab_type: str,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    current_user: User = Depends(check_permissions(OWNER_ROLES)),
-    db: Session = Depends(get_db),
-):
-    if sub_tab_type not in BULK_TEMPLATE_COLUMNS:
-        raise HTTPException(status_code=404, detail="Unsupported onboarding upload type")
-    if not file.filename or not file.filename.lower().endswith((".xls", ".xlsx")):
-        raise HTTPException(status_code=422, detail="Only .xls and .xlsx files are supported")
-
-    valid_rows, failed_rows = read_bulk_excel(await file.read(), sub_tab_type)
-    if failed_rows:
-        raise HTTPException(status_code=422, detail=failed_rows)
-    if not valid_rows:
-        raise HTTPException(status_code=422, detail=[{"row": None, "error": "No valid rows found"}])
-
-    factory_id = int(current_user.factory_id)
-    try:
-        if sub_tab_type == "factory_profile":
-            row = valid_rows[0]
-            factory = db.query(Factory).filter(Factory.id == factory_id).with_for_update().first()
-            if factory is None:
-                raise HTTPException(status_code=404, detail="Factory not found")
-            settings = get_or_create_factory_settings(db, factory_id)
-            factory.factory_name = row["factory_name"].strip()
-            factory.name = factory.name or row["factory_name"].strip()
-            factory.gst_number = (row.get("gstin") or "").strip() or None
-            if row.get("phone_number"):
-                factory.owner_phone_number = normalize_phone_number(str(row["phone_number"]))
-            settings.bill_of_supply_start_seq = row["bill_of_supply_start_seq"]
-            settings.tax_invoice_start_seq = row["tax_invoice_start_seq"]
-            settings.bill_of_supply_simple_start_seq = row["bill_of_supply_simple_start_seq"]
-            factory.next_bill_of_supply_number = row["bill_of_supply_start_seq"]
-            factory.next_tax_invoice_number = row["tax_invoice_start_seq"]
-            factory.next_bill_of_supply_simple_number = row["bill_of_supply_simple_start_seq"]
-            row_count = 1
-
-        elif sub_tab_type == "worker":
-            worker_mappings = [
-                {
-                    "factory_id": factory_id,
-                    "name": row["name"].strip(),
-                    "phone": normalize_phone_number(str(row["phone_number"])) if row.get("phone_number") else None,
-                    "daily_wage_rate": row["daily_rate"],
-                    "daily_wages": row["daily_rate"],
-                    "duty_hours": 8,
-                    "salary": 0,
-                    "daily_salary": row["daily_rate"],
-                    "shift_hours": 8,
-                    "shift_type": row["role"],
-                    "is_active": True,
-                }
-                for row in valid_rows
-            ]
-            db.bulk_insert_mappings(Worker, worker_mappings, return_defaults=True)
-            attendance_mappings = [
-                {
-                    "factory_id": factory_id,
-                    "worker_id": mapping["id"],
-                    "period_start": date.today(),
-                    "period_end": date.today(),
-                    "present_days": row["opening_attendance_count"],
-                    "half_days": 0,
-                    "absent_days": 0,
-                    "paid_leave_days": 0,
-                    "overtime_hours": 0,
-                    "advance_paid": 0,
-                    "deductions": 0,
-                    "notes": "Opening attendance imported by bulk upload",
-                    "created_by_user_id": current_user.id,
-                }
-                for mapping, row in zip(worker_mappings, valid_rows)
-                if row["opening_attendance_count"] > 0 and mapping.get("id")
-            ]
-            if attendance_mappings:
-                db.bulk_insert_mappings(WorkerOpeningAttendance, attendance_mappings)
-            row_count = len(worker_mappings)
-
-        elif sub_tab_type == "machine":
-            mappings = [
-                {
-                    "factory_id": factory_id,
-                    "name": row["machine_name"].strip(),
-                    "machine_name": row["machine_name"].strip(),
-                    "machine_type": row["machine_name"].strip(),
-                    "speed_per_minute": row["max_speed"],
-                    "speed_bpm": row["max_speed"],
-                    "speed_cups_per_minute": row["max_speed"],
-                    "default_speed": row["max_speed"],
-                    "target_output_per_shift": row["max_speed"] * 60 * 8,
-                    "raw_materials_mapped": ["blank_capacity", "bottom_capacity"],
-                    "is_active": True,
-                }
-                for row in valid_rows
-            ]
-            db.bulk_insert_mappings(Machine, mappings)
-            row_count = len(mappings)
-
-        elif sub_tab_type == "raw_material":
-            mappings = [
-                {
-                    "factory_id": factory_id,
-                    "name": row["material_name"].strip(),
-                    "material_type": "Paper Blank",
-                    "type": "Paper Blank",
-                    "size_name": f"{row['size_ml']}ml",
-                    "size_ml": row["size_ml"],
-                    "unit": "kg",
-                    "opening_stock": row["initial_stock_kg"],
-                    "current_stock": row["initial_stock_kg"],
-                    "stock_quantity": row["initial_stock_kg"],
-                    "price_per_unit": row["unit_price"],
-                }
-                for row in valid_rows
-            ]
-            db.bulk_insert_mappings(RawMaterial, mappings)
-            row_count = len(mappings)
-
-        else:
-            mappings = [
-                {
-                    "factory_id": factory_id,
-                    "packaging_size_name": row["box_size"].strip(),
-                    "box_type": row["box_size"].strip(),
-                    "quantity": row["inventory_count"],
-                    "total_boxes": row["inventory_count"],
-                    "price_per_box": row["box_price"],
-                }
-                for row in valid_rows
-            ]
-            db.bulk_insert_mappings(BoxStock, mappings)
-            row_count = len(mappings)
-
-        db.commit()
-        log_bulk_upload(background_tasks, db, current_user, sub_tab_type, row_count)
-        return {"message": "Bulk upload completed", "sub_tab_type": sub_tab_type, "rows_inserted": row_count, "failed_rows": []}
-    except HTTPException:
-        db.rollback()
-        raise
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=[{"row": None, "error": str(exc.orig)}]) from exc
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=[{"row": None, "error": str(exc)}]) from exc
 
 
 class OnboardingWorkerSummary(BaseModel):

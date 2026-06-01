@@ -1148,23 +1148,10 @@ export type OnboardingBulkUploadType =
 
 export type OnboardingBulkUploadResponse = {
   message: string;
-  sub_tab_type?: OnboardingBulkUploadType;
   rows_inserted: number;
   inserted_counts?: Partial<Record<OnboardingBulkUploadType | "master_onboarding", number>>;
   failed_rows: Array<Record<string, unknown>>;
 };
-
-export function downloadOnboardingTemplate(subTabType: OnboardingBulkUploadType) {
-  return api.get<Blob>(`/api/v1/onboarding/template/${subTabType}`, { responseType: "blob" });
-}
-
-export function uploadOnboardingBulkSheet(subTabType: OnboardingBulkUploadType, file: File) {
-  const formData = new FormData();
-  formData.append("file", file);
-  return api.post<OnboardingBulkUploadResponse>(`/api/v1/onboarding/bulk-upload/${subTabType}`, formData, {
-    headers: { "Content-Type": "multipart/form-data" }
-  });
-}
 
 export function downloadMasterOnboardingTemplate() {
   return api.get<Blob>("/api/v1/onboarding/template/master", { responseType: "blob" });
