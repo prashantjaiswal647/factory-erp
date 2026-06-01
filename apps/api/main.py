@@ -117,6 +117,10 @@ def parse_cors_origins() -> List[str]:
         "http://127.0.0.1:8000",
         "http://localhost:80",
         "http://localhost",
+        "http://web",
+        "http://web:80",
+        "http://api",
+        "http://api:8000",
         "https://munshiai.co.in",
         "https://www.munshiai.co.in",
     ]
@@ -151,14 +155,11 @@ def parse_cors_origins() -> List[str]:
             
     return final_origins
 
-from fastapi.middleware.cors import CORSMiddleware
-
-# Apne FastAPI application instance par CORS configuration lagayein
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Production par safety ke liye isme exact browser domains dal sakte hain
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],  # GET, POST, PUT, DELETE saare actions allow karne ke liye
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -1008,6 +1009,10 @@ def on_startup():
 
 @app.get("/health")
 def health_check():
+    return {"status": "ok"}
+
+@app.get("/api/health")
+def api_health_check():
     return {"status": "ok"}
 
 @app.get("/")

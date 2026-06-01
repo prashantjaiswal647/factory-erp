@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. Database
   postgres:
@@ -44,8 +42,9 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5402/ai_erp_db}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://munshiai.co.in,https://www.munshiai.co.in}
     ports:
       - "8000:8000"
     networks:
@@ -56,6 +55,8 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
     container_name: ai-erp-web
     restart: always
     ports:
@@ -75,6 +76,35 @@ services:
       - "5678:5678"
     volumes:
       - ./volumes/n8n_data:/home/node/.n8n
+    networks:
+      - ai-erp-network
+
+  # 6. Public Reverse Proxy
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      - api
+      - web
+      - n8n
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./volumes/caddy_data:/data
+      - ./volumes/caddy_config:/config
+    networks:
+      - ai-erp-network
+
+  # 7. Database Admin UI
+  adminer:
+    image: adminer:latest
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:8080:8080"
     networks:
       - ai-erp-network
 

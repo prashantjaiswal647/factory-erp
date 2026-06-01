@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ai_erp_validate
+      POSTGRES_USER: erp_validate
+      POSTGRES_PASSWORD: erp_validate_password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp_validate -d ai_erp_validate"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: validate-jwt-secret
+      SUPER_ADMIN_JWT_SECRET: validate-super-admin-secret
+      SUPER_ADMIN_EMAIL: admin@munshiai.co.in
+      SUPER_ADMIN_PASSWORD: admin123
+      DEFAULT_OWNER_USERNAME: owner
+      DEFAULT_OWNER_PASSWORD: owner123
+      DEFAULT_OPERATOR_USERNAME: operator
+      DEFAULT_OPERATOR_PASSWORD: operator123
+      BYPASS_TRIAL: "true"
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://munshiai.co.in
+    ports:
+      - "${VALIDATE_API_PORT:-18000}:8000"
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    depends_on:
+      - api
+    ports:
+      - "${VALIDATE_WEB_PORT:-13000}:80"
