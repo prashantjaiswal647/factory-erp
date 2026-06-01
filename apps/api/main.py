@@ -89,6 +89,7 @@ from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
 from routers import machine_templates
+from routers.daily_sequence import router as daily_sequence_router
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(machine_onboarding.router)
     application.include_router(machine_onboarding.machines_router)
     application.include_router(machine_templates.router)
+    application.include_router(daily_sequence_router, prefix="/api", tags=["Daily Sequence"])
     #application.include_router(ai_invoice_router)
     #application.include_router(internal_automation_router)
 
