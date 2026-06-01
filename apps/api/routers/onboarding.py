@@ -89,6 +89,7 @@ BULK_TEMPLATE_COLUMNS = {
     "machine": ["machine_name", "max_speed", "blank_capacity", "bottom_capacity"],
     "raw_material": ["material_name", "size_ml", "unit_price", "initial_stock_kg"],
     "packaging_material": ["box_size", "pieces_per_box", "inventory_count", "box_price"],
+    "finished_goods": ["product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"],
 }
 
 BULK_MASTER_SHEETS = {
@@ -97,6 +98,7 @@ BULK_MASTER_SHEETS = {
     "Machines": "machine",
     "Raw Materials": "raw_material",
     "Packaging Materials": "packaging_material",
+    "Finished Goods": "finished_goods",
 }
 
 MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
@@ -139,12 +141,23 @@ class PackagingMaterialBulkRow(BaseModel):
     inventory_count: int = Field(default=0, ge=0)
     box_price: float = Field(default=0, ge=0)
 
+
+class FinishedGoodsBulkRow(BaseModel):
+    product_size_ml: int = Field(..., gt=0)
+    variety_design: str = Field(default="Standard/White", max_length=100)
+    packaging_size_name: Optional[str] = Field(default=None, max_length=100)
+    pcs_per_packet: int = Field(default=1, gt=0)
+    packets_per_box: int = Field(default=1, gt=0)
+    initial_stock_boxes: int = Field(default=0, ge=0)
+
+
 BULK_ROW_MODELS = {
     "factory_profile": FactoryProfileBulkRow,
     "worker": WorkerBulkRow,
     "machine": MachineBulkRow,
     "raw_material": RawMaterialBulkRow,
     "packaging_material": PackagingMaterialBulkRow,
+    "finished_goods": FinishedGoodsBulkRow,
 }
 
 
@@ -352,6 +365,28 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             for row in valid_rows
         ]
         db.bulk_insert_mappings(RawMaterial, mappings)
+        return len(mappings)
+
+    if sub_tab_type == "finished_goods":
+        mappings = []
+        for row in valid_rows:
+            product_size_ml = int(row["product_size_ml"])
+            variety = (row.get("variety_design") or "Standard/White").strip() or "Standard/White"
+            packaging_size_name = (row.get("packaging_size_name") or "").strip()
+            if not packaging_size_name:
+                packaging_size_name = f"{product_size_ml}ML - {variety}"
+            mappings.append({
+                "factory_id": factory_id,
+                "product_size_ml": product_size_ml,
+                "variety": variety,
+                "packaging_size_name": packaging_size_name,
+                "pieces_per_packet": int(row["pcs_per_packet"]),
+                "packets_per_box_limit": int(row["packets_per_box"]),
+                "current_quantity": int(row["initial_stock_boxes"]),
+                "total_boxes": int(row["initial_stock_boxes"]),
+                "loose_packets": 0,
+            })
+        db.bulk_insert_mappings(FinalProductStock, mappings)
         return len(mappings)
 
     mappings = [
