@@ -1608,13 +1608,14 @@ export async function onboardFinishedGoods(payload: FinishedGoodsOnboardPayload)
 
 export type DailySequenceLogItem = {
   id: number;
-  factory_id?: number;
-  user_id?: number | null;
-  user_role?: string | null;
-  action_type?: string | null;
-  short_statement: string;
-  created_time?: string | null;
-  timestamp?: string | null;
+  time: string;
+  action_type: string;
+  action_summary: string;
+  entity_type: string;
+  entity_id: number | null;
+  user_name: string;
+  user_role: string;
+  relative_day: string;
 };
 
 export type DailySequenceGroup = {
@@ -1623,8 +1624,9 @@ export type DailySequenceGroup = {
 };
 
 export async function getDailySequenceLogs(date?: string) {
-  const url = date ? `/api/activity-logs/daily-sequence?date=${date}` : "/api/activity-logs/daily-sequence";
-  const response = await api.get<DailySequenceLogItem[]>(url);
+  const response = await api.get<DailySequenceLogItem[]>("/api/daily-sequence", {
+    params: date ? { date } : undefined,
+  });
   return response.data;
 }
 

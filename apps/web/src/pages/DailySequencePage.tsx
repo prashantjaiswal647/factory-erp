@@ -1,125 +1,161 @@
-import React, { useState, useEffect } from "react";
-import { 
-  CalendarDays, 
-  Clock, 
-  History,
-  AlertCircle,
-  ShieldCheck
-} from "lucide-react";
-import { getDailySequenceLogs, type DailySequenceLogItem } from "../lib/api";
+import { useEffect, useState } from "react";
+import { AlertCircle, CalendarDays, History } from "lucide-react";
+import axios from "axios";
+
+import { getDailySequenceLogs } from "../lib/api";
+
+interface DailySequenceLogItem {
+  id: number;
+  time: string;
+  action_type: string;
+  action_summary: string;
+  entity_type: string;
+  entity_id: number | null;
+  user_name: string;
+  user_role: string;
+  relative_day: string;
+}
+
+const entityChipClasses: Record<string, string> = {
+  invoice: "bg-blue-100 text-blue-800 border-blue-200",
+  payment: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  production: "bg-purple-100 text-purple-800 border-purple-200",
+  expense: "bg-red-100 text-red-800 border-red-200",
+  attendance: "bg-zinc-100 text-zinc-700 border-zinc-200",
+  sale: "bg-blue-100 text-blue-800 border-blue-200",
+  onboarding: "bg-amber-100 text-amber-800 border-amber-200",
+};
+
+function todayInputValue() {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+function errorMessage(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    return typeof detail === "string" ? detail : error.message;
+  }
+  return "Failed to load activity logs.";
+}
+
+function entityClass(entityType: string) {
+  return entityChipClasses[entityType.toLowerCase()] || "bg-zinc-100 text-zinc-700 border-zinc-200";
+}
+
+function SkeletonCards() {
+  return (
+    <div className="space-y-4">
+      {[0, 1, 2].map((item) => (
+        <div key={item} className="grid gap-3 rounded-lg border border-zinc-100 bg-zinc-50 p-4 md:grid-cols-[110px_1fr_120px]">
+          <div className="h-8 animate-pulse rounded-full bg-zinc-200" />
+          <div className="space-y-2">
+            <div className="h-4 w-3/4 animate-pulse rounded bg-zinc-200" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-zinc-100" />
+          </div>
+          <div className="h-7 animate-pulse rounded-full bg-zinc-200" />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function DailySequencePage() {
-  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [selectedDate, setSelectedDate] = useState(todayInputValue);
   const [logs, setLogs] = useState<DailySequenceLogItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void fetchLogs(date);
-  }, [date]);
-
-  async function fetchLogs(targetDate: string) {
-    setIsLoading(true);
-    setError("");
-    try {
-      const data = await getDailySequenceLogs(targetDate);
-      setLogs(data);
-    } catch (err: any) {
-      console.error("Failed to load daily sequence logs:", err);
-      setError(err?.response?.data?.detail || "Failed to load activity logs.");
-      setLogs([]);
-    } finally {
-      setIsLoading(false);
+    let active = true;
+    async function loadLogs() {
+      setIsLoading(true);
+      setError("");
+      try {
+        const data = await getDailySequenceLogs(selectedDate);
+        if (active) setLogs(data);
+      } catch (caught) {
+        if (active) {
+          setError(errorMessage(caught));
+          setLogs([]);
+        }
+      } finally {
+        if (active) setIsLoading(false);
+      }
     }
-  }
-
-  const getRoleBadgeColor = (role?: string | null) => {
-    const r = (role || "").toLowerCase().trim();
-    if (r === "owner") return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200";
-    if (r === "sub-owner") return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border border-purple-200";
-    if (r === "supervisor") return "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-200";
-    return "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200";
-  };
+    void loadLogs();
+    return () => {
+      active = false;
+    };
+  }, [selectedDate]);
 
   return (
     <div className="space-y-6">
-      {/* Top Header Panel */}
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-2xl bg-white p-5 border border-zinc-150 shadow-sm">
+      <header className="flex flex-col gap-4 rounded-lg border border-zinc-150 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-xl bg-purple-100 text-purple-700">
-            <History className="h-6 w-6" />
+          <div className="grid h-11 w-11 place-items-center rounded-lg bg-purple-100 text-purple-700">
+            <History className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-xl font-black text-zinc-950">Daily Activity Sequence</h1>
-            <p className="text-xs text-zinc-500">Automated chronological event sequence tracking committed logs</p>
+            <h1 className="text-xl font-bold text-zinc-950">Daily Activity Sequence</h1>
+            <p className="text-xs text-zinc-500">Automated transaction log for factory activity.</p>
           </div>
         </div>
-
-        {/* Date Filter Datepicker */}
-        <div className="flex items-center gap-2">
+        <label className="flex items-center gap-2 text-sm font-semibold text-zinc-700">
           <CalendarDays className="h-4 w-4 text-zinc-400" />
           <input
+            className="h-10 rounded-md border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-800 outline-none focus:border-purple-600"
             type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="h-10 rounded-lg border border-zinc-200 px-3 text-sm font-semibold text-zinc-800 focus:border-purple-600 outline-none bg-white shadow-sm"
+            value={selectedDate}
+            onChange={(event) => setSelectedDate(event.target.value)}
           />
-        </div>
+        </label>
       </header>
 
-      {/* Timeline Section */}
-      <section className="rounded-2xl bg-white p-6 border border-zinc-150 shadow-sm min-h-[400px]">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center p-12 text-sm text-zinc-400">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-200 border-t-purple-600 mb-2" />
-            Fetching activities sequence...
-          </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center p-12 text-center text-sm text-rose-500">
-            <AlertCircle className="h-8 w-8 mb-2" />
+      <section className="rounded-lg border border-zinc-150 bg-white p-5 shadow-sm">
+        {isLoading ? <SkeletonCards /> : null}
+
+        {!isLoading && error ? (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-red-100 bg-red-50 p-10 text-center text-sm text-red-600">
+            <AlertCircle className="mb-2 h-7 w-7" />
             {error}
           </div>
-        ) : logs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-12 text-center text-sm text-zinc-400 border border-dashed border-zinc-200 rounded-xl">
-            <History className="h-8 w-8 text-zinc-300 mb-2" />
-            <p className="font-semibold text-zinc-500">No activities recorded for this date</p>
-            <p className="text-xs text-zinc-400 mt-1 max-w-xs">
-              Factory operations, customer batch updates, and payment collection ledgers will automatically display here upon transaction success.
-            </p>
-          </div>
-        ) : (
-          <div className="relative border-l-2 border-zinc-100 ml-4 pl-6 space-y-6">
-            {logs.map((log) => {
-              return (
-                <div key={log.id} className="relative group">
-                  {/* Stepper Bullet icon */}
-                  <span className="absolute -left-[35px] top-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-purple-500 bg-white text-purple-700 shadow-sm transition group-hover:scale-110">
-                    <ShieldCheck className="h-4 w-4" />
-                  </span>
+        ) : null}
 
-                  {/* Card item */}
-                  <div className="rounded-xl border border-zinc-100 bg-zinc-50/50 p-4 transition-all duration-300 hover:border-zinc-200 hover:bg-white hover:shadow-sm flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center rounded-full bg-zinc-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-700">
-                          {log.action_type || "CREATE"}
-                        </span>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${getRoleBadgeColor(log.user_role)}`}>
-                          {log.user_role}
-                        </span>
-                        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-500">
-                          <Clock className="h-3 w-3" />
-                          {log.created_time || "Pending"}
-                        </div>
-                      </div>
-                      <p className="text-sm font-medium leading-relaxed text-zinc-800">{log.short_statement}</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        {!isLoading && !error && logs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-12 text-center">
+            <History className="mb-2 h-8 w-8 text-zinc-300" />
+            <p className="text-sm font-semibold text-zinc-600">No activities recorded for this date</p>
+            <p className="mt-1 max-w-sm text-xs text-zinc-400">Successful sales, payments, production, attendance, onboarding, and expense actions will appear here automatically.</p>
           </div>
-        )}
+        ) : null}
+
+        {!isLoading && !error && logs.length > 0 ? (
+          <div className="relative ml-3 border-l-2 border-zinc-100 pl-6">
+            <div className="space-y-4">
+              {logs.map((log) => (
+                <article key={log.id} className="relative rounded-lg border border-zinc-100 bg-zinc-50/60 p-4 shadow-sm">
+                  <span className="absolute -left-[33px] top-5 h-4 w-4 rounded-full border-2 border-purple-600 bg-white" />
+                  <div className="grid gap-3 md:grid-cols-[110px_1fr_auto] md:items-start">
+                    <div className="w-fit rounded-full bg-white px-3 py-1 text-xs font-bold text-zinc-600 ring-1 ring-zinc-200">
+                      {log.time}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold leading-6 text-zinc-900">{log.action_summary}</p>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        {log.user_name} · {log.user_role} · {log.relative_day}
+                      </p>
+                    </div>
+                    <span className={`w-fit rounded-full border px-3 py-1 text-xs font-bold capitalize ${entityClass(log.entity_type)}`}>
+                      {log.entity_type}
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );
