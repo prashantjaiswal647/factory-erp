@@ -16,7 +16,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from sqlalchemy import String, cast, or_, func as sql_func, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
-from starlette.datastructures import UploadFile
+
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
@@ -784,7 +784,11 @@ async def send_owner_sale_alert_email(
         print("Owner sale alert email skipped: SMTP_USER, SMTP_PASSWORD, SMTP_FROM, or SMTP_HOST is not configured")
         return
 
-    attachment = UploadFile(file=BytesIO(pdf_bytes), filename=filename)
+    attachment = {
+    "file": BytesIO(pdf_bytes),
+    "filename": filename,
+    "content_type": "application/pdf"
+    }
     message = MessageSchema(
         subject=subject,
         recipients=[owner_email],
