@@ -1,0 +1,30 @@
+name: MunshiAI CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r apps/api/requirements.txt
+      - run: pip install pytest pytest-asyncio httpx
+      - run: cd apps/api && pytest tests/ -v
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: cd apps/web && npm install
+      - run: cd apps/web && npm run type-check
+      - run: cd apps/web && npx vitest run
