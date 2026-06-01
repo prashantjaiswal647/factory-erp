@@ -1329,9 +1329,14 @@ class ActivityLog(TenantMixin, Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     user_id = Column(Integer, nullable=True, index=True)
     user_role = Column(String(50), nullable=True)
+    user_name = Column(String(255), nullable=True)
     action_type = Column(String(50), nullable=True)
     entity_name = Column(String(255), nullable=True)
+    entity_type = Column(String(50), nullable=True, index=True)
+    entity_id = Column(Integer, nullable=True, index=True)
     short_statement = Column(Text, nullable=True)
+    activity_metadata = Column("metadata", MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    committed_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -1339,17 +1344,6 @@ class ActivityLog(TenantMixin, Base):
             name="ck_activity_logs_event_type",
         ),
     )
-
-
-class DailySequenceLog(TenantMixin, Base):
-    __tablename__ = "daily_sequence_logs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=True, index=True)
-    user_role = Column(String(50), nullable=True, index=True)
-    action_type = Column(String(50), nullable=False, index=True)
-    short_statement = Column(String(500), nullable=False)
-    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 
 class BillPayment(TenantMixin, Base):
