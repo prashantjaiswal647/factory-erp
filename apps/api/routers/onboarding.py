@@ -732,6 +732,19 @@ def create_blank_stock(
     db.commit()
 
     background_tasks.add_task(
+        log_activity,
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_name=current_user.username,
+        user_role=current_user.role,
+        action_type="RAW_MATERIAL_ADDED",
+        action_summary=f"Raw material '{payload.material_name}' added - {total_weight_kg} kg",
+        entity_type="raw_material",
+        entity_id=stock.id,
+        metadata=None,
+    )
+    background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,
         sync_type="onboarding",
@@ -804,6 +817,19 @@ def create_bottom_stock(
     db.commit()
 
     background_tasks.add_task(
+        log_activity,
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_name=current_user.username,
+        user_role=current_user.role,
+        action_type="RAW_MATERIAL_ADDED",
+        action_summary=f"Raw material '{payload.bottom_size_mm}mm Bottom' added - {total_weight_kg} kg",
+        entity_type="raw_material",
+        entity_id=stock.id,
+        metadata=None,
+    )
+    background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,
         sync_type="onboarding",
@@ -846,6 +872,19 @@ def create_box_stock(
     stock.total_boxes = payload.quantity
     stock.price_per_box = payload.price_per_box
     db.commit()
+    background_tasks.add_task(
+        log_activity,
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_name=current_user.username,
+        user_role=current_user.role,
+        action_type="PACKAGING_MATERIAL_ADDED",
+        action_summary=f"Packaging material '{payload.box_type}' added",
+        entity_type="packaging_material",
+        entity_id=stock.id,
+        metadata=None,
+    )
     background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,
@@ -912,6 +951,19 @@ def create_plastic_stock(
             metric.kg_per_box = payload.weight_per_bora_kg
     db.commit()
 
+    background_tasks.add_task(
+        log_activity,
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_name=current_user.username,
+        user_role=current_user.role,
+        action_type="PACKAGING_MATERIAL_ADDED",
+        action_summary=f"Packaging material '{payload.plastic_size_name}' added",
+        entity_type="packaging_material",
+        entity_id=stock.id,
+        metadata=None,
+    )
     background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,
@@ -1394,6 +1446,34 @@ def onboarding_step3_materials(
         pack_saved += 1
 
     db.commit()
+    if raw_saved:
+        background_tasks.add_task(
+            log_activity,
+            db=db,
+            factory_id=int(current_user.factory_id),
+            user_id=current_user.id,
+            user_name=current_user.username,
+            user_role=current_user.role,
+            action_type="RAW_MATERIAL_ADDED",
+            action_summary=f"Raw material metrics updated - {raw_saved} entries",
+            entity_type="raw_material",
+            entity_id=None,
+            metadata={"raw_material_metrics_saved": raw_saved},
+        )
+    if pack_saved:
+        background_tasks.add_task(
+            log_activity,
+            db=db,
+            factory_id=int(current_user.factory_id),
+            user_id=current_user.id,
+            user_name=current_user.username,
+            user_role=current_user.role,
+            action_type="PACKAGING_MATERIAL_ADDED",
+            action_summary=f"Packaging material metrics updated - {pack_saved} entries",
+            entity_type="packaging_material",
+            entity_id=None,
+            metadata={"packaging_metrics_saved": pack_saved},
+        )
     background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,
@@ -1454,6 +1534,34 @@ def complete_onboarding(
         if worker_names:
             _log_onboarding_change(db, int(factory_id), "Updated", ", ".join(worker_names))
         db.commit()
+        if payload.raw_materials:
+            background_tasks.add_task(
+                log_activity,
+                db=db,
+                factory_id=int(current_user.factory_id),
+                user_id=current_user.id,
+                user_name=current_user.username,
+                user_role=current_user.role,
+                action_type="RAW_MATERIAL_ADDED",
+                action_summary=f"Raw materials updated during onboarding - {len(payload.raw_materials)} entries",
+                entity_type="raw_material",
+                entity_id=None,
+                metadata={"raw_materials_saved": len(payload.raw_materials)},
+            )
+        if payload.packaging_profiles:
+            background_tasks.add_task(
+                log_activity,
+                db=db,
+                factory_id=int(current_user.factory_id),
+                user_id=current_user.id,
+                user_name=current_user.username,
+                user_role=current_user.role,
+                action_type="PACKAGING_MATERIAL_ADDED",
+                action_summary=f"Packaging profiles updated during onboarding - {len(payload.packaging_profiles)} entries",
+                entity_type="packaging_material",
+                entity_id=None,
+                metadata={"packaging_profiles_saved": len(payload.packaging_profiles)},
+            )
         background_tasks.add_task(
             sync_data_to_n8n_bg,
             factory_id=factory_id,

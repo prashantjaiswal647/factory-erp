@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ import os
 
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
+from services.activity_logger import log_activity
 from models import (
     BlankStock,
     BottomStock,
@@ -505,6 +506,7 @@ def list_live_stock(
 @router.post("/final-stock", response_model=FinalStockRow)
 def save_final_stock(
     payload: FinalStockCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -565,6 +567,19 @@ def save_final_stock(
         stock.total_boxes = quantity
         stock.loose_packets = payload.loose_packets
         db.commit()
+        background_tasks.add_task(
+            log_activity,
+            db=db,
+            factory_id=int(current_user.factory_id),
+            user_id=current_user.id,
+            user_name=current_user.username,
+            user_role=current_user.role,
+            action_type="FINISHED_GOODS_STOCK_SAVED",
+            action_summary=f"Finished goods stock saved - {stock.product_size_ml}ml {stock.variety or 'Standard/White'} ({stock.total_boxes or 0} boxes)",
+            entity_type="finished_goods_stock",
+            entity_id=stock.id,
+            metadata=None,
+        )
         db.refresh(stock)
         fg_stock = (
             db.query(FinishedGoodsStock)
@@ -747,6 +762,7 @@ async def upload_product_image(
 @router.post("/finished-goods/onboard", response_model=FinalStockRow)
 def onboard_finished_goods(
     payload: FinishedGoodsOnboardRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -911,6 +927,19 @@ def onboard_finished_goods(
             )
 
         db.commit()
+        background_tasks.add_task(
+            log_activity,
+            db=db,
+            factory_id=int(current_user.factory_id),
+            user_id=current_user.id,
+            user_name=current_user.username,
+            user_role=current_user.role,
+            action_type="FINISHED_GOODS_STOCK_SAVED",
+            action_summary=f"Finished goods stock saved - {product_size_ml_int}ml {variety_design} ({initial_quantity_boxes} boxes)",
+            entity_type="finished_goods_stock",
+            entity_id=stock.id,
+            metadata=None,
+        )
         db.refresh(stock)
 
         # Retrieve image details and other info for output mapping
