@@ -10,10 +10,6 @@ VALIDATE_API_PORT="${VALIDATE_API_PORT:-18000}"
 VALIDATE_WEB_PORT="${VALIDATE_WEB_PORT:-13000}"
 API_HEALTH_URL="${API_HEALTH_URL:-http://127.0.0.1:${VALIDATE_API_PORT}/api/health}"
 WEB_HEALTH_URL="${WEB_HEALTH_URL:-http://127.0.0.1:${VALIDATE_WEB_PORT}/}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  PYTHON_BIN="python"
-fi
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose)
@@ -30,16 +26,18 @@ cleanup() {
 trap cleanup ERR
 
 echo "==> Step A: Backend syntax and style gate"
-if command -v flake8 >/dev/null 2>&1; then
-  flake8 "${API_DIR}"
-else
-  echo "flake8 not found; using Python compile gate"
-  "${PYTHON_BIN}" -m compileall -q "${API_DIR}"
-fi
+docker run --rm \
+  -v "${API_DIR}:/src:ro" \
+  -w /src \
+  python:3.12-slim \
+  sh -c "python -m compileall -q ."
 
 echo "==> Step A: Frontend TypeScript gate"
-cd "${WEB_DIR}"
-npm run build
+docker run --rm \
+  -v "${WEB_DIR}:/src:ro" \
+  -w /tmp/app \
+  node:22-alpine \
+  sh -c "cp -a /src/. /tmp/app && npm ci && npm run build"
 
 echo "==> Step B: Isolated Docker build gate"
 cd "${ROOT_DIR}"
