@@ -1347,3 +1347,79 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
     </button>
   );
 }
+// React Form Data State Validation Hook
+// apps/web/src/pages/Onboarding.tsx (or matching component setup)
+
+import React, { useState } from 'react';
+
+interface OnboardingFormData {
+  company_name: string;
+  bill_of_supply_start_seq: number;
+  tax_invoice_start_seq: number;
+  bill_of_supply_simple_start_seq: number;
+}
+
+export const OnboardingForm: React.FC = () => {
+  const [formData, setFormData] = useState<OnboardingFormData>({
+    company_name: '',
+    bill_of_supply_start_seq: 1,        // Default Initialization 
+    tax_invoice_start_seq: 1,           // Default Initialization
+    bill_of_supply_simple_start_seq: 1,  // Default Initialization
+  });
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData({
+      ...formData,
+      [name]: name.endsWith('_seq') ? Math.max(1, parseInt(value) || 1) : value
+    });
+  };
+
+  return (
+    <div className="space-y-6 max-w-2xl mx-auto p-6 bg-white rounded-lg shadow">
+      <h2 className="text-xl font-bold text-gray-800">Configure Invoice Series Counters</h2>
+      <p className="text-sm text-gray-500">Set starting tracking numbers for your distinct billing streams.</p>
+      
+      <hr className="border-gray-200" />
+
+      {/* Input Container 1: Bill of Supply */}
+      <div className="flex flex-col space-y-2">
+        <label className="text-sm font-semibold text-gray-700">Starting Invoice Number for Bill of Supply</label>
+        <input
+          type="number"
+          name="bill_of_supply_start_seq"
+          min="1"
+          value={formData.bill_of_supply_start_seq}
+          onChange={handleInputChange}
+          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      {/* Input Container 2: Tax Invoice (GST) */}
+      <div className="flex flex-col space-y-2">
+        <label className="text-sm font-semibold text-gray-700">Starting Invoice Number for Tax Invoice (GST)</label>
+        <input
+          type="number"
+          name="tax_invoice_start_seq"
+          min="1"
+          value={formData.tax_invoice_start_seq}
+          onChange={handleInputChange}
+          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      {/* Input Container 3: Bill of Supply Simple */}
+      <div className="flex flex-col space-y-2">
+        <label className="text-sm font-semibold text-gray-700">Starting Invoice Number for Bill of Supply Simple</label>
+        <input
+          type="number"
+          name="bill_of_supply_simple_start_seq"
+          min="1"
+          value={formData.bill_of_supply_simple_start_seq}
+          onChange={handleInputChange}
+          className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+    </div>
+  );
+};
