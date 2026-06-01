@@ -161,7 +161,6 @@ app.add_middleware(
     allow_methods=["*"],  # GET, POST, PUT, DELETE saare actions allow karne ke liye
     allow_headers=["*"],
 )
-)
 
 # ==================== ROUTERS LOGIC SYSTEM REGISTRY ====================
 def register_application_routers(application: FastAPI) -> None:
