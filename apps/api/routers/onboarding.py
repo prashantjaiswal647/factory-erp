@@ -651,8 +651,6 @@ def get_factory_profile(
         factory_name=factory.factory_name or factory.name,
         address=factory.address,
         gst_number=getattr(factory, "gst_number", None),
-        initial_invoice_number=getattr(factory, "initial_invoice_number", 1) or 1,
-        current_invoice_counter=getattr(factory, "current_invoice_counter", 1) or 1,
         invoice_prefix=getattr(factory, "invoice_prefix", "INV-") or "INV-",
         advance_payment_discount_percentage=getattr(factory, "advance_payment_discount_percentage", Decimal("2.00")) or Decimal("2.00"),
         digital_signature_url=getattr(factory, "digital_signature_url", None),
@@ -680,30 +678,16 @@ def update_factory_profile(
     factory.factory_name = payload.factory_name.strip()
     factory.address = payload.address.strip() if payload.address else None
     factory.gst_number = payload.gst_number.strip() if payload.gst_number else None
-    
-    if payload.initial_invoice_number is not None:
-        factory.initial_invoice_number = payload.initial_invoice_number
-        factory.current_invoice_counter = payload.initial_invoice_number
 
     if payload.bill_of_supply_start_seq is not None:
-        settings.bill_of_supply_start_seq = payload.bill_of_supply_start_seq
-        factory.next_bill_of_supply_number = payload.bill_of_supply_start_seq
+        settings.bill_of_supply_start_seq = int(payload.bill_of_supply_start_seq)
+        factory.next_bill_of_supply_number = int(payload.bill_of_supply_start_seq)
     if payload.tax_invoice_start_seq is not None:
-        settings.tax_invoice_start_seq = payload.tax_invoice_start_seq
-        factory.next_tax_invoice_number = payload.tax_invoice_start_seq
+        settings.tax_invoice_start_seq = int(payload.tax_invoice_start_seq)
+        factory.next_tax_invoice_number = int(payload.tax_invoice_start_seq)
     if payload.bill_of_supply_simple_start_seq is not None:
-        settings.bill_of_supply_simple_start_seq = payload.bill_of_supply_simple_start_seq
-        factory.next_bill_of_supply_simple_number = payload.bill_of_supply_simple_start_seq
-
-    if payload.next_tax_invoice_number is not None:
-        factory.next_tax_invoice_number = payload.next_tax_invoice_number
-        settings.tax_invoice_start_seq = payload.next_tax_invoice_number
-    if payload.next_bill_of_supply_number is not None:
-        factory.next_bill_of_supply_number = payload.next_bill_of_supply_number
-        settings.bill_of_supply_start_seq = payload.next_bill_of_supply_number
-    if payload.next_bill_of_supply_simple_number is not None:
-        factory.next_bill_of_supply_simple_number = payload.next_bill_of_supply_simple_number
-        settings.bill_of_supply_simple_start_seq = payload.next_bill_of_supply_simple_number
+        settings.bill_of_supply_simple_start_seq = int(payload.bill_of_supply_simple_start_seq)
+        factory.next_bill_of_supply_simple_number = int(payload.bill_of_supply_simple_start_seq)
 
     if payload.invoice_prefix is not None:
         factory.invoice_prefix = payload.invoice_prefix.strip()
@@ -721,8 +705,6 @@ def update_factory_profile(
         factory_name=factory.factory_name or factory.name,
         address=factory.address,
         gst_number=factory.gst_number,
-        initial_invoice_number=factory.initial_invoice_number,
-        current_invoice_counter=factory.current_invoice_counter,
         invoice_prefix=factory.invoice_prefix or "INV-",
         advance_payment_discount_percentage=factory.advance_payment_discount_percentage,
         digital_signature_url=factory.digital_signature_url,

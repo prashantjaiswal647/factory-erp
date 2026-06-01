@@ -745,8 +745,6 @@ def ensure_runtime_schema():
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS google_sheet_id VARCHAR(255)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS gst_number VARCHAR(50)",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS address_place VARCHAR(255)",
-        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS initial_invoice_number INTEGER DEFAULT 1",
-        "ALTER TABLE factories ADD COLUMN IF NOT EXISTS current_invoice_counter INTEGER DEFAULT 1",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS invoice_prefix VARCHAR(50) NOT NULL DEFAULT 'INV-'",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS next_tax_invoice_number INTEGER DEFAULT 1",
         "ALTER TABLE factories ADD COLUMN IF NOT EXISTS next_bill_of_supply_number INTEGER DEFAULT 1",

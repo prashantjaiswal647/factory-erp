@@ -914,16 +914,12 @@ class FactoryProfileUpdate(BaseModel):
     factory_name: str = Field(..., min_length=1, max_length=255)
     address: Optional[str] = Field(default=None, max_length=500)
     gst_number: Optional[str] = Field(default=None, max_length=50)
-    initial_invoice_number: Optional[int] = Field(default=1, ge=1)
     invoice_prefix: Optional[str] = Field(default="INV-", max_length=50)
     advance_payment_discount_percentage: Optional[Decimal] = Field(default=Decimal('2.00'), ge=0, le=100)
     digital_signature_url: Optional[str] = Field(default=None, max_length=500)
     bill_of_supply_start_seq: Optional[int] = Field(default=1, ge=1)
     tax_invoice_start_seq: Optional[int] = Field(default=1, ge=1)
     bill_of_supply_simple_start_seq: Optional[int] = Field(default=1, ge=1)
-    next_tax_invoice_number: Optional[int] = Field(default=None, ge=1)
-    next_bill_of_supply_number: Optional[int] = Field(default=None, ge=1)
-    next_bill_of_supply_simple_number: Optional[int] = Field(default=None, ge=1)
 
 
 class FactoryProfileResponse(BaseModel):
@@ -931,8 +927,6 @@ class FactoryProfileResponse(BaseModel):
     factory_name: Optional[str] = None
     address: Optional[str] = None
     gst_number: Optional[str] = None
-    initial_invoice_number: int
-    current_invoice_counter: int
     invoice_prefix: Optional[str] = "INV-"
     advance_payment_discount_percentage: Decimal = Decimal('2.00')
     digital_signature_url: Optional[str] = None

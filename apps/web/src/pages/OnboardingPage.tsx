@@ -83,7 +83,6 @@ export default function OnboardingPage() {
   const [companyName, setCompanyName] = useState("");
   const [companyAddress, setCompanyAddress] = useState("");
   const [companyGST, setCompanyGST] = useState("");
-  const [startingInvoiceNum, setStartingInvoiceNum] = useState(1);
   const [billOfSupplyStartSeq, setBillOfSupplyStartSeq] = useState(1);
   const [taxInvoiceStartSeq, setTaxInvoiceStartSeq] = useState(1);
   const [billOfSupplySimpleStartSeq, setBillOfSupplySimpleStartSeq] = useState(1);
@@ -105,7 +104,6 @@ export default function OnboardingPage() {
         setCompanyName(profile.factory_name || "");
         setCompanyAddress(profile.address || "");
         setCompanyGST(profile.gst_number || "");
-        setStartingInvoiceNum(profile.initial_invoice_number || 1);
         setBillOfSupplyStartSeq(profile.bill_of_supply_start_seq || profile.next_bill_of_supply_number || 1);
         setTaxInvoiceStartSeq(profile.tax_invoice_start_seq || profile.next_tax_invoice_number || 1);
         setBillOfSupplySimpleStartSeq(profile.bill_of_supply_simple_start_seq || profile.next_bill_of_supply_simple_number || 1);
@@ -400,10 +398,9 @@ export default function OnboardingPage() {
         factory_name: companyName.trim(),
         address: companyAddress.trim(),
         gst_number: companyGST.trim(),
-        initial_invoice_number: startingInvoiceNum,
-        bill_of_supply_start_seq: billOfSupplyStartSeq || 1,
-        tax_invoice_start_seq: taxInvoiceStartSeq || 1,
-        bill_of_supply_simple_start_seq: billOfSupplySimpleStartSeq || 1,
+        bill_of_supply_start_seq: Number(billOfSupplyStartSeq || 1),
+        tax_invoice_start_seq: Number(taxInvoiceStartSeq || 1),
+        bill_of_supply_simple_start_seq: Number(billOfSupplySimpleStartSeq || 1),
         advance_payment_discount_percentage: Number(advanceDiscountNum || 0),
         invoice_prefix: invoicePrefix.trim()
       });
@@ -494,11 +491,6 @@ export default function OnboardingPage() {
                 placeholder="e.g. INV-"
                 value={invoicePrefix}
                 onChange={setInvoicePrefix}
-              />
-              <NumberInput
-                label="Starting Invoice Number Counter"
-                value={startingInvoiceNum}
-                onChange={setStartingInvoiceNum}
               />
               <NumberInput
                 label="Advance UPI Discount (%)"

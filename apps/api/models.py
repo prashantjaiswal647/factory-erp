@@ -78,8 +78,6 @@ class Factory(Base):
     google_sheet_id = Column(String(255), nullable=True)
     gst_number = Column(String(50), nullable=True)
     address_place = Column(String(255), nullable=True)
-    initial_invoice_number = Column(Integer, default=1, server_default="1")
-    current_invoice_counter = Column(Integer, default=1, server_default="1")
     next_tax_invoice_number = Column(Integer, default=1, server_default="1")
     next_bill_of_supply_number = Column(Integer, default=1, server_default="1")
     next_bill_of_supply_simple_number = Column(Integer, default=1, server_default="1")

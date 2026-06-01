@@ -227,8 +227,8 @@ export default function SalesEntryPage() {
   }, []);
 
   useEffect(() => {
-    void refreshNextInvoiceNumber();
-  }, []);
+    void refreshNextInvoiceNumber(true);
+  }, [form.legal_invoice_type]);
 
   useEffect(() => {
     const handle = window.setTimeout(async () => {

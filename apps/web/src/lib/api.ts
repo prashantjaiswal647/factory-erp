@@ -1064,8 +1064,6 @@ export type FactoryProfile = {
   factory_name: string;
   address?: string;
   gst_number?: string;
-  initial_invoice_number: number;
-  current_invoice_counter: number;
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
@@ -1081,16 +1079,12 @@ export type FactoryProfileUpdate = {
   factory_name: string;
   address?: string;
   gst_number?: string;
-  initial_invoice_number?: number;
   advance_payment_discount_percentage?: number;
   invoice_prefix?: string;
   digital_signature_url?: string;
   bill_of_supply_start_seq?: number;
   tax_invoice_start_seq?: number;
   bill_of_supply_simple_start_seq?: number;
-  next_tax_invoice_number?: number;
-  next_bill_of_supply_number?: number;
-  next_bill_of_supply_simple_number?: number;
 };
 
 export function getFactoryProfile() {

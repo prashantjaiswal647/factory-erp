@@ -117,8 +117,7 @@ def _invoice_counter_attr(invoice_type: str | None) -> str:
         return "next_bill_of_supply_number"
     if invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple"):
         return "next_bill_of_supply_simple_number"
-    # Legacy fallback — uses the shared counter
-    return "current_invoice_counter"
+    return "next_bill_of_supply_number"
 
 
 def _settings_counter_attr(invoice_type: str | None) -> str:
@@ -160,11 +159,9 @@ def allocate_invoice_number(db: Session, factory: Factory | None, invoice_type: 
         attr = _invoice_counter_attr(invoice_type)
         settings_attr = _settings_counter_attr(invoice_type)
         settings = get_or_create_factory_settings(db, factory.id, for_update=True)
-        invoice_counter = getattr(settings, settings_attr, None) or getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+        invoice_counter = getattr(settings, settings_attr, None) or getattr(factory, attr, None) or 1
         setattr(settings, settings_attr, int(invoice_counter) + 1)
         setattr(factory, attr, int(invoice_counter) + 1)
-        if attr != "current_invoice_counter":
-            factory.current_invoice_counter = factory.current_invoice_counter or int(invoice_counter)
 
     prefix = clean_optional_text(getattr(factory, "invoice_prefix", None)) or "INV-"
     return f"{prefix}{invoice_counter}"
@@ -190,7 +187,7 @@ def preview_invoice_number(db: Session, factory: Factory | None, invoice_type: s
         getattr(settings, settings_attr, None)
         if settings is not None
         else getattr(factory, attr, None)
-    ) or getattr(factory, attr, None) or factory.current_invoice_counter or factory.initial_invoice_number or 1
+    ) or getattr(factory, attr, None) or 1
     return f"{prefix}{counter}"
 
 
@@ -225,7 +222,6 @@ def sync_next_invoice_setting(db: Session, factory: Factory | None, used_invoice
     settings = get_or_create_factory_settings(db, factory.id, for_update=True)
     setattr(settings, settings_attr, max(next_counter, getattr(settings, settings_attr, 1) or 1))
     setattr(factory, attr, max(next_counter, getattr(factory, attr, 1) or 1))
-    factory.current_invoice_counter = max(next_counter, factory.current_invoice_counter or 0)
 
 
 

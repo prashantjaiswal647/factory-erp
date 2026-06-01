@@ -110,9 +110,6 @@ export default function ProfilePage() {
         bill_of_supply_start_seq: Number(factoryProfile.bill_of_supply_start_seq || 1),
         tax_invoice_start_seq: Number(factoryProfile.tax_invoice_start_seq || 1),
         bill_of_supply_simple_start_seq: Number(factoryProfile.bill_of_supply_simple_start_seq || 1),
-        next_tax_invoice_number: Number(factoryProfile.next_tax_invoice_number || 1),
-        next_bill_of_supply_number: Number(factoryProfile.next_bill_of_supply_number || 1),
-        next_bill_of_supply_simple_number: Number(factoryProfile.next_bill_of_supply_simple_number || 1),
       });
       setToast('Factory Settings saved successfully.');
       void loadFactoryProfile();
@@ -364,7 +361,7 @@ export default function ProfilePage() {
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
                     value={factoryProfile.tax_invoice_start_seq ?? factoryProfile.next_tax_invoice_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, tax_invoice_start_seq: Number(e.target.value), next_tax_invoice_number: Number(e.target.value) })}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, tax_invoice_start_seq: Number(e.target.value) })}
                   />
                 </label>
                 <label className="block rounded-md border border-zinc-200 bg-white p-4">
@@ -375,7 +372,7 @@ export default function ProfilePage() {
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
                     value={factoryProfile.bill_of_supply_start_seq ?? factoryProfile.next_bill_of_supply_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_start_seq: Number(e.target.value), next_bill_of_supply_number: Number(e.target.value) })}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_start_seq: Number(e.target.value) })}
                   />
                 </label>
                 <label className="block rounded-md border border-zinc-200 bg-white p-4">
@@ -386,7 +383,7 @@ export default function ProfilePage() {
                     step="1"
                     className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm font-medium text-zinc-950 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
                     value={factoryProfile.bill_of_supply_simple_start_seq ?? factoryProfile.next_bill_of_supply_simple_number ?? 1}
-                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_simple_start_seq: Number(e.target.value), next_bill_of_supply_simple_number: Number(e.target.value) })}
+                    onChange={(e) => setFactoryProfile({ ...factoryProfile, bill_of_supply_simple_start_seq: Number(e.target.value) })}
                   />
                 </label>
               </div>
