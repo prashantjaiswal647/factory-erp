@@ -36,6 +36,23 @@ VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://w
 echo "==> Starting production stack"
 VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" up -d --force-recreate
 
+echo "==> Syncing Database Schemas and Metadata Columns..."
+"${COMPOSE[@]}" exec -T api python - <<'PY'
+try:
+    from db import engine
+    from main import ensure_runtime_schema
+    from models import Base
+
+    Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema()
+    print("Schema synced successfully!")
+except Exception as e:
+    import traceback
+    print("Schema sync failed:", str(e))
+    traceback.print_exc()
+    raise
+PY
+
 echo "==> Removing unused Docker images"
 docker image prune -f
 docker builder prune -f
