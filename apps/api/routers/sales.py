@@ -2473,7 +2473,7 @@ def get_customer_balance(
     )
 
 
-@router.post("/v1/customers/upload-seed")
+@router.post("/v1/customers/upload-seed", response_model=None)
 def upload_customers_seed(
     file: UploadFile = File(...),
     current_user: User = Depends(check_permissions(SALES_ROLES)),
