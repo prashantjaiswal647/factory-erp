@@ -2,13 +2,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from dependencies import EXPENSE_ROLES, check_permissions
 from db import get_db
-from models import FactoryExpense, User, ActivityLog
+from models import FactoryExpense, User
+from services.activity_logger import log_activity
 
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
@@ -34,6 +35,7 @@ class ExpenseResponse(BaseModel):
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 def create_expense(
     payload: ExpenseCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(EXPENSE_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -52,16 +54,22 @@ def create_expense(
         category=category,
     )
     db.add(expense)
-
-    activity = ActivityLog(
-        factory_id=current_user.factory_id,
-        event_type="expense",
-        description=f"Recorded expense of ₹{payload.amount:,.2f} for {expense_name} ({category})"
-    )
-    db.add(activity)
-
     db.commit()
     db.refresh(expense)
+
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "EXPENSE_RECORDED",
+        f"\u20B9{payload.amount:,.2f} for {category}",
+        "expense",
+        expense.id,
+        {"expense_name": expense_name, "category": category},
+    )
     return expense
 
 

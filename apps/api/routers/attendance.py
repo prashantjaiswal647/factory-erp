@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
 from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker, WorkerOpeningAttendance, ActivityLog
 from schemas import OpeningAttendanceResponse
+from services.activity_logger import log_activity
 
 
 router = APIRouter(prefix="/api/workers", tags=["attendance-ledger"])
@@ -284,6 +285,7 @@ def worker_ledger(
 def upsert_attendance(
     worker_id: int,
     payload: AttendanceUpsert,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(PAYMENT_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -313,6 +315,19 @@ def upsert_attendance(
 
     db.commit()
     db.refresh(log)
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "ATTENDANCE_MARKED",
+        f"Attendance marked {payload.status} for {worker.name}",
+        "attendance",
+        log.id,
+        {"worker_id": worker.id, "date": payload.date.isoformat()},
+    )
     advance_amount = money(
         db.query(sql_func.coalesce(sql_func.sum(AdvancePayment.amount), 0))
         .filter(AdvancePayment.factory_id == current_user.factory_id)

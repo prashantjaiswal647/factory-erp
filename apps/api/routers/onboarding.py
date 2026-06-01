@@ -70,6 +70,7 @@ from schemas import (
     WorkerResponse,
 )
 from routers.operations import log_factory_operation
+from services.activity_logger import log_activity
 from services.n8n_sync import sync_data_to_n8n_bg
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
@@ -1169,6 +1170,19 @@ def onboarding_step1_create_worker(
     db.commit()
     db.refresh(worker)
     background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "ONBOARDING_UPDATED",
+        f"{'Added' if created else 'Updated'} worker {worker.name}",
+        "onboarding",
+        worker.id,
+        {"entity": "worker"},
+    )
+    background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=str(current_user.factory_id),
         sync_type="worker",
@@ -1227,6 +1241,19 @@ def onboarding_step2_machines(
     if machine_specs:
         _log_onboarding_change(db, int(factory_id), "Added", ", ".join(machine_specs))
     db.commit()
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "ONBOARDING_UPDATED",
+        f"Added {len(payload.machines)} machine setup entries",
+        "onboarding",
+        None,
+        {"entity": "machine", "machines": machine_specs},
+    )
     background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=factory_id,

@@ -26,12 +26,12 @@ from models import (
     Worker,
     Payment,
     ActivityLog,
-    DailySequenceLog,
     AppUsageLog,
 )
 from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
+from services.activity_logger import log_activity
 from services.n8n_sync import sync_data_to_n8n_bg
 
 
@@ -91,8 +91,16 @@ def log_factory_operation(
             db.execute(
                 text(
                     """
-                    INSERT INTO activity_logs (factory_id, event_type, description, log_date, created_at)
-                    VALUES (:factory_id, :event_type, :description, :log_date, :created_at)
+                    INSERT INTO activity_logs (
+                        factory_id, event_type, description, log_date, created_at,
+                        user_id, user_role, action_type, entity_name, entity_type,
+                        short_statement, committed_at
+                    )
+                    VALUES (
+                        :factory_id, :event_type, :description, :log_date, :created_at,
+                        :user_id, :user_role, :action_type, :entity_name, :entity_type,
+                        :short_statement, :committed_at
+                    )
                     """
                 ),
                 {
@@ -101,27 +109,15 @@ def log_factory_operation(
                     "description": normalized_description,
                     "log_date": effective_log_date,
                     "created_at": created_at,
+                    "user_id": user_id,
+                    "user_role": user_role,
+                    "action_type": (action_type or "CREATE").strip().upper(),
+                    "entity_name": normalized_event_type,
+                    "entity_type": normalized_event_type,
+                    "short_statement": normalized_description,
+                    "committed_at": created_at,
                 },
             )
-            if user_id is not None or user_role:
-                db.execute(
-                    text(
-                        """
-                        INSERT INTO daily_sequence_logs (
-                            factory_id, user_id, user_role, action_type, short_statement, timestamp
-                        )
-                        VALUES (:factory_id, :user_id, :user_role, :action_type, :short_statement, :timestamp)
-                        """
-                    ),
-                    {
-                        "factory_id": int(factory_id),
-                        "user_id": user_id,
-                        "user_role": user_role,
-                        "action_type": (action_type or "CREATE").strip().upper(),
-                        "short_statement": normalized_description[:500],
-                        "timestamp": created_at,
-                    },
-                )
             savepoint.commit()
         except Exception:
             savepoint.rollback()
@@ -143,8 +139,11 @@ def log_audit_trail(
     description: str = "",
     log_date: Optional[date_cls] = None,
 ) -> None:
-    """Best-effort daily sequence audit insert that must never break the caller."""
+    """Best-effort activity audit insert that includes audit fields and must never break the caller."""
     try:
+        normalized_event_type = (event_type or "").strip()
+        if normalized_event_type not in VALID_ACTIVITY_EVENT_TYPES:
+            normalized_event_type = "machine_telemetry"
         normalized_description = (description or short_statement or "").strip()
         if not normalized_description:
             return
@@ -156,19 +155,31 @@ def log_audit_trail(
             db.execute(
                 text(
                     """
-                    INSERT INTO daily_sequence_logs (
-                        factory_id, user_id, user_role, action_type, short_statement, timestamp
+                    INSERT INTO activity_logs (
+                        factory_id, event_type, description, log_date, created_at,
+                        user_id, user_role, action_type, entity_name, entity_type,
+                        short_statement, committed_at
                     )
-                    VALUES (:factory_id, :user_id, :user_role, :action_type, :short_statement, :timestamp)
+                    VALUES (
+                        :factory_id, :event_type, :description, :log_date, :created_at,
+                        :user_id, :user_role, :action_type, :entity_name, :entity_type,
+                        :short_statement, :committed_at
+                    )
                     """
                 ),
                 {
                     "factory_id": int(factory_id),
+                    "event_type": normalized_event_type,
+                    "description": normalized_description,
+                    "log_date": log_date or created_at.date(),
+                    "created_at": created_at,
                     "user_id": user_id,
                     "user_role": user_role,
                     "action_type": normalized_action,
+                    "entity_name": entity_name,
+                    "entity_type": entity_name or normalized_event_type,
                     "short_statement": normalized_description[:500],
-                    "timestamp": created_at,
+                    "committed_at": created_at,
                 },
             )
             savepoint.commit()
@@ -549,15 +560,25 @@ def create_daily_production(
             event_type="production",
             description=f"\U0001F4E6 Production Update: Machine {machine.id} completed {total_boxes_completed} boxes of {product_size_ml} cups (Wastage: {wastage_percent}%)",
             log_date=payload.date,
-            user_id=current_user.id,
-            user_role=current_user.role,
-            action_type="CREATE",
         )
         except Exception as log_error:
             logger.exception("Suppressed activity log failure for production entry: %s", log_error)
 
         db.commit()
         db.refresh(production)
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "PRODUCTION_SAVED",
+            f"{total_boxes_completed} units of {product_size_ml}ml {variety} produced",
+            "production",
+            production.id,
+            {"machine_id": machine.id, "worker_id": worker.id, "wastage_percent": str(wastage_percent)},
+        )
 
         background_tasks.add_task(
             sync_data_to_n8n_bg,
@@ -1124,24 +1145,24 @@ def get_daily_sequence_logs(
     start_at = datetime.combine(target_date, time_cls.min, tzinfo=LOCAL_TZ)
     end_at = start_at + timedelta(days=1)
     logs = (
-        db.query(DailySequenceLog)
-        .filter(DailySequenceLog.factory_id == factory_id)
-        .filter(DailySequenceLog.timestamp >= start_at)
-        .filter(DailySequenceLog.timestamp < end_at)
-        .order_by(DailySequenceLog.timestamp.desc())
+        db.query(ActivityLog)
+        .filter(ActivityLog.factory_id == factory_id)
+        .filter(ActivityLog.committed_at >= start_at)
+        .filter(ActivityLog.committed_at < end_at)
+        .order_by(ActivityLog.committed_at.desc(), ActivityLog.id.desc())
         .all()
     )
     
     response_data = []
     for log in logs:
-        local_created_at = log.timestamp.astimezone(LOCAL_TZ) if log.timestamp else None
+        local_created_at = (log.committed_at or log.created_at).astimezone(LOCAL_TZ) if (log.committed_at or log.created_at) else None
         response_data.append({
             "id": log.id,
             "factory_id": log.factory_id,
             "user_id": log.user_id,
             "user_role": log.user_role or "Owner",
             "action_type": log.action_type or "CREATE",
-            "short_statement": log.short_statement,
+            "short_statement": log.short_statement or log.description,
             "created_time": local_created_at.strftime("%I:%M %p") if local_created_at else None,
             "timestamp": local_created_at.isoformat() if local_created_at else None,
         })
