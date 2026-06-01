@@ -1328,22 +1328,15 @@ class ActivityLog(TenantMixin, Base):
     log_date = Column(Date, nullable=False, server_default=func.current_date(), index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     user_id = Column(Integer, nullable=True, index=True)
-    user_role = Column(String(50), nullable=True)
+    user_role = Column(String(100), nullable=True)
     user_name = Column(String(255), nullable=True)
-    action_type = Column(String(50), nullable=True)
+    action_type = Column(String(100), nullable=True)
+    action_summary = Column(Text, nullable=True)
     entity_name = Column(String(255), nullable=True)
-    entity_type = Column(String(50), nullable=True, index=True)
+    entity_type = Column(String(100), nullable=True, index=True)
     entity_id = Column(Integer, nullable=True, index=True)
     short_statement = Column(Text, nullable=True)
-    activity_metadata = Column("metadata", MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
     committed_at = Column(DateTime(timezone=True), nullable=True, index=True)
-
-    __table_args__ = (
-        CheckConstraint(
-            "event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry', 'customer', 'invoice', 'finance', 'management')",
-            name="ck_activity_logs_event_type",
-        ),
-    )
 
 
 class BillPayment(TenantMixin, Base):

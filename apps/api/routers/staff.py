@@ -25,6 +25,7 @@ from auth import (
 from db import get_db
 from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog, WorkerOpeningAttendance
 from schemas import OpeningAttendanceCreate, OpeningAttendanceResponse
+from services.activity_logger import log_activity
 from services.n8n_sync import sync_data_to_n8n_bg
 
 # Existing router prefixes
@@ -178,6 +179,7 @@ def list_staff(
 @v1_router.post("/create-staff", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
 def create_staff(
     payload: StaffCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -221,6 +223,19 @@ def create_staff(
         db.add(staff_user)
         db.commit()
         db.refresh(staff_user)
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "WORKER_ADDED",
+            f"{staff_user.full_name} ({staff_user.role}) added by {current_user.username}",
+            "worker",
+            staff_user.id,
+            {"route": "legacy_staff_create"},
+        )
         return staff_user
     except IntegrityError as exc:
         db.rollback()
@@ -233,6 +248,7 @@ def create_staff(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_staff(
     user_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -257,6 +273,9 @@ def delete_staff(
 
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
+    deleted_name = staff_user.full_name or staff_user.username
+    deleted_role = staff_user.role
+    deleted_id = staff_user.id
 
     # Nullify user references in logs to prevent foreign key constraint violations upon hard-delete
     db.query(AppUsageLog).filter(AppUsageLog.user_id == staff_user.id).update({AppUsageLog.user_id: None})
@@ -274,6 +293,19 @@ def delete_staff(
 
     db.delete(staff_user)
     db.commit()
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "WORKER_DELETED",
+        f"{deleted_name} ({deleted_role}) deleted by {current_user.username}",
+        "worker",
+        deleted_id,
+        {"route": "legacy_staff_delete"},
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -347,6 +379,7 @@ def secure_list_staff(
 @staff_v1_router.post("/create", response_model=SecureStaffResponse, status_code=status.HTTP_201_CREATED)
 def secure_create_staff(
     payload: SecureStaffCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -361,6 +394,19 @@ def secure_create_staff(
         )
         if worker:
             staff_user.worker_id = worker.id
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "WORKER_ADDED",
+        f"{staff_user.full_name} ({staff_user.role}) added by {current_user.username}",
+        "worker",
+        staff_user.worker_id or staff_user.id,
+        {"route": "staff_v1_create"},
+    )
     return staff_user
 
 
@@ -368,6 +414,7 @@ def secure_create_staff(
 def secure_update_staff(
     staff_id: int,
     payload: SecureStaffUpdateRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -382,12 +429,26 @@ def secure_update_staff(
         )
         if worker:
             staff_user.worker_id = worker.id
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "WORKER_UPDATED",
+        f"{staff_user.full_name} ({staff_user.role}) updated by {current_user.username}",
+        "worker",
+        staff_user.worker_id or staff_user.id,
+        {"route": "staff_v1_update"},
+    )
     return staff_user
 
 
 @staff_v1_router.delete("/{staff_id}/delete", status_code=status.HTTP_204_NO_CONTENT)
 def secure_delete_staff(
     staff_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
@@ -412,6 +473,9 @@ def secure_delete_staff(
 
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
+    deleted_name = staff_user.full_name or staff_user.username
+    deleted_role = staff_user.role
+    deleted_id = staff_user.id
 
     # Nullify user references in logs to prevent foreign key constraint violations upon hard-delete
     db.query(AppUsageLog).filter(AppUsageLog.user_id == staff_user.id).update({AppUsageLog.user_id: None})
@@ -431,6 +495,19 @@ def secure_delete_staff(
     # or deactivate. To make Playwright specs extremely robust, let's hard delete the user, keeping business records clean.
     db.delete(staff_user)
     db.commit()
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "WORKER_DELETED",
+        f"{deleted_name} ({deleted_role}) deleted by {current_user.username}",
+        "worker",
+        deleted_id,
+        {"route": "staff_v1_delete"},
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -521,20 +598,6 @@ def core_create_staff(payload: SecureStaffCreateRequest, creator: User, db: Sess
 
         db.commit()
         db.refresh(staff_user)
-        
-        # Log to Audit Trail
-        from routers.operations import log_audit_trail
-        log_audit_trail(
-            db=db,
-            factory_id=creator.factory_id,
-            user_id=creator.id,
-            user_role=creator.role,
-            action_type="CREATE",
-            entity_name="Worker",
-            short_statement=f"Created Staff/Worker profile for {staff_user.full_name}",
-            event_type="attendance"
-        )
-        
         return staff_user
     except IntegrityError as exc:
         db.rollback()
@@ -874,6 +937,7 @@ class WorkerEditSchema(BaseModel):
 def update_worker_profile_v1(
     worker_id: int,
     payload: WorkerEditSchema,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -935,20 +999,6 @@ def update_worker_profile_v1(
     try:
         db.commit()
         db.refresh(worker)
-        
-        # Log to Audit Trail
-        from routers.operations import log_audit_trail
-        log_audit_trail(
-            db=db,
-            factory_id=current_user.factory_id,
-            user_id=current_user.id,
-            user_role=current_user.role,
-            action_type="UPDATE",
-            entity_name="Worker",
-            short_statement=f"Updated Worker profile for {worker.name}",
-            event_type="attendance"
-        )
-        
         opening_attendance = (
             db.query(WorkerOpeningAttendance)
             .filter(WorkerOpeningAttendance.factory_id == current_user.factory_id)
@@ -958,6 +1008,19 @@ def update_worker_profile_v1(
         val = int(opening_attendance.present_days or 0) if opening_attendance else 0
         worker.previous_attendance = val
         worker.previous_attendance_count = val
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "WORKER_UPDATED",
+            f"{worker.name} (Worker) updated by {current_user.username}",
+            "worker",
+            worker.id,
+            {"route": "workers_v1_update"},
+        )
         return worker
     except IntegrityError as exc:
         db.rollback()
@@ -970,6 +1033,7 @@ def update_worker_profile_v1(
 def update_worker_profile(
     worker_id: int,
     payload: WorkerUpdateRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -1052,23 +1116,22 @@ def update_worker_profile(
     try:
         db.commit()
         db.refresh(worker)
-        
-        # Log to Audit Trail
-        from routers.operations import log_audit_trail
-        log_audit_trail(
-            db=db,
-            factory_id=current_user.factory_id,
-            user_id=current_user.id,
-            user_role=current_user.role,
-            action_type="UPDATE",
-            entity_name="Worker",
-            short_statement=f"Updated Worker profile for {worker.name}",
-            event_type="attendance"
-        )
-        
         val = int(opening_attendance.present_days or 0) if opening_attendance else 0
         worker.previous_attendance = val
         worker.previous_attendance_count = val
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "WORKER_UPDATED",
+            f"{worker.name} (Worker) updated by {current_user.username}",
+            "worker",
+            worker.id,
+            {"route": "workers_update"},
+        )
         return worker
     except IntegrityError as exc:
         db.rollback()
@@ -1129,21 +1192,21 @@ def delete_worker(
         db.query(TokenUsageLog).filter(TokenUsageLog.user_id == staff_user.id).update({TokenUsageLog.user_id: None})
         db.delete(staff_user)
         
-    # Log to Audit Trail
-    from routers.operations import log_audit_trail
-    log_audit_trail(
-        db=db,
-        factory_id=current_user.factory_id,
-        user_id=current_user.id,
-        user_role=current_user.role,
-        action_type="DELETE",
-        entity_name="Worker",
-        short_statement=f"Deleted Worker {worker_name}",
-        event_type="attendance"
-    )
-    
     db.commit()
 
+    background_tasks.add_task(
+        log_activity,
+        db,
+        int(current_user.factory_id),
+        current_user.id,
+        current_user.full_name or current_user.username,
+        current_user.role,
+        "WORKER_DELETED",
+        f"{worker_name} (Worker) deleted by {current_user.username}",
+        "worker",
+        worker_id,
+        {"route": "workers_delete"},
+    )
     background_tasks.add_task(
         sync_data_to_n8n_bg,
         factory_id=str(current_user.factory_id),

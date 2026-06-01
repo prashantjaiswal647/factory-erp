@@ -849,22 +849,20 @@ def ensure_runtime_schema():
         "ALTER TABLE activity_logs ALTER COLUMN created_at SET DEFAULT NOW()",
         "ALTER TABLE activity_logs ALTER COLUMN created_at SET NOT NULL",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS user_id INTEGER",
-        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS user_role VARCHAR(50)",
+        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS user_role VARCHAR(100)",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS user_name VARCHAR(255)",
-        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(50)",
-        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS entity_name VARCHAR(255)",
-        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50)",
+        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(100)",
+        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS action_summary TEXT",
+        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS entity_type VARCHAR(100)",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS entity_id INTEGER",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS short_statement TEXT",
-        "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS metadata JSONB",
         "ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS committed_at TIMESTAMP WITH TIME ZONE",
         "UPDATE activity_logs SET committed_at = created_at WHERE committed_at IS NULL",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_created ON activity_logs (factory_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_log_date ON activity_logs (factory_id, log_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_committed ON activity_logs (factory_id, committed_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_activity_logs_factory_entity ON activity_logs (factory_id, entity_type)",
-        "ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS ck_activity_logs_event_type",
-        "ALTER TABLE activity_logs ADD CONSTRAINT ck_activity_logs_event_type CHECK (event_type IN ('production', 'attendance', 'expense', 'payment', 'machine_telemetry', 'customer', 'invoice', 'finance', 'management', 'sale', 'onboarding'))"
+        "ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS ck_activity_logs_event_type"
     ]
     with engine.begin() as connection:
         for stmt in statements: connection.execute(text(stmt))

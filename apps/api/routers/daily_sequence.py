@@ -73,9 +73,9 @@ def list_daily_sequence(
             DailySequenceItem(
                 id=log.id,
                 time=local_time.strftime("%I:%M %p") if local_time else "",
-                action_type=log.action_type or "ACTION",
-                action_summary=log.short_statement or log.description,
-                entity_type=log.entity_type or log.entity_name or log.event_type,
+                action_type=log.action_type or log.event_type,
+                action_summary=log.action_summary or log.description,
+                entity_type=log.entity_type or log.event_type,
                 entity_id=log.entity_id,
                 user_name=log.user_name or f"User #{log.user_id}" if log.user_id else "System",
                 user_role=log.user_role or "System",
