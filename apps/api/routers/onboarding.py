@@ -103,10 +103,10 @@ BULK_MASTER_SHEETS = {
 }
 
 RAW_MATERIAL_SECTIONS = {
-    "blank_stock": {"label_row": 1, "header_row": 2, "data_start": 3, "data_end": 15, "title": "SECTION A: CUP BLANK MATERIAL"},
-    "bottom_reel": {"label_row": 17, "header_row": 18, "data_start": 19, "data_end": 35, "title": "SECTION B: BOTTOM REEL MATERIAL"},
-    "box_stock": {"label_row": 37, "header_row": 38, "data_start": 39, "data_end": 55, "title": "SECTION C: BOX PACKAGING STOCK"},
-    "plastic_stock": {"label_row": 57, "header_row": 58, "data_start": 59, "data_end": 80, "title": "SECTION D: PP PLASTIC PACKAGING STOCK"},
+    "blank_stock": {"label_row": 1, "header_row": 2, "data_start": 3, "data_end": 15, "title": "SECTION A: CUP BLANK MATERIAL", "marker": "CUP BLANK"},
+    "bottom_reel": {"label_row": 17, "header_row": 18, "data_start": 19, "data_end": 35, "title": "SECTION B: BOTTOM REEL MATERIAL", "marker": "BOTTOM REEL"},
+    "box_stock": {"label_row": 37, "header_row": 38, "data_start": 39, "data_end": 55, "title": "SECTION C: BOX PACKAGING STOCK", "marker": "BOX PACKAGING"},
+    "plastic_stock": {"label_row": 57, "header_row": 58, "data_start": 59, "data_end": 80, "title": "SECTION D: PP PLASTIC PACKAGING STOCK", "marker": "PP PLASTIC"},
 }
 
 MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
@@ -124,6 +124,18 @@ TEXT_BULK_COLUMNS = {
     "plastic_size_type",
     "variety_design",
     "packaging_size_name",
+}
+
+HEADER_ALIASES = {
+    "total_weight": "total_weight_automatic_calculation",
+    "total_weight_kg_automatic_calculation": "total_weight_kg",
+    "total_weight_kg=": "total_weight_kg",
+    "total_weight=": "total_weight_automatic_calculation",
+    "kg_per_sack=": "kg_per_sack",
+    "quantity_of_total_bora": "total_boras_sacks",
+    "quantity of total bora": "total_boras_sacks",
+    "total_plastic_kg": "total_plastic_kg_automatic_calculation",
+    "total_plastic_kg=": "total_plastic_kg_automatic_calculation",
 }
 
 SAMPLE_BULK_ROWS = {
@@ -260,6 +272,31 @@ def normalize_bulk_cell(key: str, value):
     return value
 
 
+def canonical_bulk_header(value) -> str:
+    header = bulk_str(value).lower()
+    header = header.replace("\n", " ").replace("\r", " ").strip()
+    header = " ".join(header.split())
+    header = header.replace(" ", "_").replace("-", "_")
+    header = header.rstrip("=:")
+    return HEADER_ALIASES.get(header, header)
+
+
+def canonicalize_bulk_frame(frame):
+    canonical_columns: list[str] = []
+    seen: set[str] = set()
+    keep_indices: list[int] = []
+    for index, column in enumerate(frame.columns.tolist()):
+        canonical = canonical_bulk_header(column)
+        if not canonical or canonical in seen:
+            continue
+        canonical_columns.append(canonical)
+        seen.add(canonical)
+        keep_indices.append(index)
+    canonical_frame = frame.iloc[:, keep_indices].copy()
+    canonical_frame.columns = canonical_columns
+    return canonical_frame
+
+
 def actual_rows_only(frame):
     row_type = frame.get("row_type")
     if row_type is None:
@@ -270,19 +307,25 @@ def actual_rows_only(frame):
 
 def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None, row_offset: int = 2) -> tuple[list[dict], list[dict]]:
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
+    frame = canonicalize_bulk_frame(frame)
     headers = [str(column).strip() for column in frame.columns.tolist()]
-    if headers != expected:
+    missing_headers = [column for column in expected if column not in headers]
+    if missing_headers:
         return [], [{
             "sheet": sheet_name or sub_tab_type,
             "row": row_offset,
             "error": "Header mismatch",
             "expected_headers": expected,
             "received_headers": headers,
+            "missing_headers": missing_headers,
         }]
 
     model = BULK_ROW_MODELS[sub_tab_type]
     valid_rows: list[dict] = []
     failed_rows: list[dict] = []
+    if sub_tab_type == "worker" and "previous_attendance_details" in frame.columns:
+        frame["previous_attendance_details"] = frame["previous_attendance_details"].fillna(0)
+        frame.loc[frame["previous_attendance_details"].astype(str).str.strip() == "", "previous_attendance_details"] = 0
     actual_frame = actual_rows_only(frame)
     for index, raw_row in actual_frame.iterrows():
         row = {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected}
@@ -302,32 +345,47 @@ def read_standard_sheet(workbook: dict, sheet_name: str, sub_tab_type: str) -> t
         return [], [{"sheet": sheet_name, "row": 1, "error": "Instruction row is required"}]
     if len(raw_frame.index) < 2:
         return [], [{"sheet": sheet_name, "row": 2, "error": "Header row is missing"}]
-    headers = [bulk_str(value) for value in raw_frame.iloc[1].tolist()]
+    headers = [canonical_bulk_header(value) for value in raw_frame.iloc[1].tolist()]
     frame = raw_frame.iloc[2:].copy()
     frame.columns = headers
     frame = frame.loc[:, [column for column in frame.columns if column]]
     return validate_bulk_frame(frame, sub_tab_type, sheet_name, row_offset=2)
 
 
+def find_raw_section_label_rows(raw_frame) -> dict[str, int]:
+    label_rows: dict[str, int] = {}
+    for row_index in range(len(raw_frame.index)):
+        row_text = " ".join(bulk_str(value) for value in raw_frame.iloc[row_index].tolist()).upper()
+        if not row_text:
+            continue
+        for sub_tab_type, section in RAW_MATERIAL_SECTIONS.items():
+            marker = str(section["marker"]).upper()
+            if sub_tab_type not in label_rows and marker in row_text:
+                label_rows[sub_tab_type] = row_index
+    return label_rows
+
+
 def read_raw_material_section(raw_frame, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
     section = RAW_MATERIAL_SECTIONS[sub_tab_type]
-    label_index = int(section["label_row"]) - 1
-    header_index = int(section["header_row"]) - 1
-    start_index = int(section["data_start"]) - 1
-    end_index = int(section["data_end"])
-    title = str(section["title"])
+    label_rows = find_raw_section_label_rows(raw_frame)
+    if sub_tab_type not in label_rows:
+        return [], [{"sheet": "Raw Materials", "row": None, "error": f"Missing section marker containing: {section['marker']}"}]
 
-    label = bulk_str(raw_frame.iat[label_index, 0]) if len(raw_frame.index) > label_index else ""
-    if title not in label.upper():
-        return [], [{"sheet": "Raw Materials", "row": int(section["label_row"]), "error": f"Missing section marker: {title}"}]
+    sorted_label_rows = sorted(label_rows.values())
+    label_index = label_rows[sub_tab_type]
+    next_label_index = next((row for row in sorted_label_rows if row > label_index), len(raw_frame.index))
+    header_index = label_index + 1
+    start_index = header_index + 1
+    end_index = next_label_index
+
     if len(raw_frame.index) <= header_index:
-        return [], [{"sheet": "Raw Materials", "row": int(section["header_row"]), "error": "Header row is missing"}]
+        return [], [{"sheet": "Raw Materials", "row": label_index + 2, "error": "Header row is missing"}]
 
-    headers = [bulk_str(value) for value in raw_frame.iloc[header_index].tolist()]
+    headers = [canonical_bulk_header(value) for value in raw_frame.iloc[header_index].tolist()]
     frame = raw_frame.iloc[start_index:end_index].copy()
     frame.columns = headers
     frame = frame.loc[:, [column for column in frame.columns if column]]
-    return validate_bulk_frame(frame, sub_tab_type, "Raw Materials", row_offset=int(section["data_start"]) - 1)
+    return validate_bulk_frame(frame, sub_tab_type, "Raw Materials", row_offset=start_index)
 
 
 def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], list[dict]]:
