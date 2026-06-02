@@ -87,10 +87,10 @@ BULK_TEMPLATE_COLUMNS = {
     "company_profile": ["row_type", "factory_name", "gstin", "factory_address", "invoice_prefix", "advance_upi_discount", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
     "worker": ["row_type", "name", "mobile_number", "daily_wages", "duty_hours", "previous_attendance_details"],
     "machine": ["row_type", "machine_name", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
-    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_weight"],
+    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_weight_automatic_calculation"],
     "bottom_reel": ["row_type", "bottom_size_mm", "total_individual_rolls", "total_weight_kg"],
     "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"],
-    "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs", "total_plastic_kg"],
+    "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs", "total_plastic_kg_automatic_calculation"],
     "finished_goods": ["row_type", "product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"],
 }
 
@@ -110,6 +110,21 @@ RAW_MATERIAL_SECTIONS = {
 }
 
 MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
+TEXT_BULK_COLUMNS = {
+    "row_type",
+    "factory_name",
+    "gstin",
+    "factory_address",
+    "invoice_prefix",
+    "name",
+    "mobile_number",
+    "machine_name",
+    "material_name",
+    "box_type",
+    "plastic_size_type",
+    "variety_design",
+    "packaging_size_name",
+}
 
 SAMPLE_BULK_ROWS = {
     "company_profile": ["SAMPLE", "Munshi Demo Factory", "07ABCDE1234F1Z5", "Wazirpur Industrial Area, Delhi", "INV-", 2, 1, 1, 1],
@@ -119,7 +134,7 @@ SAMPLE_BULK_ROWS = {
     "bottom_reel": ["SAMPLE", 68, 1200, 180],
     "box_stock": ["SAMPLE", "210ml Box", 500, 18],
     "plastic_stock": ["SAMPLE", "PP 210ml Sleeve", 210, 25, 20, 145, 500],
-    "finished_goods": ["SAMPLE", 210, "Standard/White", "210ML - Standard/White", 100, 10, 50],
+    "finished_goods": ["SAMPLE", 210, "Standard/White", "", 100, 10, 50],
 }
 
 
@@ -158,7 +173,7 @@ class BlankStockBulkRow(BaseModel):
     material_name: str = Field(..., min_length=1, max_length=255)
     size_ml: int = Field(..., gt=0)
     kg_per_sack: Decimal = Field(default=Decimal("0"), ge=0)
-    total_weight: Decimal = Field(default=Decimal("0"), ge=0)
+    total_weight_automatic_calculation: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class BottomReelBulkRow(BaseModel):
@@ -182,7 +197,7 @@ class PlasticStockBulkRow(BaseModel):
     total_boras_sacks: int = Field(default=0, ge=0)
     weight_per_bora_kg: float = Field(default=0, ge=0)
     price_per_kg_rs: float = Field(default=0, ge=0)
-    total_plastic_kg: float = Field(default=0, ge=0)
+    total_plastic_kg_automatic_calculation: float = Field(default=0, ge=0)
 
 
 class FinishedGoodsBulkRow(BaseModel):
@@ -240,6 +255,13 @@ def bulk_str(value) -> str:
     return str(value).strip()
 
 
+def normalize_bulk_cell(key: str, value):
+    value = normalize_bulk_value(value)
+    if key in TEXT_BULK_COLUMNS:
+        return bulk_str(value)
+    return value
+
+
 def actual_rows_only(frame):
     row_type = frame.get("row_type")
     if row_type is None:
@@ -265,7 +287,7 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
     failed_rows: list[dict] = []
     actual_frame = actual_rows_only(frame)
     for index, raw_row in actual_frame.iterrows():
-        row = {key: normalize_bulk_value(raw_row.get(key)) for key in expected}
+        row = {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected}
         try:
             valid_rows.append(model.model_validate(row).model_dump())
         except Exception as exc:
@@ -510,8 +532,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 "variety": row["material_name"].strip() or "Plain White",
                 "linked_bottom_size_mm": row["size_ml"],
                 "weight_per_bora_kg": row["kg_per_sack"],
-                "total_boras": (row["total_weight"] / row["kg_per_sack"]) if row["kg_per_sack"] else 0,
-                "total_qty_kg": row["total_weight"],
+                "total_boras": (row["total_weight_automatic_calculation"] / row["kg_per_sack"]) if row["kg_per_sack"] else 0,
+                "total_qty_kg": row["total_weight_automatic_calculation"],
             }
             for row in valid_rows
         ]
