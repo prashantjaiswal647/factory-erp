@@ -37,7 +37,7 @@ echo "==> Starting production stack"
 VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" up -d --force-recreate
 
 echo "==> Syncing Database Schemas and Metadata Columns..."
-"${COMPOSE[@]}" exec -T api python - <<'PY'
+"${COMPOSE[@]}" exec -T api python -B - <<'PY'
 try:
     from db import engine
     from main import ensure_runtime_schema

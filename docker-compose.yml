@@ -42,6 +42,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONDONTWRITEBYTECODE=1
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,https://munshiai.co.in,https://www.munshiai.co.in}
@@ -75,7 +76,7 @@ services:
     ports:
       - "5678:5678"
     volumes:
-      - ./volumes/n8n_data:/home/node/.n8n
+      - ai-erp-n8n-data:/home/node/.n8n
     networks:
       - ai-erp-network
 
@@ -111,3 +112,6 @@ services:
 networks:
   ai-erp-network:
     driver: bridge
+
+volumes:
+  ai-erp-n8n-data:

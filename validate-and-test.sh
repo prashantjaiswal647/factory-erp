@@ -30,7 +30,7 @@ docker run --rm \
   -v "${API_DIR}:/src:ro" \
   -w /src \
   python:3.12-slim \
-  sh -c "python -m compileall -q ."
+  sh -c "PYTHONDONTWRITEBYTECODE=1 python -B -m compileall -q ."
 
 echo "==> Step A: Frontend TypeScript gate"
 docker run --rm \
