@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import BottomStock, Worker
+from models import BottomStock, Machine, Worker, WorkerOpeningAttendance
 from routers.onboarding import apply_bulk_rows, validate_bulk_frame
 
 
@@ -145,6 +146,115 @@ def test_bottom_reel_bulk_upload_updates_existing_stock_in_same_factory():
         assert len(stocks) == 1
         assert stocks[0].total_rolls == 49
         assert stocks[0].total_weight_kg == Decimal("0")
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_machine_bulk_upload_updates_existing_machine_in_same_factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        db.add(
+            Machine(
+                factory_id=2,
+                name="Hi-Speed Cup Machine X",
+                machine_name="Hi-Speed Cup Machine X",
+                machine_type="Hi-Speed Cup Machine X",
+                speed_per_minute=60,
+                speed_bpm=60,
+                speed_cups_per_minute=60,
+                default_speed=60,
+                target_output_per_shift=20000,
+                raw_materials_mapped=[],
+                is_active=True,
+            )
+        )
+        db.commit()
+
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        row_count = apply_bulk_rows(
+            db,
+            current_user,
+            "machine",
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "machine_name": "Hi-Speed Cup Machine X",
+                    "default_operating_speed": 120,
+                    "target_output_per_shift": 55000,
+                    "mould_size_ml": 210,
+                    "bottom_size_mm": 68,
+                }
+            ],
+        )
+        db.commit()
+
+        machines = db.query(Machine).filter(Machine.factory_id == 2, Machine.name == "Hi-Speed Cup Machine X").all()
+        assert row_count == 1
+        assert len(machines) == 1
+        assert machines[0].default_speed == 120
+        assert machines[0].target_output_per_shift == 55000
+        assert machines[0].mould_size_ml == 210
+        assert machines[0].bottom_size_mm == 68
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_worker_bulk_upload_updates_existing_opening_attendance():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        worker = Worker(factory_id=2, name="Anjal Kumar", phone="9000000000", daily_wages=300, daily_wage_rate=300)
+        db.add(worker)
+        db.flush()
+        db.add(
+            WorkerOpeningAttendance(
+                factory_id=2,
+                worker_id=worker.id,
+                period_start=date.today(),
+                period_end=date.today(),
+                present_days=Decimal("3"),
+                created_by_user_id=1,
+            )
+        )
+        db.commit()
+
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        row_count = apply_bulk_rows(
+            db,
+            current_user,
+            "worker",
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "name": "Anjal Kumar",
+                    "mobile_number": "8285817277",
+                    "daily_wages": Decimal("400"),
+                    "duty_hours": Decimal("8"),
+                    "previous_attendance_details": Decimal("7"),
+                }
+            ],
+        )
+        db.commit()
+
+        attendance_rows = db.query(WorkerOpeningAttendance).filter(WorkerOpeningAttendance.factory_id == 2).all()
+        assert row_count == 1
+        assert len(attendance_rows) == 1
+        assert attendance_rows[0].present_days == Decimal("7")
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)

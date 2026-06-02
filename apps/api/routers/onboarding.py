@@ -690,50 +690,70 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             worker_rows.append((worker, row))
         db.flush()
 
-        attendance_mappings = [
-            {
-                "factory_id": factory_id,
-                "worker_id": worker.id,
-                "period_start": date.today(),
-                "period_end": date.today(),
-                "present_days": row["previous_attendance_details"],
-                "half_days": 0,
-                "absent_days": 0,
-                "paid_leave_days": 0,
-                "overtime_hours": 0,
-                "advance_paid": 0,
-                "deductions": 0,
-                "notes": "Opening attendance imported by bulk upload",
-                "created_by_user_id": current_user.id,
-            }
-            for worker, row in worker_rows
-            if row["previous_attendance_details"] > 0 and worker.id
-        ]
-        if attendance_mappings:
-            db.bulk_insert_mappings(WorkerOpeningAttendance, attendance_mappings)
+        for worker, row in worker_rows:
+            if row["previous_attendance_details"] <= 0 or not worker.id:
+                continue
+            opening_attendance = (
+                db.query(WorkerOpeningAttendance)
+                .filter(
+                    WorkerOpeningAttendance.factory_id == factory_id,
+                    WorkerOpeningAttendance.worker_id == worker.id,
+                )
+                .with_for_update()
+                .first()
+            )
+            if opening_attendance is None:
+                opening_attendance = WorkerOpeningAttendance(
+                    factory_id=factory_id,
+                    worker_id=worker.id,
+                    created_by_user_id=current_user.id,
+                )
+                db.add(opening_attendance)
+            opening_attendance.period_start = date.today()
+            opening_attendance.period_end = date.today()
+            opening_attendance.present_days = row["previous_attendance_details"]
+            opening_attendance.half_days = 0
+            opening_attendance.absent_days = 0
+            opening_attendance.paid_leave_days = 0
+            opening_attendance.overtime_hours = 0
+            opening_attendance.advance_paid = 0
+            opening_attendance.deductions = 0
+            opening_attendance.notes = "Opening attendance imported by bulk upload"
         return len(worker_rows)
 
     if sub_tab_type == "machine":
-        mappings = [
-            {
-                    "factory_id": factory_id,
-                    "name": row["machine_name"].strip(),
-                    "machine_name": row["machine_name"].strip(),
-                    "machine_type": row["machine_name"].strip(),
-                    "mould_size_ml": row.get("mould_size_ml"),
-                    "bottom_size_mm": row.get("bottom_size_mm"),
-                    "speed_per_minute": row["default_operating_speed"],
-                    "speed_bpm": row["default_operating_speed"],
-                    "speed_cups_per_minute": row["default_operating_speed"],
-                    "default_speed": row["default_operating_speed"],
-                    "target_output_per_shift": row["target_output_per_shift"],
-                    "raw_materials_mapped": ["blank_stock", "bottom_reel"],
-                    "is_active": True,
-                }
-                for row in valid_rows
-        ]
-        db.bulk_insert_mappings(Machine, mappings)
-        return len(mappings)
+        saved_count = 0
+        for row in valid_rows:
+            machine_name = row["machine_name"].strip()
+            if not machine_name:
+                continue
+            machine = (
+                db.query(Machine)
+                .filter(
+                    Machine.factory_id == factory_id,
+                    sql_func.lower(Machine.name) == machine_name.lower(),
+                )
+                .with_for_update()
+                .first()
+            )
+            if machine is None:
+                machine = Machine(factory_id=factory_id, name=machine_name)
+                db.add(machine)
+            machine.name = machine_name
+            machine.machine_name = machine_name
+            machine.machine_type = machine_name
+            machine.mould_size_ml = row.get("mould_size_ml")
+            machine.bottom_size_mm = row.get("bottom_size_mm")
+            machine.speed_per_minute = row["default_operating_speed"]
+            machine.speed_bpm = row["default_operating_speed"]
+            machine.speed_cups_per_minute = row["default_operating_speed"]
+            machine.default_speed = row["default_operating_speed"]
+            machine.target_output_per_shift = row["target_output_per_shift"]
+            machine.raw_materials_mapped = ["blank_stock", "bottom_reel"]
+            machine.is_active = True
+            saved_count += 1
+        db.flush()
+        return saved_count
 
     if sub_tab_type == "blank_stock":
         saved_count = 0
