@@ -942,7 +942,7 @@ class AccountantSummaryResponse(BaseModel):
     month: int
     year: int
     total_invoices: int
-    starting_invoice_number: Optional[str] = None
+    first_invoice_number: Optional[str] = None
     ending_invoice_number: Optional[str] = None
     total_billed_amount: Decimal
     total_paid_amount: Decimal

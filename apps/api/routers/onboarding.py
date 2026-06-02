@@ -84,65 +84,109 @@ v1_router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 logger = logging.getLogger(__name__)
 
 BULK_TEMPLATE_COLUMNS = {
-    "factory_profile": ["factory_name", "gstin", "phone_number", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
-    "worker": ["name", "phone_number", "opening_attendance_count", "daily_rate", "role"],
-    "machine": ["machine_name", "max_speed", "blank_capacity", "bottom_capacity"],
-    "raw_material": ["material_name", "size_ml", "unit_price", "initial_stock_kg"],
-    "packaging_material": ["box_size", "pieces_per_box", "inventory_count", "box_price"],
-    "finished_goods": ["product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"],
+    "company_profile": ["row_type", "factory_name", "gstin", "factory_address", "invoice_prefix", "advance_upi_discount", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
+    "worker": ["row_type", "name", "mobile_number", "daily_wages", "duty_hours", "previous_attendance_details"],
+    "machine": ["row_type", "machine_name", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
+    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_weight"],
+    "bottom_reel": ["row_type", "bottom_size_mm", "total_individual_rolls", "total_weight_kg"],
+    "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"],
+    "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs", "total_plastic_kg"],
+    "finished_goods": ["row_type", "product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"],
 }
 
 BULK_MASTER_SHEETS = {
-    "Factory Profile": "factory_profile",
+    "Company Profile": "company_profile",
     "Workers": "worker",
     "Machines": "machine",
-    "Raw Materials": "raw_material",
-    "Packaging Materials": "packaging_material",
+    "Raw Materials": "raw_materials",
     "Finished Goods": "finished_goods",
+}
+
+RAW_MATERIAL_SECTIONS = {
+    "blank_stock": {"label_row": 1, "header_row": 2, "data_start": 3, "data_end": 15, "title": "SECTION A: CUP BLANK MATERIAL"},
+    "bottom_reel": {"label_row": 17, "header_row": 18, "data_start": 19, "data_end": 35, "title": "SECTION B: BOTTOM REEL MATERIAL"},
+    "box_stock": {"label_row": 37, "header_row": 38, "data_start": 39, "data_end": 55, "title": "SECTION C: BOX PACKAGING STOCK"},
+    "plastic_stock": {"label_row": 57, "header_row": 58, "data_start": 59, "data_end": 80, "title": "SECTION D: PP PLASTIC PACKAGING STOCK"},
 }
 
 MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
 
+SAMPLE_BULK_ROWS = {
+    "company_profile": ["SAMPLE", "Munshi Demo Factory", "07ABCDE1234F1Z5", "Wazirpur Industrial Area, Delhi", "INV-", 2, 1, 1, 1],
+    "worker": ["SAMPLE", "Akash Kumar", "82858117277", 400, 8, 0],
+    "machine": ["SAMPLE", "Hi-Speed Cup Machine X", 120, 55000, 210, 68],
+    "blank_stock": ["SAMPLE", "Cup Blank", 210, 20, 400],
+    "bottom_reel": ["SAMPLE", 68, 1200, 180],
+    "box_stock": ["SAMPLE", "210ml Box", 500, 18],
+    "plastic_stock": ["SAMPLE", "PP 210ml Sleeve", 210, 25, 20, 145, 500],
+    "finished_goods": ["SAMPLE", 210, "Standard/White", "210ML - Standard/White", 100, 10, 50],
+}
 
-class FactoryProfileBulkRow(BaseModel):
+
+class CompanyProfileBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
     factory_name: str = Field(..., min_length=1, max_length=255)
     gstin: Optional[str] = Field(default=None, max_length=50)
-    phone_number: Optional[str] = Field(default=None, max_length=50)
+    factory_address: Optional[str] = Field(default=None, max_length=500)
+    invoice_prefix: Optional[str] = Field(default="INV-", max_length=50)
+    advance_upi_discount: Decimal = Field(default=Decimal("2.00"), ge=0, le=100)
     bill_of_supply_start_seq: int = Field(default=1, ge=1)
     tax_invoice_start_seq: int = Field(default=1, ge=1)
     bill_of_supply_simple_start_seq: int = Field(default=1, ge=1)
 
 
 class WorkerBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
     name: str = Field(..., min_length=1, max_length=255)
-    phone_number: Optional[str] = Field(default=None, max_length=50)
-    opening_attendance_count: int = Field(default=0, ge=0)
-    daily_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    role: str = Field(default="worker", max_length=50)
+    mobile_number: Optional[str] = Field(default=None, max_length=50)
+    daily_wages: Decimal = Field(default=Decimal("0"), ge=0)
+    duty_hours: Decimal = Field(default=Decimal("8"), ge=0)
+    previous_attendance_details: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class MachineBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
     machine_name: str = Field(..., min_length=1, max_length=255)
-    max_speed: int = Field(default=0, ge=0)
-    blank_capacity: int = Field(default=0, ge=0)
-    bottom_capacity: int = Field(default=0, ge=0)
+    default_operating_speed: int = Field(default=0, ge=0)
+    target_output_per_shift: int = Field(default=0, ge=0)
+    mould_size_ml: Optional[int] = Field(default=None, gt=0)
+    bottom_size_mm: Optional[int] = Field(default=None, gt=0)
 
 
-class RawMaterialBulkRow(BaseModel):
+class BlankStockBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
     material_name: str = Field(..., min_length=1, max_length=255)
     size_ml: int = Field(..., gt=0)
-    unit_price: Decimal = Field(default=Decimal("0"), ge=0)
-    initial_stock_kg: Decimal = Field(default=Decimal("0"), ge=0)
+    kg_per_sack: Decimal = Field(default=Decimal("0"), ge=0)
+    total_weight: Decimal = Field(default=Decimal("0"), ge=0)
 
 
-class PackagingMaterialBulkRow(BaseModel):
-    box_size: str = Field(..., min_length=1, max_length=100)
-    pieces_per_box: int = Field(..., gt=0)
-    inventory_count: int = Field(default=0, ge=0)
-    box_price: float = Field(default=0, ge=0)
+class BottomReelBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
+    bottom_size_mm: int = Field(..., gt=0)
+    total_individual_rolls: int = Field(default=0, ge=0)
+    total_weight_kg: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class BoxStockBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
+    box_type: str = Field(..., min_length=1, max_length=100)
+    box_quantity_pieces: int = Field(default=0, ge=0)
+    price_per_box_rs: float = Field(default=0, ge=0)
+
+
+class PlasticStockBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
+    plastic_size_type: str = Field(..., min_length=1, max_length=100)
+    used_for_cup_size_ml: int = Field(..., gt=0)
+    total_boras_sacks: int = Field(default=0, ge=0)
+    weight_per_bora_kg: float = Field(default=0, ge=0)
+    price_per_kg_rs: float = Field(default=0, ge=0)
+    total_plastic_kg: float = Field(default=0, ge=0)
 
 
 class FinishedGoodsBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
     product_size_ml: int = Field(..., gt=0)
     variety_design: str = Field(default="Standard/White", max_length=100)
     packaging_size_name: Optional[str] = Field(default=None, max_length=100)
@@ -152,11 +196,13 @@ class FinishedGoodsBulkRow(BaseModel):
 
 
 BULK_ROW_MODELS = {
-    "factory_profile": FactoryProfileBulkRow,
+    "company_profile": CompanyProfileBulkRow,
     "worker": WorkerBulkRow,
     "machine": MachineBulkRow,
-    "raw_material": RawMaterialBulkRow,
-    "packaging_material": PackagingMaterialBulkRow,
+    "blank_stock": BlankStockBulkRow,
+    "bottom_reel": BottomReelBulkRow,
+    "box_stock": BoxStockBulkRow,
+    "plastic_stock": PlasticStockBulkRow,
     "finished_goods": FinishedGoodsBulkRow,
 }
 
@@ -185,13 +231,30 @@ def normalize_bulk_value(value):
     return value
 
 
-def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None) -> tuple[list[dict], list[dict]]:
+def bulk_str(value) -> str:
+    value = normalize_bulk_value(value)
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def actual_rows_only(frame):
+    row_type = frame.get("row_type")
+    if row_type is None:
+        return frame.iloc[0:0]
+    mask = row_type.fillna("").astype(str).str.strip().str.upper() == "ACTUAL"
+    return frame[mask]
+
+
+def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None, row_offset: int = 2) -> tuple[list[dict], list[dict]]:
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
     headers = [str(column).strip() for column in frame.columns.tolist()]
     if headers != expected:
         return [], [{
             "sheet": sheet_name or sub_tab_type,
-            "row": 1,
+            "row": row_offset,
             "error": "Header mismatch",
             "expected_headers": expected,
             "received_headers": headers,
@@ -200,15 +263,51 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None)
     model = BULK_ROW_MODELS[sub_tab_type]
     valid_rows: list[dict] = []
     failed_rows: list[dict] = []
-    for index, raw_row in enumerate(frame.to_dict(orient="records"), start=2):
+    actual_frame = actual_rows_only(frame)
+    for index, raw_row in actual_frame.iterrows():
         row = {key: normalize_bulk_value(raw_row.get(key)) for key in expected}
-        if all(value is None or value == "" for value in row.values()):
-            continue
         try:
             valid_rows.append(model.model_validate(row).model_dump())
         except Exception as exc:
-            failed_rows.append({"sheet": sheet_name or sub_tab_type, "row": index, "error": str(exc), "values": row})
+            failed_rows.append({"sheet": sheet_name or sub_tab_type, "row": int(index) + 1, "error": str(exc), "values": row})
     return valid_rows, failed_rows
+
+
+def read_standard_sheet(workbook: dict, sheet_name: str, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
+    if sheet_name not in workbook:
+        return [], [{"sheet": sheet_name, "row": None, "error": "Required worksheet is missing"}]
+    raw_frame = workbook[sheet_name]
+    instruction = bulk_str(raw_frame.iat[0, 0]) if not raw_frame.empty else ""
+    if not instruction:
+        return [], [{"sheet": sheet_name, "row": 1, "error": "Instruction row is required"}]
+    if len(raw_frame.index) < 2:
+        return [], [{"sheet": sheet_name, "row": 2, "error": "Header row is missing"}]
+    headers = [bulk_str(value) for value in raw_frame.iloc[1].tolist()]
+    frame = raw_frame.iloc[2:].copy()
+    frame.columns = headers
+    frame = frame.loc[:, [column for column in frame.columns if column]]
+    return validate_bulk_frame(frame, sub_tab_type, sheet_name, row_offset=2)
+
+
+def read_raw_material_section(raw_frame, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
+    section = RAW_MATERIAL_SECTIONS[sub_tab_type]
+    label_index = int(section["label_row"]) - 1
+    header_index = int(section["header_row"]) - 1
+    start_index = int(section["data_start"]) - 1
+    end_index = int(section["data_end"])
+    title = str(section["title"])
+
+    label = bulk_str(raw_frame.iat[label_index, 0]) if len(raw_frame.index) > label_index else ""
+    if title not in label.upper():
+        return [], [{"sheet": "Raw Materials", "row": int(section["label_row"]), "error": f"Missing section marker: {title}"}]
+    if len(raw_frame.index) <= header_index:
+        return [], [{"sheet": "Raw Materials", "row": int(section["header_row"]), "error": "Header row is missing"}]
+
+    headers = [bulk_str(value) for value in raw_frame.iloc[header_index].tolist()]
+    frame = raw_frame.iloc[start_index:end_index].copy()
+    frame.columns = headers
+    frame = frame.loc[:, [column for column in frame.columns if column]]
+    return validate_bulk_frame(frame, sub_tab_type, "Raw Materials", row_offset=int(section["data_start"]) - 1)
 
 
 def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], list[dict]]:
@@ -218,17 +317,25 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
         raise HTTPException(status_code=500, detail="Excel parser dependencies are not installed") from exc
 
     try:
-        workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None, dtype=object)
+        workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=object)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Unable to read Excel file: {exc}") from exc
 
-    valid_by_type: dict[str, list[dict]] = {}
+    valid_by_type: dict[str, list[dict]] = {key: [] for key in BULK_ROW_MODELS}
     failed_rows: list[dict] = []
+
     for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
-        if sheet_name not in workbook:
-            failed_rows.append({"sheet": sheet_name, "row": None, "error": "Required worksheet is missing"})
+        if sub_tab_type == "raw_materials":
+            if sheet_name not in workbook:
+                failed_rows.append({"sheet": sheet_name, "row": None, "error": "Required worksheet is missing"})
+                continue
+            for raw_sub_type in RAW_MATERIAL_SECTIONS:
+                valid_rows, sheet_errors = read_raw_material_section(workbook[sheet_name], raw_sub_type)
+                valid_by_type[raw_sub_type] = valid_rows
+                failed_rows.extend(sheet_errors)
             continue
-        valid_rows, sheet_errors = validate_bulk_frame(workbook[sheet_name], sub_tab_type, sheet_name)
+
+        valid_rows, sheet_errors = read_standard_sheet(workbook, sheet_name, sub_tab_type)
         valid_by_type[sub_tab_type] = valid_rows
         failed_rows.extend(sheet_errors)
     return valid_by_type, failed_rows
@@ -236,12 +343,57 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
 
 def build_master_onboarding_workbook() -> BytesIO:
     import pandas as pd
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
-            frame = pd.DataFrame(columns=BULK_TEMPLATE_COLUMNS[sub_tab_type])
-            frame.to_excel(writer, index=False, sheet_name=sheet_name)
+            if sub_tab_type == "raw_materials":
+                pd.DataFrame().to_excel(writer, index=False, header=False, sheet_name=sheet_name)
+                continue
+            frame = pd.DataFrame(
+                [
+                    [f"Instruction: keep row_type as SAMPLE for examples and ACTUAL for rows to import."],
+                    BULK_TEMPLATE_COLUMNS[sub_tab_type],
+                    SAMPLE_BULK_ROWS[sub_tab_type],
+                    *[[None] * len(BULK_TEMPLATE_COLUMNS[sub_tab_type]) for _ in range(10)],
+                ]
+            )
+            frame.to_excel(writer, index=False, header=False, sheet_name=sheet_name)
+
+        workbook = writer.book
+        header_fill = PatternFill("solid", fgColor="EDE9FE")
+        section_fill = PatternFill("solid", fgColor="DCFCE7")
+        section_font = Font(bold=True, color="14532D")
+        header_font = Font(bold=True, color="111827")
+
+        for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
+            worksheet = workbook[sheet_name]
+            if sub_tab_type == "raw_materials":
+                for raw_sub_type, section in RAW_MATERIAL_SECTIONS.items():
+                    label_row = int(section["label_row"])
+                    header_row = int(section["header_row"])
+                    data_start = int(section["data_start"])
+                    worksheet.cell(row=label_row, column=1, value=section["title"])
+                    worksheet.cell(row=label_row, column=1).fill = section_fill
+                    worksheet.cell(row=label_row, column=1).font = section_font
+                    for column_index, header in enumerate(BULK_TEMPLATE_COLUMNS[raw_sub_type], start=1):
+                        cell = worksheet.cell(row=header_row, column=column_index, value=header)
+                        cell.fill = header_fill
+                        cell.font = header_font
+                    for column_index, value in enumerate(SAMPLE_BULK_ROWS[raw_sub_type], start=1):
+                        worksheet.cell(row=data_start, column=column_index, value=value)
+                for column_index in range(1, 9):
+                    worksheet.column_dimensions[get_column_letter(column_index)].width = 24
+                continue
+
+            worksheet.cell(row=1, column=1).fill = section_fill
+            worksheet.cell(row=1, column=1).font = section_font
+            for column_index in range(1, len(BULK_TEMPLATE_COLUMNS[sub_tab_type]) + 1):
+                worksheet.cell(row=2, column=column_index).fill = header_fill
+                worksheet.cell(row=2, column=column_index).font = header_font
+                worksheet.column_dimensions[get_column_letter(column_index)].width = 24
     output.seek(0)
     return output
 
@@ -267,7 +419,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
     if not valid_rows:
         return 0
 
-    if sub_tab_type == "factory_profile":
+    if sub_tab_type == "company_profile":
         row = valid_rows[0]
         factory = db.query(Factory).filter(Factory.id == factory_id).with_for_update().first()
         if factory is None:
@@ -276,8 +428,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         factory.factory_name = row["factory_name"].strip()
         factory.name = factory.name or row["factory_name"].strip()
         factory.gst_number = (row.get("gstin") or "").strip() or None
-        if row.get("phone_number"):
-            factory.owner_phone_number = normalize_phone_number(str(row["phone_number"]))
+        factory.address = (row.get("factory_address") or "").strip() or None
+        factory.invoice_prefix = (row.get("invoice_prefix") or "INV-").strip() or "INV-"
+        factory.advance_payment_discount_percentage = row.get("advance_upi_discount") or Decimal("2.00")
         settings.bill_of_supply_start_seq = row["bill_of_supply_start_seq"]
         settings.tax_invoice_start_seq = row["tax_invoice_start_seq"]
         settings.bill_of_supply_simple_start_seq = row["bill_of_supply_simple_start_seq"]
@@ -291,14 +444,14 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             {
                 "factory_id": factory_id,
                 "name": row["name"].strip(),
-                "phone": normalize_phone_number(str(row["phone_number"])) if row.get("phone_number") else None,
-                "daily_wage_rate": row["daily_rate"],
-                "daily_wages": row["daily_rate"],
-                "duty_hours": 8,
+                "phone": normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else None,
+                "daily_wage_rate": row["daily_wages"],
+                "daily_wages": row["daily_wages"],
+                "duty_hours": row["duty_hours"],
                 "salary": 0,
-                "daily_salary": row["daily_rate"],
-                "shift_hours": 8,
-                "shift_type": row["role"],
+                "daily_salary": row["daily_wages"],
+                "shift_hours": row["duty_hours"],
+                "shift_type": "worker",
                 "is_active": True,
             }
             for row in valid_rows
@@ -307,10 +460,10 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         attendance_mappings = [
             {
                 "factory_id": factory_id,
-                "worker_id": mapping["id"],
-                "period_start": date.today(),
-                "period_end": date.today(),
-                "present_days": row["opening_attendance_count"],
+                    "worker_id": mapping["id"],
+                    "period_start": date.today(),
+                    "period_end": date.today(),
+                    "present_days": row["previous_attendance_details"],
                 "half_days": 0,
                 "absent_days": 0,
                 "paid_leave_days": 0,
@@ -321,7 +474,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 "created_by_user_id": current_user.id,
             }
             for mapping, row in zip(worker_mappings, valid_rows)
-            if row["opening_attendance_count"] > 0 and mapping.get("id")
+            if row["previous_attendance_details"] > 0 and mapping.get("id")
         ]
         if attendance_mappings:
             db.bulk_insert_mappings(WorkerOpeningAttendance, attendance_mappings)
@@ -330,41 +483,84 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
     if sub_tab_type == "machine":
         mappings = [
             {
-                "factory_id": factory_id,
-                "name": row["machine_name"].strip(),
-                "machine_name": row["machine_name"].strip(),
-                "machine_type": row["machine_name"].strip(),
-                "speed_per_minute": row["max_speed"],
-                "speed_bpm": row["max_speed"],
-                "speed_cups_per_minute": row["max_speed"],
-                "default_speed": row["max_speed"],
-                "target_output_per_shift": row["max_speed"] * 60 * 8,
-                "raw_materials_mapped": ["blank_capacity", "bottom_capacity"],
-                "is_active": True,
-            }
-            for row in valid_rows
+                    "factory_id": factory_id,
+                    "name": row["machine_name"].strip(),
+                    "machine_name": row["machine_name"].strip(),
+                    "machine_type": row["machine_name"].strip(),
+                    "mould_size_ml": row.get("mould_size_ml"),
+                    "bottom_size_mm": row.get("bottom_size_mm"),
+                    "speed_per_minute": row["default_operating_speed"],
+                    "speed_bpm": row["default_operating_speed"],
+                    "speed_cups_per_minute": row["default_operating_speed"],
+                    "default_speed": row["default_operating_speed"],
+                    "target_output_per_shift": row["target_output_per_shift"],
+                    "raw_materials_mapped": ["blank_stock", "bottom_reel"],
+                    "is_active": True,
+                }
+                for row in valid_rows
         ]
         db.bulk_insert_mappings(Machine, mappings)
         return len(mappings)
 
-    if sub_tab_type == "raw_material":
+    if sub_tab_type == "blank_stock":
         mappings = [
             {
                 "factory_id": factory_id,
-                "name": row["material_name"].strip(),
-                "material_type": "Paper Blank",
-                "type": "Paper Blank",
-                "size_name": f"{row['size_ml']}ml",
-                "size_ml": row["size_ml"],
-                "unit": "kg",
-                "opening_stock": row["initial_stock_kg"],
-                "current_stock": row["initial_stock_kg"],
-                "stock_quantity": row["initial_stock_kg"],
-                "price_per_unit": row["unit_price"],
+                "blank_size_ml": row["size_ml"],
+                "variety": row["material_name"].strip() or "Plain White",
+                "linked_bottom_size_mm": row["size_ml"],
+                "weight_per_bora_kg": row["kg_per_sack"],
+                "total_boras": (row["total_weight"] / row["kg_per_sack"]) if row["kg_per_sack"] else 0,
+                "total_qty_kg": row["total_weight"],
             }
             for row in valid_rows
         ]
-        db.bulk_insert_mappings(RawMaterial, mappings)
+        db.bulk_insert_mappings(BlankStock, mappings)
+        return len(mappings)
+
+    if sub_tab_type == "bottom_reel":
+        mappings = [
+            {
+                "factory_id": factory_id,
+                "bottom_size_mm": row["bottom_size_mm"],
+                "variety": "Plain White",
+                "total_rolls": row["total_individual_rolls"],
+                "total_weight_kg": row["total_weight_kg"],
+                "total_qty_kg": row["total_weight_kg"],
+            }
+            for row in valid_rows
+        ]
+        db.bulk_insert_mappings(BottomStock, mappings)
+        return len(mappings)
+
+    if sub_tab_type == "box_stock":
+        mappings = [
+            {
+                "factory_id": factory_id,
+                "packaging_size_name": row["box_type"].strip(),
+                "box_type": row["box_type"].strip(),
+                "quantity": row["box_quantity_pieces"],
+                "total_boxes": row["box_quantity_pieces"],
+                "price_per_box": row["price_per_box_rs"],
+            }
+            for row in valid_rows
+        ]
+        db.bulk_insert_mappings(BoxStock, mappings)
+        return len(mappings)
+
+    if sub_tab_type == "plastic_stock":
+        mappings = [
+            {
+                "factory_id": factory_id,
+                "plastic_size_name": row["plastic_size_type"].strip(),
+                "cup_size_ml": row["used_for_cup_size_ml"],
+                "total_boras": row["total_boras_sacks"],
+                "weight_per_bora_kg": row["weight_per_bora_kg"],
+                "price_per_kg": row["price_per_kg_rs"],
+            }
+            for row in valid_rows
+        ]
+        db.bulk_insert_mappings(PlasticStock, mappings)
         return len(mappings)
 
     if sub_tab_type == "finished_goods":
@@ -389,19 +585,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         db.bulk_insert_mappings(FinalProductStock, mappings)
         return len(mappings)
 
-    mappings = [
-        {
-            "factory_id": factory_id,
-            "packaging_size_name": row["box_size"].strip(),
-            "box_type": row["box_size"].strip(),
-            "quantity": row["inventory_count"],
-            "total_boxes": row["inventory_count"],
-            "price_per_box": row["box_price"],
-        }
-        for row in valid_rows
-    ]
-    db.bulk_insert_mappings(BoxStock, mappings)
-    return len(mappings)
+    return 0
 
 
 def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:

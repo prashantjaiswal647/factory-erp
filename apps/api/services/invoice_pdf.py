@@ -449,7 +449,7 @@ def build_accountant_summary_pdf(month: int, year: int, summary_data: dict[str, 
     
     summary_block = [
         Paragraph(f"<b>Total Invoices:</b> {summary_data['total_invoices']}", company_text_style),
-        Paragraph(f"<b>Start Invoice Number:</b> #{summary_data['starting_invoice_number'] or 'N/A'}", company_text_style),
+        Paragraph(f"<b>Start Invoice Number:</b> #{summary_data.get('first_invoice_number') or 'N/A'}", company_text_style),
         Paragraph(f"<b>End Invoice Number:</b> #{summary_data['ending_invoice_number'] or 'N/A'}", company_text_style),
     ]
 
