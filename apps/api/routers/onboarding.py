@@ -736,65 +736,104 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return len(mappings)
 
     if sub_tab_type == "blank_stock":
-        mappings = [
-            {
-                "factory_id": factory_id,
-                "blank_size_ml": row["size_ml"],
-                "variety": row["material_name"].strip() or "Plain White",
-                "linked_bottom_size_mm": row["size_ml"],
-                "weight_per_bora_kg": row["kg_per_sack"],
-                "total_boras": 0,
-                "total_qty_kg": 0,
-            }
-            for row in valid_rows
-        ]
-        db.bulk_insert_mappings(BlankStock, mappings)
-        return len(mappings)
+        saved_count = 0
+        for row in valid_rows:
+            blank_size_ml = int(row["size_ml"])
+            variety = row["material_name"].strip() or "Plain White"
+            stock = (
+                db.query(BlankStock)
+                .filter(
+                    BlankStock.factory_id == factory_id,
+                    BlankStock.blank_size_ml == blank_size_ml,
+                    sql_func.lower(BlankStock.variety) == variety.lower(),
+                )
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                stock = BlankStock(factory_id=factory_id, blank_size_ml=blank_size_ml, variety=variety)
+                db.add(stock)
+            stock.linked_bottom_size_mm = blank_size_ml
+            stock.weight_per_bora_kg = row["kg_per_sack"]
+            stock.total_boras = stock.total_boras or 0
+            stock.total_qty_kg = stock.total_qty_kg or 0
+            saved_count += 1
+        db.flush()
+        return saved_count
 
     if sub_tab_type == "bottom_reel":
-        mappings = [
-            {
-                "factory_id": factory_id,
-                "bottom_size_mm": row["bottom_size_mm"],
-                "variety": "Plain White",
-                "total_rolls": row["total_individual_rolls"],
-                "total_weight_kg": row["total_weight_kg"],
-                "total_qty_kg": row["total_weight_kg"],
-            }
-            for row in valid_rows
-        ]
-        db.bulk_insert_mappings(BottomStock, mappings)
-        return len(mappings)
+        saved_count = 0
+        for row in valid_rows:
+            bottom_size_mm = int(row["bottom_size_mm"])
+            variety = "Plain White"
+            stock = (
+                db.query(BottomStock)
+                .filter(
+                    BottomStock.factory_id == factory_id,
+                    BottomStock.bottom_size_mm == bottom_size_mm,
+                    sql_func.lower(BottomStock.variety) == variety.lower(),
+                )
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                stock = BottomStock(factory_id=factory_id, bottom_size_mm=bottom_size_mm, variety=variety)
+                db.add(stock)
+            stock.total_rolls = row["total_individual_rolls"]
+            stock.total_weight_kg = row["total_weight_kg"]
+            stock.total_qty_kg = row["total_weight_kg"]
+            saved_count += 1
+        db.flush()
+        return saved_count
 
     if sub_tab_type == "box_stock":
-        mappings = [
-            {
-                "factory_id": factory_id,
-                "packaging_size_name": row["box_type"].strip(),
-                "box_type": row["box_type"].strip(),
-                "quantity": row["box_quantity_pieces"],
-                "total_boxes": row["box_quantity_pieces"],
-                "price_per_box": row["price_per_box_rs"],
-            }
-            for row in valid_rows
-        ]
-        db.bulk_insert_mappings(BoxStock, mappings)
-        return len(mappings)
+        saved_count = 0
+        for row in valid_rows:
+            packaging_size_name = row["box_type"].strip()
+            stock = (
+                db.query(BoxStock)
+                .filter(
+                    BoxStock.factory_id == factory_id,
+                    sql_func.lower(BoxStock.packaging_size_name) == packaging_size_name.lower(),
+                )
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                stock = BoxStock(factory_id=factory_id, packaging_size_name=packaging_size_name)
+                db.add(stock)
+            stock.box_type = packaging_size_name
+            stock.quantity = row["box_quantity_pieces"]
+            stock.total_boxes = row["box_quantity_pieces"]
+            stock.price_per_box = row["price_per_box_rs"]
+            saved_count += 1
+        db.flush()
+        return saved_count
 
     if sub_tab_type == "plastic_stock":
-        mappings = [
-            {
-                "factory_id": factory_id,
-                "plastic_size_name": row["plastic_size_type"].strip(),
-                "cup_size_ml": row["used_for_cup_size_ml"],
-                "total_boras": row["total_boras_sacks"],
-                "weight_per_bora_kg": row["weight_per_bora_kg"],
-                "price_per_kg": row["price_per_kg_rs"],
-            }
-            for row in valid_rows
-        ]
-        db.bulk_insert_mappings(PlasticStock, mappings)
-        return len(mappings)
+        saved_count = 0
+        for row in valid_rows:
+            plastic_size_name = row["plastic_size_type"].strip()
+            cup_size_ml = int(row["used_for_cup_size_ml"])
+            stock = (
+                db.query(PlasticStock)
+                .filter(
+                    PlasticStock.factory_id == factory_id,
+                    sql_func.lower(PlasticStock.plastic_size_name) == plastic_size_name.lower(),
+                    PlasticStock.cup_size_ml == cup_size_ml,
+                )
+                .with_for_update()
+                .first()
+            )
+            if stock is None:
+                stock = PlasticStock(factory_id=factory_id, plastic_size_name=plastic_size_name, cup_size_ml=cup_size_ml)
+                db.add(stock)
+            stock.total_boras = row["total_boras_sacks"]
+            stock.weight_per_bora_kg = row["weight_per_bora_kg"]
+            stock.price_per_kg = row["price_per_kg_rs"]
+            saved_count += 1
+        db.flush()
+        return saved_count
 
     if sub_tab_type == "finished_goods":
         saved_count = 0

@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import Worker
+from models import BottomStock, Worker
 from routers.onboarding import apply_bulk_rows, validate_bulk_frame
 
 
@@ -93,6 +93,58 @@ def test_worker_bulk_upload_updates_existing_worker_in_same_factory():
         assert len(workers) == 1
         assert workers[0].phone == "+918285817277"
         assert workers[0].daily_wages == Decimal("400")
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_bottom_reel_bulk_upload_updates_existing_stock_in_same_factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        db.add(
+            BottomStock(
+                factory_id=2,
+                bottom_size_mm=65,
+                variety="Plain White",
+                total_rolls=10,
+                total_weight_kg=Decimal("25"),
+                total_qty_kg=Decimal("25"),
+            )
+        )
+        db.commit()
+
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        row_count = apply_bulk_rows(
+            db,
+            current_user,
+            "bottom_reel",
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "bottom_size_mm": 65,
+                    "total_individual_rolls": 49,
+                    "total_weight_kg": Decimal("0"),
+                }
+            ],
+        )
+        db.commit()
+
+        stocks = (
+            db.query(BottomStock)
+            .filter(BottomStock.factory_id == 2, BottomStock.bottom_size_mm == 65, BottomStock.variety == "Plain White")
+            .all()
+        )
+        assert row_count == 1
+        assert len(stocks) == 1
+        assert stocks[0].total_rolls == 49
+        assert stocks[0].total_weight_kg == Decimal("0")
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
