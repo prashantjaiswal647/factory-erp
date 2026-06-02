@@ -13,6 +13,24 @@ from routers import machine_templates
 from routers.machine_templates import get_template_verification_runner, router
 
 
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
+
+
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},
@@ -30,6 +48,7 @@ def override_get_db():
 
 
 def build_client(user, verification_runner=None):
+    ensure_testclient_compatibility()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     app = FastAPI()
@@ -53,7 +72,7 @@ def test_template_requires_approval_before_general_visibility():
         "custom_fields": {"Voltage": "220v"},
     }
 
-    submitted_response = owner_client.post("/templates/submit", json=payload)
+    submitted_response = owner_client.post("/api/templates/submit", json=payload)
 
     assert submitted_response.status_code == 201
     submitted = submitted_response.json()
@@ -63,23 +82,24 @@ def test_template_requires_approval_before_general_visibility():
     app = owner_client.app
     app.dependency_overrides[get_current_user] = lambda: supervisor
     app.dependency_overrides[get_current_active_user] = lambda: supervisor
+    ensure_testclient_compatibility()
     supervisor_client = TestClient(app)
 
-    general_list_response = supervisor_client.get("/templates")
+    general_list_response = supervisor_client.get("/api/templates")
 
     assert general_list_response.status_code == 200
     assert general_list_response.json() == []
 
     app.dependency_overrides[get_current_user] = lambda: owner
     app.dependency_overrides[get_current_active_user] = lambda: owner
-    approve_response = owner_client.patch(f"/admin/templates/{submitted['id']}/approve")
+    approve_response = owner_client.patch(f"/api/admin/templates/{submitted['id']}/approve")
 
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
 
     app.dependency_overrides[get_current_user] = lambda: supervisor
     app.dependency_overrides[get_current_active_user] = lambda: supervisor
-    approved_list_response = supervisor_client.get("/templates")
+    approved_list_response = supervisor_client.get("/api/templates")
 
     assert approved_list_response.status_code == 200
     visible_templates = approved_list_response.json()
@@ -109,7 +129,7 @@ def test_good_template_submission_is_ai_approved(monkeypatch):
     )
 
     response = client.post(
-        "/templates/submit",
+        "/api/templates/submit",
         json={
             "machine_type": "Paper Cup",
             "base_config": {"cup_size_ml": 250, "speed_cups_per_minute": 45},
@@ -120,7 +140,7 @@ def test_good_template_submission_is_ai_approved(monkeypatch):
     assert response.status_code == 201
     template_id = response.json()["id"]
 
-    status_response = client.get(f"/templates/{template_id}")
+    status_response = client.get(f"/api/templates/{template_id}")
 
     assert status_response.status_code == 200
     template = status_response.json()
@@ -149,7 +169,7 @@ def test_bad_template_submission_goes_to_pending_review(monkeypatch):
     )
 
     response = client.post(
-        "/templates/submit",
+        "/api/templates/submit",
         json={
             "machine_type": "X",
             "base_config": {},
@@ -160,7 +180,7 @@ def test_bad_template_submission_goes_to_pending_review(monkeypatch):
     assert response.status_code == 201
     template_id = response.json()["id"]
 
-    status_response = client.get(f"/templates/{template_id}")
+    status_response = client.get(f"/api/templates/{template_id}")
 
     assert status_response.status_code == 200
     template = status_response.json()

@@ -16,6 +16,25 @@ from routers.staff import (
     require_owner,
 )
 
+
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
+
+
 # SQLite in-memory engine for isolation
 engine = create_engine(
     "sqlite://",
@@ -60,6 +79,7 @@ def setup_db():
     db.close()
 
 def build_client():
+    ensure_testclient_compatibility()
     app = FastAPI()
     app.include_router(staff_v1_router)
     app.include_router(security_v1_router)
@@ -83,7 +103,7 @@ def test_staff_list_zero_leakage_and_hidden_scoping():
     client = build_client()
     
     # Log in as Owner of Factory 1
-    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     
     response = client.get("/api/v1/staff/list")
     assert response.status_code == 200
@@ -101,7 +121,7 @@ def test_staff_creation_hashes_instantly_and_inherits_factory():
     client = build_client()
     
     # Log in as Owner of Factory 1
-    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     
     payload = {
         "name": "New Supervisor",
@@ -131,7 +151,7 @@ def test_worker_creation_syncs_with_workers_table():
     client = build_client()
     
     # Log in as Owner of Factory 1
-    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     
     payload = {
         "name": "New Worker Operator",
@@ -173,23 +193,23 @@ def test_staff_edit_and_delete_with_multi_tenant_boundaries():
     client = build_client()
     
     # Attempt to edit as Owner of Factory 2 (Cross-factory attempt)
-    mock_user = SimpleNamespace(id=2, factory_id=2, username="owner2", role="Owner")
+    mock_user = SimpleNamespace(id=2, factory_id=2, username="owner2", full_name="Owner Two", role="Owner")
     edit_response = client.put("/api/v1/staff/10/update", json={"name": "Attacker Hack"})
     assert edit_response.status_code == 404  # Not found due to scope restriction
     
     # Edit as correct Owner of Factory 1
-    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     edit_response = client.put("/api/v1/staff/10/update", json={"name": "Updated Staff Name"})
     assert edit_response.status_code == 200
     assert edit_response.json()["full_name"] == "Updated Staff Name"
     
     # Delete as incorrect Owner
-    mock_user = SimpleNamespace(id=2, factory_id=2, username="owner2", role="Owner")
+    mock_user = SimpleNamespace(id=2, factory_id=2, username="owner2", full_name="Owner Two", role="Owner")
     del_response = client.delete("/api/v1/staff/10/delete")
     assert del_response.status_code == 404
     
     # Delete as correct Owner
-    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     del_response = client.delete("/api/v1/staff/10/delete")
     assert del_response.status_code == 204
 

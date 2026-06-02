@@ -30,7 +30,7 @@ docker run --rm \
   -v "${API_DIR}:/src:ro" \
   -w /src \
   python:3.12-slim \
-  sh -c "PYTHONDONTWRITEBYTECODE=1 python -B -m compileall -q ."
+  sh -c "mkdir -p /tmp/pycache && PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=/tmp/pycache python -B -m compileall -q ."
 
 echo "==> Step A: Frontend TypeScript gate"
 docker run --rm \

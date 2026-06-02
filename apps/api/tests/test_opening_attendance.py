@@ -13,6 +13,25 @@ from models import User, Worker, WorkerOpeningAttendance, Factory, AttendanceLog
 from routers.staff import staff_v1_router, get_db, require_owner, get_current_active_user
 from routers.attendance import calculate_settlement, SettlementRequest
 
+
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
+
+
 # SQLite engine for tests
 engine = create_engine(
     "sqlite://",
@@ -55,6 +74,7 @@ def setup_db():
     db.close()
 
 def build_client():
+    ensure_testclient_compatibility()
     app = FastAPI()
     app.include_router(staff_v1_router)
     app.dependency_overrides[get_db] = override_get_db
@@ -66,7 +86,7 @@ def test_create_staff_with_opening_attendance():
     global mock_user
     client = build_client()
     
-    mock_user = SimpleNamespace(id=1, factory_id=1, role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     
     # Create Worker with opening attendance
     payload = {
@@ -124,7 +144,7 @@ def test_opening_attendance_crud_endpoints():
     db.commit()
     db.close()
     
-    mock_user = SimpleNamespace(id=1, factory_id=1, role="Owner")
+    mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     
     # Create opening attendance
     payload = {

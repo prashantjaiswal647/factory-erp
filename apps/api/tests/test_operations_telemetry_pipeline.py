@@ -11,6 +11,25 @@ from models import User, Factory, ActivityLog
 from auth import get_current_user
 from main import app as main_app
 
+
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
+
+
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},
@@ -45,12 +64,13 @@ def test_operations_telemetry_pipeline():
     db.add(factory)
     db.flush()
 
-    owner_user = User(id=1, factory_id=1, username="owner@cosmicyog.com", role="Owner", full_name="Owner Admin")
-    supervisor_user = User(id=2, factory_id=1, username="supervisor@cosmicyog.com", role="Supervisor", full_name="Supervisor Node")
+    owner_user = User(id=1, factory_id=1, username="owner@cosmicyog.com", role="Owner", full_name="Owner Admin", password_hash="mock_secure_hash")
+    supervisor_user = User(id=2, factory_id=1, username="supervisor@cosmicyog.com", role="Supervisor", full_name="Supervisor Node", password_hash="mock_secure_hash")
     db.add(owner_user)
     db.add(supervisor_user)
     db.commit()
 
+    ensure_testclient_compatibility()
     client = TestClient(main_app)
 
     # 1. Test Mock Action 2: Authenticate a Supervisor and call v1 daily-sequence (Assert HTTP 403 Forbidden)

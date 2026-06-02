@@ -10,6 +10,24 @@ from db import Base
 from routers.machine_onboarding import get_current_user, get_db, router
 
 
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
+
+
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},
@@ -31,6 +49,7 @@ def override_get_current_user():
 
 
 def build_client():
+    ensure_testclient_compatibility()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     app = FastAPI()

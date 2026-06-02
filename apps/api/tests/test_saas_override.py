@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timedelta, timezone
+from fastapi import BackgroundTasks
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -326,15 +327,20 @@ def test_staff_create_forces_creator_factory_id():
         factory = Factory(id=21, name="Tenant Boundary Factory")
         db.add(factory)
         db.commit()
-        owner = type("Owner", (), {"role": "Owner", "factory_id": 21})()
+        owner = type(
+            "Owner",
+            (),
+            {"id": 1, "username": "owner21", "full_name": "Owner Twenty One", "role": "Owner", "factory_id": 21},
+        )()
         payload = StaffCreateRequest(
             full_name="Tenant Worker",
             phone_number="9999990021",
             password="secret123",
             role="worker",
         )
+        bg_tasks = BackgroundTasks()
 
-        staff = create_staff(payload=payload, current_user=owner, db=db)
+        staff = create_staff(payload=payload, background_tasks=bg_tasks, current_user=owner, db=db)
 
         assert staff.factory_id == owner.factory_id
         assert staff.role == "Operator"
