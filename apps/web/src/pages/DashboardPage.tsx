@@ -1,15 +1,13 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, Archive, Boxes, CalendarDays, Edit2, Factory, IndianRupee, PackageCheck, RefreshCw, ScrollText, UserRound, Wrench, Trash2 } from "lucide-react";
+import { AlertTriangle, Boxes, CalendarDays, Factory, IndianRupee, PackageCheck, RefreshCw, UserRound, Wrench } from "lucide-react";
 import axios from "axios";
-import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
 
 
 import { useAuth } from "../context/AuthContext";
-import { EditWorkerModal } from "../components/EditWorkerModal";
-import { approveSalesOrder, getDashboardMachines, getDashboardWorkers, getInventory, getPendingSales, getProductionAlerts, deleteOnboardingEntry, rejectSalesOrder, getDashboardAnalytics } from "../lib/api";
+import { approveSalesOrder, getDashboardMachines, getDashboardWorkers, getInventory, getPendingSales, getProductionAlerts, rejectSalesOrder, getDashboardAnalytics } from "../lib/api";
 import type { DashboardMachine, DashboardWorker, LiveStockRow, PendingSale, ProductionAlertsResponse, AnalyticsBIResponse } from "../lib/api";
 
 type StockStatus = "In Stock" | "Low Stock" | "Out of Stock";
@@ -29,13 +27,6 @@ type StockDisplayRow = {
   source: LiveStockRow;
 };
 
-type StockGroup = {
-  key: string;
-  title: string;
-  icon: LucideIcon;
-  rows: StockDisplayRow[];
-};
-
 const todayFormatter = new Intl.DateTimeFormat("en-IN", {
   weekday: "short",
   day: "2-digit",
@@ -51,12 +42,10 @@ export default function DashboardPage() {
   const [productionAlerts, setProductionAlerts] = useState<ProductionAlertsResponse | null>(null);
   const [approvalMessage, setApprovalMessage] = useState("");
   const [processingOrderId, setProcessingOrderId] = useState<number | null>(null);
-  const [editingWorker, setEditingWorker] = useState<DashboardWorker | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [analyticsData, setAnalyticsData] = useState<AnalyticsBIResponse | null>(null);
   const { user } = useAuth();
-  const canDelete = user?.role === "Owner";
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -130,26 +119,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleDelete(row: StockDisplayRow) {
-    if (!canDelete) {
-      alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
-      return;
-    }
-    if (!window.confirm("Are you sure you want to remove this entry?")) {
-      return;
-    }
-    try {
-      const entryId = row.source.id;
-      const type = row.source.stock_type;
-      
-      await deleteOnboardingEntry(String(entryId), type);
-      await load();
-    } catch (caught) {
-      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
-      alert(message);
-    }
-  }
-
   async function handleSaleApproval(orderId: number, action: "approve" | "reject") {
     setProcessingOrderId(orderId);
     setApprovalMessage("");
@@ -168,8 +137,8 @@ export default function DashboardPage() {
   const [activeBiTab, setActiveBiTab] = useState("Overview");
 
   const stockRows = useMemo(() => buildDashboardStockRows(inventory), [inventory]);
-  const stockGroups = useMemo(() => buildDashboardStockGroups(stockRows), [stockRows]);
   const finishedRows = stockRows.filter((row) => row.description === "Finished paper cup");
+  const finishedHighlights = finishedRows.slice(0, 6);
   const totalFinishedBoxes = finishedRows.reduce((sum, row) => sum + row.quantity, 0);
   const dailyWages = workers.reduce((sum, worker) => sum + Number(worker.daily_wages || 0), 0);
   const lowStockCount = stockRows.filter((row) => row.status !== "In Stock").length + (productionAlerts?.high_wastage_count || 0);
@@ -489,21 +458,38 @@ export default function DashboardPage() {
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-950">Finished Goods Stock</h2>
-            <p className="mt-1 text-sm text-zinc-500">Readable live stock list. No charts, no overlapping graph layout.</p>
+            <h2 className="text-lg font-semibold text-zinc-950">Finished Goods Summary</h2>
+            <p className="mt-1 text-sm text-zinc-500">Ready stock overview only. Detailed raw material and packaging records live on Inventory.</p>
           </div>
           <Link className="inline-flex h-10 items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700" to="/inventory">
             View Inventory
           </Link>
         </div>
 
-        <div className="mt-5 space-y-5">
-          {stockRows.length === 0 ? (
-            <EmptyState message="No inventory rows found yet. Add onboarding stock to see finished cups, bottom, blank, and packing material." />
+        <div className="mt-5">
+          {finishedHighlights.length === 0 ? (
+            <EmptyState message="No finished goods found yet. Add final product opening stock from onboarding or production." />
           ) : (
-            stockGroups.map((group) => (
-              <StockGroupSection key={group.key} group={group} onDelete={handleDelete} canDelete={canDelete} />
-            ))
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {finishedHighlights.map((row) => (
+                <div key={row.key} className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-zinc-950">{row.productName}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{row.size} · {row.source.packaging_size_name || row.source.packaging_size || "Standard"}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${row.status === "In Stock" ? "bg-emerald-100 text-emerald-700" : row.status === "Low Stock" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                      {row.status}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                    <RowMetric label="Boxes" value={row.stockLabel} />
+                    <RowMetric label="Per Box" value={row.perBox} />
+                    <RowMetric label="Total Pcs" value={row.totalPieces} />
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </section>
@@ -576,41 +562,6 @@ export default function DashboardPage() {
           </div>
         )}
       </section>
-
-      <section className="grid gap-4 lg:grid-cols-2">
-        <SimpleTableCard
-          icon={UserRound}
-          title="Workers"
-          empty="No workers added yet."
-          rows={workers.slice(0, 6).map((worker) => [
-            worker.name,
-            worker.phone || "-",
-            worker.shift_type || worker.shift_timing || `${worker.duty_hours || 8} hrs`,
-            `₹${Number(worker.daily_wages || 0).toLocaleString("en-IN")}`
-          ])}
-          headers={["Name", "Phone", "Shift", "Daily Wages"]}
-          actions={workers.slice(0, 6).map((worker) => (
-            <button key={worker.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50" type="button" onClick={() => setEditingWorker(worker)} title="Edit Worker">
-              <Edit2 className="h-4 w-4" />
-            </button>
-          ))}
-          to="/attendance"
-        />
-        <SimpleTableCard
-          icon={Wrench}
-          title="Machines"
-          empty="No machines added yet."
-          rows={machines.slice(0, 6).map((machine) => [
-            machine.machine_number || `Machine ${machine.id}`,
-            machine.machine_type || "-",
-            `${machine.mould_size_ml || "-"}ml`,
-            `${machine.speed_per_minute || "-"} / min`
-          ])}
-          headers={["Machine", "Type", "Cup Size", "Speed"]}
-          to="/machines"
-        />
-      </section>
-      {editingWorker ? <EditWorkerModal worker={editingWorker} onClose={() => setEditingWorker(null)} onSaved={load} /> : null}
     </div>
   );
 }
@@ -641,24 +592,6 @@ function buildDashboardStockRows(rows: LiveStockRow[]): StockDisplayRow[] {
         source: row
       };
     });
-}
-
-function buildDashboardStockGroups(rows: StockDisplayRow[]): StockGroup[] {
-  const paperRows = rows.filter((row) => {
-    const type = normalizedType(row.source);
-    return type === "Bottom" || type === "Blank";
-  });
-  const rawRows = rows.filter((row) => normalizedType(row.source) === "Inventory");
-  const packingRows = rows.filter((row) => {
-    const type = normalizedType(row.source);
-    return type === "Carton Box" || type === "Polybag" || type === "Final Product";
-  });
-
-  return [
-    { key: "paper-rolls", title: "1. Paper Rolls (Bottoms & Blanks)", icon: ScrollText, rows: paperRows },
-    { key: "raw-materials", title: "2. Raw Materials", icon: Archive, rows: rawRows },
-    { key: "packaging-materials", title: "3. Packaging Materials (Boxes & More)", icon: Boxes, rows: packingRows },
-  ];
 }
 
 function PendingSalesApprovalSection({ message, pendingSales, processingOrderId, onAction }: { message: string; pendingSales: PendingSale[]; processingOrderId: number | null; onAction: (orderId: number, action: "approve" | "reject") => void }) {
@@ -773,84 +706,6 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
   );
 }
 
-function StockGroupSection({ group, onDelete, canDelete }: { group: StockGroup; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
-  const Icon = group.icon;
-  return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-      <div className="flex items-center gap-3 border-b border-zinc-200 bg-zinc-50 px-4 py-3">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-50 text-brand-700">
-          <Icon className="h-4 w-4" />
-        </span>
-        <h3 className="text-sm font-bold text-zinc-950">{group.title}</h3>
-        <span className="ml-auto rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-zinc-600 ring-1 ring-zinc-200">
-          {group.rows.length} rows
-        </span>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-zinc-100 text-sm">
-          <thead className="bg-white text-xs uppercase tracking-wide text-zinc-500">
-            <tr>
-              {["Item Name", "Size", "Total Stock", "Per Box", "Total Pieces", "Location", "Status", "Action"].map((header) => (
-                <th key={header} className={`px-4 py-3 font-semibold ${header === "Action" ? "text-right" : "text-left"}`}>{header}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100">
-            {group.rows.length > 0 ? (
-              group.rows.map((row) => (
-                <StockTableRow key={row.key} row={row} onDelete={onDelete} canDelete={canDelete} />
-              ))
-            ) : (
-              <tr>
-                <td className="px-4 py-5 text-sm text-zinc-500" colSpan={8}>
-                  No rows in this category yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function StockTableRow({ row, onDelete, canDelete }: { row: StockDisplayRow; onDelete: (row: StockDisplayRow) => void; canDelete: boolean }) {
-  return (
-    <tr className="align-middle transition hover:bg-brand-50/30">
-      <td className="min-w-[220px] px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 ring-4 ring-emerald-50" />
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-zinc-950">{row.productName}</p>
-            <p className="text-xs text-zinc-500">{row.description}</p>
-          </div>
-        </div>
-      </td>
-      <td className="whitespace-nowrap px-4 py-3 font-medium text-zinc-700">{row.size}</td>
-      <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-zinc-950">{row.stockLabel}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.perBox}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.totalPieces}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-zinc-700">{row.location}</td>
-      <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={row.status} /></td>
-      <td className="whitespace-nowrap px-4 py-3 text-right">
-        {canDelete ? (
-          <button
-            className="inline-grid h-8 w-8 place-items-center rounded-lg text-red-600 transition hover:bg-red-50"
-            title="Delete item"
-            type="button"
-            onClick={() => onDelete(row)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        ) : (
-          <span className="text-xs text-zinc-400">-</span>
-        )}
-      </td>
-    </tr>
-  );
-}
-
 function RowMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
@@ -888,64 +743,6 @@ function MetricCard({ icon: Icon, tone, label, value, helper }: { icon: LucideIc
         </span>
       </div>
     </div>
-  );
-}
-
-function SimpleTableCard({ icon: Icon, title, headers, rows, empty, to, actions }: { icon: LucideIcon; title: string; headers: string[]; rows: string[][]; empty: string; to: string; actions?: React.ReactNode[] }) {
-  return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="flex items-center gap-2 text-base font-semibold text-zinc-950">
-          <Icon className="h-4 w-4 text-brand-700" />
-          {title}
-        </h2>
-        <Link className="text-sm font-semibold text-brand-700 hover:text-brand-800" to={to}>Open</Link>
-      </div>
-      {rows.length === 0 ? (
-        <EmptyState message={empty} />
-      ) : (
-        <>
-          {/* Mobile View - Viewport width below 768px (md) */}
-          <div className="block md:hidden mt-4 space-y-3">
-            {rows.map((row, index) => (
-              <div key={`${title}-mobile-${index}`} className="rounded-lg border border-zinc-150 p-3 bg-zinc-50/50 space-y-2 text-xs">
-                {headers.map((header, headerIndex) => (
-                  <div key={`${title}-mobile-${index}-${headerIndex}`} className="flex justify-between items-center py-0.5">
-                    <span className="font-semibold text-zinc-500">{header}:</span>
-                    <span className="font-bold text-zinc-900">{row[headerIndex]}</span>
-                  </div>
-                ))}
-                {actions && actions[index] ? (
-                  <div className="flex justify-end pt-1.5 border-t border-zinc-200 mt-1.5">
-                    {actions[index]}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop View - Viewport width >= 768px (md) */}
-          <div className="hidden md:block mt-4 overflow-x-auto w-full rounded-lg border border-zinc-100">
-            <table className="min-w-full divide-y divide-zinc-100 text-sm">
-              <thead className="bg-zinc-50 text-xs uppercase text-zinc-500">
-                <tr>
-                  {headers.map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
-                  {actions ? <th className="px-4 py-3 text-right font-semibold">Action</th> : null}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {rows.map((row, index) => (
-                  <tr key={`${title}-${index}`} className="hover:bg-zinc-50">
-                    {row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="whitespace-nowrap px-4 py-3 text-zinc-700">{cell}</td>)}
-                    {actions ? <td className="whitespace-nowrap px-4 py-3 text-right">{actions[index]}</td> : null}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
   );
 }
 
@@ -1012,15 +809,6 @@ function statusFor(quantity: number, type: string): StockStatus {
   if (quantity <= 0) return "Out of Stock";
   const lowThreshold = type === "Final Product" || type === "Carton Box" ? 10 : 25;
   return quantity <= lowThreshold ? "Low Stock" : "In Stock";
-}
-
-function StatusBadge({ status }: { status: StockStatus }) {
-  const classes = {
-    "In Stock": "bg-emerald-100 text-emerald-700",
-    "Low Stock": "bg-amber-100 text-amber-800",
-    "Out of Stock": "bg-red-100 text-red-700"
-  };
-  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${classes[status]}`}>{status}</span>;
 }
 
 function formatNumber(value: number) {

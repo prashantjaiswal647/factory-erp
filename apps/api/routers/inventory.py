@@ -171,13 +171,27 @@ class LiveStockRow(BaseModel):
     item_name: str
     category: Optional[str] = None
     packaging_size: Optional[str] = None
+    packaging_size_name: Optional[str] = None
+    product_size_ml: Optional[int] = None
+    variety: Optional[str] = None
     pieces_per_packet: Optional[int] = None
     packets_per_box: Optional[int] = None
+    packets_per_box_limit: Optional[int] = None
+    current_quantity: Optional[Decimal] = None
     quantity: Decimal
     unit: str
+    price_per_unit: Optional[Decimal] = None
+    price_per_box: Optional[Decimal] = None
+    price_per_kg: Optional[Decimal] = None
+    box_type: Optional[str] = None
+    size_ml: Optional[int] = None
     size_mm: Optional[int] = None
+    kg_per_sack: Optional[Decimal] = None
     total_weight_kg: Optional[Decimal] = None
     total_rolls: Optional[int] = None
+    total_boras: Optional[int] = None
+    weight_per_bora_kg: Optional[Decimal] = None
+    cup_size_ml: Optional[int] = None
     image_url: Optional[str] = None
     variant_name: Optional[str] = None
 
@@ -293,6 +307,8 @@ def list_live_stock(
                             "price_per_unit": 0.0,
                             "packaging_size": "Standard",
                             "category": "Blank",
+                            "size_ml": getattr(item, "blank_size_ml", None),
+                            "kg_per_sack": float(getattr(item, "weight_per_bora_kg", 0) or 0),
                         }
                     )
                 except Exception:
@@ -357,7 +373,9 @@ def list_live_stock(
                             "quantity": qty,
                             "unit": "pcs",
                             "price_per_unit": float(getattr(item, "price_per_box", 0) or 0),
+                            "price_per_box": float(getattr(item, "price_per_box", 0) or 0),
                             "packaging_size": box_name,
+                            "packaging_size_name": box_name,
                             "category": "Carton Box",
                             "box_type": getattr(item, "box_type", None) or box_name,
                         }
@@ -378,6 +396,9 @@ def list_live_stock(
             for item in plastic_items:
                 try:
                     qty_kg = float((getattr(item, "total_boras", 0) or 0) * (getattr(item, "weight_per_bora_kg", 0.0) or 0.0))
+                    total_boras = getattr(item, "total_boras", 0) or 0
+                    weight_per_bora_kg = getattr(item, "weight_per_bora_kg", 0.0) or 0.0
+                    price_per_kg = getattr(item, "price_per_kg", 0) or 0
                     processed_inventory.append(
                         {
                             "id": f"plastic-{item.id}",
@@ -388,9 +409,13 @@ def list_live_stock(
                             "current_quantity": qty_kg,
                             "quantity": qty_kg,
                             "unit": "kg",
-                            "price_per_unit": float(getattr(item, "price_per_kg", 0) or 0),
+                            "price_per_unit": float(price_per_kg),
+                            "price_per_kg": float(price_per_kg),
                             "packaging_size": getattr(item, "plastic_size_name", "Standard"),
                             "category": "Polybag",
+                            "cup_size_ml": getattr(item, "cup_size_ml", None),
+                            "total_boras": int(total_boras),
+                            "weight_per_bora_kg": float(weight_per_bora_kg),
                         }
                     )
                 except Exception:

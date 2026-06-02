@@ -503,7 +503,7 @@ export type LiveStockRow = {
   product_id?: number | null;
   product_size_ml?: number | null;
   variety?: string | null;
-  stock_type: "Blank" | "Bottom" | "Box" | "Final Product";
+  stock_type: "Blank" | "Bottom" | "Box" | "Carton Box" | "Polybag" | "Inventory" | "Final Product";
   item_name: string;
   category?: string | null;
   packaging_size?: string | null;
@@ -514,9 +514,18 @@ export type LiveStockRow = {
   current_quantity?: number | null;
   quantity: number;
   unit: string;
+  price_per_unit?: number | null;
+  price_per_box?: number | null;
+  price_per_kg?: number | null;
+  box_type?: string | null;
+  size_ml?: number | null;
   size_mm?: number | null;
+  kg_per_sack?: number | null;
   total_weight_kg?: number | null;
   total_rolls?: number | null;
+  total_boras?: number | null;
+  weight_per_bora_kg?: number | null;
+  cup_size_ml?: number | null;
   image_url?: string | null;
   variant_name?: string | null;
 };

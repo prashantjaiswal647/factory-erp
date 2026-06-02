@@ -384,6 +384,17 @@ function CategoryCard({
                       <p className="mt-0.5 text-xs font-semibold text-zinc-700">{row.perBox}</p>
                     </div>
                   </div>
+
+                  {inventoryDetails(row).length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 border-t border-zinc-100 pt-3 text-left">
+                      {inventoryDetails(row).map((detail) => (
+                        <div key={`${row.key}-${detail.label}`} className="rounded-lg bg-zinc-50 px-2.5 py-2">
+                          <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">{detail.label}</p>
+                          <p className="mt-0.5 truncate text-xs font-semibold text-zinc-800">{detail.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );
@@ -447,6 +458,47 @@ function toDisplayRow(row: LiveStockRow): InventoryDisplayRow {
     image_url: row.image_url,
     variant_name: row.variant_name
   };
+}
+
+function inventoryDetails(row: InventoryDisplayRow) {
+  const source = row.source;
+  const type = normalizedType(source);
+  const details: Array<{ label: string; value: string }> = [];
+  const push = (label: string, value: unknown, suffix = "") => {
+    if (value === null || value === undefined || value === "") return;
+    const normalized = typeof value === "number" ? formatNumber(value) : String(value);
+    details.push({ label, value: `${normalized}${suffix}` });
+  };
+
+  if (type === "Final Product") {
+    push("Product Size", source.product_size_ml, "ml");
+    push("Variety", source.variety);
+    push("Packaging", source.packaging_size_name || source.packaging_size);
+    push("Pcs / Packet", source.pieces_per_packet);
+    push("Packets / Box", source.packets_per_box_limit || source.packets_per_box);
+    push("Boxes", source.current_quantity ?? source.quantity);
+  } else if (type === "Blank") {
+    push("Material", source.item_name);
+    push("Size", source.size_ml || row.size);
+    push("Kg / Sack", source.kg_per_sack);
+    push("Total Weight", source.quantity, " kg");
+  } else if (type === "Bottom") {
+    push("Bottom Size", source.size_mm, "mm");
+    push("Total Rolls", source.total_rolls);
+    push("Total Weight", source.total_weight_kg ?? source.quantity, " kg");
+  } else if (type === "Carton Box") {
+    push("Box Type", source.box_type || source.packaging_size_name || source.packaging_size);
+    push("Quantity", source.quantity, " pcs");
+    push("Price / Box", source.price_per_box ?? source.price_per_unit, " Rs");
+  } else if (type === "Polybag") {
+    push("Plastic Type", source.packaging_size);
+    push("Cup Size", source.cup_size_ml, "ml");
+    push("Total Boras", source.total_boras);
+    push("Weight / Bora", source.weight_per_bora_kg, " kg");
+    push("Price / Kg", source.price_per_kg ?? source.price_per_unit, " Rs");
+  }
+
+  return details.slice(0, 8);
 }
 
 function categoryKeyFor(row: LiveStockRow) {
