@@ -492,6 +492,58 @@ def log_bulk_upload(background_tasks: BackgroundTasks, db: Session, current_user
     )
 
 
+def log_bulk_inventory_uploads(
+    background_tasks: BackgroundTasks,
+    db: Session,
+    current_user: User,
+    inserted_counts: dict[str, int],
+) -> None:
+    log_specs = {
+        "blank_stock": (
+            "RAW_MATERIAL_ADDED",
+            "Raw material bulk upload completed - {count} blank stock entries",
+            "raw_material",
+        ),
+        "bottom_reel": (
+            "RAW_MATERIAL_ADDED",
+            "Raw material bulk upload completed - {count} bottom reel entries",
+            "raw_material",
+        ),
+        "box_stock": (
+            "PACKAGING_MATERIAL_ADDED",
+            "Packaging material bulk upload completed - {count} box stock entries",
+            "packaging_material",
+        ),
+        "plastic_stock": (
+            "PACKAGING_MATERIAL_ADDED",
+            "Packaging material bulk upload completed - {count} plastic stock entries",
+            "packaging_material",
+        ),
+        "finished_goods": (
+            "FINISHED_GOODS_STOCK_SAVED",
+            "Finished goods bulk upload completed - {count} stock entries",
+            "finished_goods_stock",
+        ),
+    }
+    for sub_tab_type, (action_type, summary_template, entity_type) in log_specs.items():
+        row_count = int(inserted_counts.get(sub_tab_type) or 0)
+        if row_count <= 0:
+            continue
+        background_tasks.add_task(
+            log_activity,
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            action_type,
+            summary_template.format(count=row_count),
+            entity_type,
+            None,
+            {"row_count": row_count, "sub_tab_type": sub_tab_type},
+        )
+
+
 def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_rows: list[dict]) -> int:
     factory_id = int(current_user.factory_id)
     if not valid_rows:
@@ -770,6 +822,7 @@ async def bulk_upload_master_onboarding(
         db.commit()
         total_rows = sum(inserted_counts.values())
         log_bulk_upload(background_tasks, db, current_user, "master_onboarding", total_rows)
+        log_bulk_inventory_uploads(background_tasks, db, current_user, inserted_counts)
         return {
             "message": "Master onboarding bulk upload completed",
             "rows_inserted": total_rows,
