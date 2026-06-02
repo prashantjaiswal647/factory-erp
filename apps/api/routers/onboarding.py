@@ -658,30 +658,45 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return 1
 
     if sub_tab_type == "worker":
-        worker_mappings = [
-            {
-                "factory_id": factory_id,
-                "name": row["name"].strip(),
-                "phone": normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else None,
-                "daily_wage_rate": row["daily_wages"],
-                "daily_wages": row["daily_wages"],
-                "duty_hours": row["duty_hours"],
-                "salary": 0,
-                "daily_salary": row["daily_wages"],
-                "shift_hours": row["duty_hours"],
-                "shift_type": "worker",
-                "is_active": True,
-            }
-            for row in valid_rows
-        ]
-        db.bulk_insert_mappings(Worker, worker_mappings, return_defaults=True)
+        worker_names = [row["name"].strip() for row in valid_rows if row.get("name") and row["name"].strip()]
+        existing_workers = {
+            worker.name.strip().lower(): worker
+            for worker in db.query(Worker)
+            .filter(Worker.factory_id == factory_id, Worker.name.in_(worker_names))
+            .with_for_update()
+            .all()
+        }
+        worker_rows: list[tuple[Worker, dict]] = []
+        for row in valid_rows:
+            worker_name = row["name"].strip()
+            if not worker_name:
+                continue
+            worker_key = worker_name.lower()
+            phone, _ = normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else (None, None)
+            worker = existing_workers.get(worker_key)
+            if worker is None:
+                worker = Worker(factory_id=factory_id, name=worker_name)
+                db.add(worker)
+                existing_workers[worker_key] = worker
+            worker.phone = phone
+            worker.daily_wage_rate = row["daily_wages"]
+            worker.daily_wages = row["daily_wages"]
+            worker.duty_hours = row["duty_hours"]
+            worker.salary = worker.salary or 0
+            worker.daily_salary = row["daily_wages"]
+            worker.shift_hours = row["duty_hours"]
+            worker.shift_type = worker.shift_type or "worker"
+            worker.is_active = True
+            worker_rows.append((worker, row))
+        db.flush()
+
         attendance_mappings = [
             {
                 "factory_id": factory_id,
-                    "worker_id": mapping["id"],
-                    "period_start": date.today(),
-                    "period_end": date.today(),
-                    "present_days": row["previous_attendance_details"],
+                "worker_id": worker.id,
+                "period_start": date.today(),
+                "period_end": date.today(),
+                "present_days": row["previous_attendance_details"],
                 "half_days": 0,
                 "absent_days": 0,
                 "paid_leave_days": 0,
@@ -691,12 +706,12 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 "notes": "Opening attendance imported by bulk upload",
                 "created_by_user_id": current_user.id,
             }
-            for mapping, row in zip(worker_mappings, valid_rows)
-            if row["previous_attendance_details"] > 0 and mapping.get("id")
+            for worker, row in worker_rows
+            if row["previous_attendance_details"] > 0 and worker.id
         ]
         if attendance_mappings:
             db.bulk_insert_mappings(WorkerOpeningAttendance, attendance_mappings)
-        return len(worker_mappings)
+        return len(worker_rows)
 
     if sub_tab_type == "machine":
         mappings = [
