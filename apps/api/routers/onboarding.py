@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
@@ -138,6 +139,35 @@ HEADER_ALIASES = {
     "total_plastic_kg=": "total_plastic_kg_automatic_calculation",
 }
 
+BULK_NUMERIC_DEFAULTS = {
+    "worker": {
+        "daily_wages": Decimal("0"),
+        "duty_hours": Decimal("8"),
+        "previous_attendance_details": Decimal("0"),
+    },
+    "blank_stock": {
+        "kg_per_sack": Decimal("0"),
+    },
+    "bottom_reel": {
+        "total_individual_rolls": 0,
+        "total_weight_kg": Decimal("0"),
+    },
+    "box_stock": {
+        "box_quantity_pieces": 0,
+        "price_per_box_rs": 0,
+    },
+    "plastic_stock": {
+        "total_boras_sacks": 0,
+        "weight_per_bora_kg": 0,
+        "price_per_kg_rs": 0,
+    },
+    "finished_goods": {
+        "pcs_per_packet": 1,
+        "packets_per_box": 1,
+        "initial_stock_boxes": 0,
+    },
+}
+
 SAMPLE_BULK_ROWS = {
     "company_profile": ["SAMPLE", "Munshi Demo Factory", "07ABCDE1234F1Z5", "Wazirpur Industrial Area, Delhi", "INV-", 2, 1, 1, 1],
     "worker": ["SAMPLE", "Akash Kumar", "82858117277", 400, 8, 0],
@@ -272,6 +302,60 @@ def normalize_bulk_cell(key: str, value):
     return value
 
 
+def is_blank_bulk_value(value) -> bool:
+    value = normalize_bulk_value(value)
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
+
+
+def apply_bulk_numeric_defaults(sub_tab_type: str, row: dict) -> dict:
+    for key, default_value in BULK_NUMERIC_DEFAULTS.get(sub_tab_type, {}).items():
+        if is_blank_bulk_value(row.get(key)):
+            row[key] = default_value
+    return row
+
+
+def coerce_excel_int_token(value) -> int:
+    value = normalize_bulk_value(value)
+    if value is None:
+        raise ValueError("empty integer value")
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a valid integer value")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    text = bulk_str(value)
+    if not text:
+        raise ValueError("empty integer value")
+    decimal_value = Decimal(text)
+    if decimal_value != decimal_value.to_integral_value():
+        raise ValueError(f"{text} is not a whole number")
+    return int(decimal_value)
+
+
+def split_bulk_int_values(value) -> list[int]:
+    value = normalize_bulk_value(value)
+    if value is None:
+        return []
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        return [coerce_excel_int_token(value)]
+    tokens = [token.strip() for token in re.split(r"[,;/|]+", bulk_str(value)) if token.strip()]
+    return [coerce_excel_int_token(token) for token in tokens]
+
+
+def expand_bulk_row_variants(sub_tab_type: str, row: dict) -> list[dict]:
+    if sub_tab_type != "plastic_stock":
+        return [row]
+    cup_sizes = split_bulk_int_values(row.get("used_for_cup_size_ml"))
+    if not cup_sizes:
+        return [row]
+    return [{**row, "used_for_cup_size_ml": cup_size} for cup_size in cup_sizes]
+
+
 def canonical_bulk_header(value) -> str:
     header = bulk_str(value).lower()
     header = header.replace("\n", " ").replace("\r", " ").strip()
@@ -328,9 +412,13 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
         frame.loc[frame["previous_attendance_details"].astype(str).str.strip() == "", "previous_attendance_details"] = 0
     actual_frame = actual_rows_only(frame)
     for index, raw_row in actual_frame.iterrows():
-        row = {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected}
+        row = apply_bulk_numeric_defaults(
+            sub_tab_type,
+            {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected},
+        )
         try:
-            valid_rows.append(model.model_validate(row).model_dump())
+            for row_variant in expand_bulk_row_variants(sub_tab_type, row):
+                valid_rows.append(model.model_validate(row_variant).model_dump())
         except Exception as exc:
             failed_rows.append({"sheet": sheet_name or sub_tab_type, "row": int(index) + 1, "error": str(exc), "values": row})
     return valid_rows, failed_rows
