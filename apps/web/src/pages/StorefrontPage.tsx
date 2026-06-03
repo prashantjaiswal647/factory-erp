@@ -71,6 +71,9 @@ export default function StorefrontPage() {
       const response = await verifyStorefrontCustomer(storeToken, phoneGateVal.trim());
       if (response.data.status === "success") {
         sessionStorage.setItem(`distributor_verified_${storeToken}`, "true");
+        if (response.data.storefront_session_token) {
+          sessionStorage.setItem(`storefront_session_${storeToken}`, response.data.storefront_session_token);
+        }
         setIsVerified(true);
       } else {
         setGateError("Verification failed. Please double check your number.");

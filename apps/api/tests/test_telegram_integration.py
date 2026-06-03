@@ -1,14 +1,20 @@
 import os
+os.environ.setdefault("JWT_SECRET_KEY", "test_secret_key_12345678901234567890")
+os.environ.setdefault("N8N_API_KEY", "test-n8n-secret")
+
 import pytest
 from decimal import Decimal
+from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db import Base
+from db import Base, get_db
 from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice
-from telegram_crypto import encrypt_token, decrypt_token
+from telegram_crypto import decrypt_token, encrypt_token, get_encryption_key
+from routers.integrations import router
 from routers.integrations import (
     internal_bot_lookup, basic_generate_invoice, BotLookupRequest, InvoiceGenerateRequest,
     internal_bot_context, get_reports_summary, generate_mode_invoice,
@@ -22,6 +28,24 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def ensure_testclient_compatibility():
+    import inspect
+    import httpx
+
+    if "app" in inspect.signature(httpx.Client.__init__).parameters:
+        return
+
+    original_init = httpx.Client.__init__
+    if getattr(original_init, "_munshi_accepts_app_kwarg", False):
+        return
+
+    def patched_init(self, *args, app=None, **kwargs):
+        return original_init(self, *args, **kwargs)
+
+    patched_init._munshi_accepts_app_kwarg = True
+    httpx.Client.__init__ = patched_init
 
 
 @pytest.fixture(autouse=True)
@@ -66,24 +90,50 @@ def test_telegram_cryptography_encryption_and_decryption():
     assert decrypted == raw_token
 
 
+def test_telegram_cryptography_requires_jwt_secret(monkeypatch):
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        get_encryption_key()
+
+
 def test_bot_lookup_unauthorized_header_raises_exception():
-    db = TestingSessionLocal()
-    payload = BotLookupRequest(bot_username="test_supervisor_bot", chat_id="987654321")
-    
-    with pytest.raises(HTTPException) as exc:
-        internal_bot_lookup(payload=payload, x_n8n_api_key="wrong-key", db=db)
-        
-    assert exc.value.status_code == 401
-    db.close()
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: TestingSessionLocal()
+    ensure_testclient_compatibility()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ai/n8n-webhook",
+        json={"factory_id": 1, "user_message": "status"},
+        headers={"X-N8N-API-KEY": "wrong-key"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_ai_n8n_webhook_missing_secret_fails_closed(monkeypatch):
+    monkeypatch.delenv("N8N_API_KEY", raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: TestingSessionLocal()
+    ensure_testclient_compatibility()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ai/n8n-webhook",
+        json={"factory_id": 1, "user_message": "status"},
+        headers={"X-N8N-API-KEY": "anything"},
+    )
+
+    assert response.status_code == 503
 
 
 def test_bot_lookup_authorized_and_valid_chat_id_returns_data():
     db = TestingSessionLocal()
     payload = BotLookupRequest(bot_username="test_supervisor_bot", chat_id="987654321")
     
-    # Match the environment's actual key for local/Docker testing
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = internal_bot_lookup(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = internal_bot_lookup(payload=payload, db=db)
     
     assert res.factory_id == 1
     assert res.verified is True
@@ -96,9 +146,8 @@ def test_bot_lookup_mismatched_chat_id_raises_forbidden_isolation_breach():
     # Owner chat_id is seeded as '987654321', incoming is '555555555' (spoofing attempt)
     payload = BotLookupRequest(bot_username="test_supervisor_bot", chat_id="555555555")
     
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
     with pytest.raises(HTTPException) as exc:
-        internal_bot_lookup(payload=payload, x_n8n_api_key=api_key, db=db)
+        internal_bot_lookup(payload=payload, db=db)
         
     assert exc.value.status_code == 403
     assert "Forbidden" in exc.value.detail
@@ -119,9 +168,7 @@ def test_bot_lookup_empty_chat_id_binds_dynamically():
     db.commit()
     
     payload = BotLookupRequest(bot_username="onboard_bot", chat_id="222222222")
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    
-    res = internal_bot_lookup(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = internal_bot_lookup(payload=payload, db=db)
     
     assert res.factory_id == 2
     assert res.verified is True
@@ -137,8 +184,7 @@ def test_invoice_generation_creates_records_and_outputs_clean_markdown():
     db = TestingSessionLocal()
     payload = InvoiceGenerateRequest(factory_id=1)
     
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = basic_generate_invoice(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = basic_generate_invoice(payload=payload, db=db)
     
     assert res.status == "SUCCESS"
     assert res.invoice_id > 0
@@ -160,8 +206,7 @@ def test_bot_context_verification_returns_authorized_data():
         bot_token="mock-telegram-token-12345",
         chat_id="987654321"
     )
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = internal_bot_context(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = internal_bot_context(payload=payload, db=db)
     
     assert res.factory_id == 1
     assert res.is_authorized is True
@@ -171,8 +216,7 @@ def test_bot_context_verification_returns_authorized_data():
 
 def test_reports_summary_calculates_correct_metrics():
     db = TestingSessionLocal()
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = get_reports_summary(factory_id=1, x_n8n_api_key=api_key, db=db)
+    res = get_reports_summary(factory_id=1, db=db)
     
     assert res["status"] == "HEALTHY"
     assert res["factory_name"] == "Test Telegram Factory"
@@ -184,8 +228,7 @@ def test_reports_summary_calculates_correct_metrics():
 def test_invoice_generation_basic_mode_calculates_wastage():
     db = TestingSessionLocal()
     payload = InvoiceGenerateModeRequest(factory_id=1, invoice_mode="basic")
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = generate_mode_invoice(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = generate_mode_invoice(payload=payload, db=db)
     
     assert res.status == "SUCCESS"
     assert res.invoice_mode == "basic"
@@ -200,8 +243,7 @@ def test_invoice_generation_basic_mode_calculates_wastage():
 def test_invoice_generation_gst_mode_calculates_taxes():
     db = TestingSessionLocal()
     payload = InvoiceGenerateModeRequest(factory_id=1, invoice_mode="gst")
-    api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    res = generate_mode_invoice(payload=payload, x_n8n_api_key=api_key, db=db)
+    res = generate_mode_invoice(payload=payload, db=db)
     
     assert res.status == "SUCCESS"
     assert res.invoice_mode == "gst"

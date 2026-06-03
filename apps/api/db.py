@@ -33,8 +33,33 @@ Base = declarative_base()
 
 
 def get_db():
+    from services.tenant_context import clear_current_tenant_id
+
+    clear_current_tenant_id()
     db = SessionLocal()
     try:
         yield db
     finally:
+        clear_current_tenant_id()
         db.close()
+
+
+# Global Tenant Query Interceptor
+from sqlalchemy import event
+from sqlalchemy.orm import Query
+
+@event.listens_for(Query, "before_compile", retval=True)
+def before_compile(query):
+    from services.tenant_context import get_current_tenant_id
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return query
+
+    # Apply factory_id filter dynamically to entities that have the attribute
+    for desc in query.column_descriptions:
+        entity = desc.get("entity")
+        if entity and hasattr(entity, "factory_id"):
+            # Avoid duplicating criteria if factory_id is already filtered in the query clauses
+            # SQLAlchemy handles duplicate filter conditions gracefully, but we can append it directly
+            query = query.filter(entity.factory_id == tenant_id)
+    return query

@@ -917,6 +917,7 @@ class CustomerVerificationResponse(BaseModel):
     message: str
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
+    storefront_session_token: Optional[str] = None
 
 
 def resolve_storefront_customer(db: Session, store_token: str) -> Optional[Customer]:
@@ -943,8 +944,51 @@ def resolve_storefront_customer(db: Session, store_token: str) -> Optional[Custo
     )
 
 
+import time
+_rate_limit_store: Dict[str, list] = {}
+
+def is_rate_limited(key: str, limit: int, window_seconds: int) -> bool:
+    now = time.time()
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        try:
+            import redis
+            r = redis.Redis.from_url(redis_url, socket_timeout=1)
+            current = r.get(key)
+            if current and int(current) >= limit:
+                return True
+            p = r.pipeline()
+            p.incr(key)
+            p.expire(key, window_seconds)
+            p.execute()
+            return False
+        except Exception:
+            pass
+
+    timestamps = _rate_limit_store.get(key, [])
+    timestamps = [t for t in timestamps if now - t < window_seconds]
+    if len(timestamps) >= limit:
+        _rate_limit_store[key] = timestamps
+        return True
+    timestamps.append(now)
+    _rate_limit_store[key] = timestamps
+    return False
+
 @app.post("/api/store/verify-customer", response_model=CustomerVerificationResponse)
-def verify_customer_storefront(payload: CustomerVerificationRequest, db: Session = Depends(get_db)):
+def verify_customer_storefront(
+    payload: CustomerVerificationRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db)
+):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    rate_limit_key = f"rate_limit:verify_customer:{client_ip}"
+    if is_rate_limited(rate_limit_key, limit=5, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many verification attempts. Please try again after a minute."
+        )
+
     customer = resolve_storefront_customer(db, payload.store_token)
     if not customer:
         raise HTTPException(status_code=404, detail="Store token invalid or not registered.")
@@ -968,18 +1012,47 @@ def verify_customer_storefront(payload: CustomerVerificationRequest, db: Session
     if not match_found:
         raise HTTPException(status_code=403, detail="Distributor verification failed. Mobile number is not mapped to this store account.")
         
+    from auth import generate_storefront_session_token
+    session_token = generate_storefront_session_token(customer.id, payload.store_token)
+    
+    response.set_cookie(
+        key="storefront_session",
+        value=session_token,
+        httponly=True,
+        secure=False,  # Can be overridden or False for local HTTP dev
+        samesite="lax",
+        max_age=7200
+    )
+
     return CustomerVerificationResponse(
         status="success",
         message="Verification successful",
         customer_id=customer.id,
-        customer_name=customer.name
+        customer_name=customer.name,
+        storefront_session_token=session_token
     )
 
 @app.get("/api/storefront/{storeToken}", response_model=StorefrontResponse)
-def get_storefront_details(storeToken: str, db: Session = Depends(get_db)):
+def get_storefront_details(
+    storeToken: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     customer = resolve_storefront_customer(db, storeToken)
     if not customer:
         raise HTTPException(status_code=404, detail="Storefront not found")
+        
+    from auth import decode_storefront_session_token
+    session_token = request.headers.get("X-Storefront-Session")
+    if not session_token:
+        session_token = request.cookies.get("storefront_session")
+        
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Storefront session verification required.")
+        
+    decoded = decode_storefront_session_token(session_token)
+    if not decoded or decoded[0] != customer.id or decoded[1] != storeToken:
+        raise HTTPException(status_code=403, detail="Invalid or expired storefront session.")
         
     factory = db.query(Factory).filter(Factory.id == int(customer.factory_id)).first()
     if not factory:
@@ -1025,10 +1098,27 @@ def get_storefront_details(storeToken: str, db: Session = Depends(get_db)):
     )
 
 @app.post("/api/storefront/{storeToken}/order", response_model=StoreCheckoutResponse)
-def place_storefront_order(storeToken: str, payload: StoreCheckoutRequest, db: Session = Depends(get_db)):
+def place_storefront_order(
+    storeToken: str,
+    payload: StoreCheckoutRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     customer = resolve_storefront_customer(db, storeToken)
     if not customer:
         raise HTTPException(status_code=404, detail="Storefront not found")
+        
+    from auth import decode_storefront_session_token
+    session_token = request.headers.get("X-Storefront-Session")
+    if not session_token:
+        session_token = request.cookies.get("storefront_session")
+        
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Storefront session verification required.")
+        
+    decoded = decode_storefront_session_token(session_token)
+    if not decoded or decoded[0] != customer.id or decoded[1] != storeToken:
+        raise HTTPException(status_code=403, detail="Invalid or expired storefront session.")
         
     factory = db.query(Factory).filter(Factory.id == int(customer.factory_id)).first()
     if not factory:

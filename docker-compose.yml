@@ -80,7 +80,33 @@ services:
     networks:
       - ai-erp-network
 
-  # 6. Public Reverse Proxy
+  # 6. Automated Database Backup
+  backup:
+    image: postgres:16-alpine
+    container_name: ai-erp-backup
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB:-ai_erp_db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./storage/backups:/src/storage/backups
+    command: >
+      sh -c "apk add --no-cache bash findutils &&
+      echo '0 2 * * * bash /usr/local/bin/backup.sh >> /src/storage/backups/cron.log 2>&1' > /var/spool/cron/crontabs/root &&
+      crond -f -l 8"
+    networks:
+      - ai-erp-network
+
+  # 7. Public Reverse Proxy
   caddy:
     image: caddy:2-alpine
     restart: always
@@ -98,7 +124,7 @@ services:
     networks:
       - ai-erp-network
 
-  # 7. Database Admin UI
+  # 8. Database Admin UI
   adminer:
     image: adminer:latest
     restart: always

@@ -27,6 +27,7 @@ from models import (
     Payment,
     ActivityLog,
     AppUsageLog,
+    MaterialYield,
 )
 from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event

@@ -13,7 +13,7 @@ from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import DASHBOARD_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, Payment, User, ExpenseLog, Worker, Machine, WastageLog
+from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog
 from schemas import AnalyticsSummaryResponse
 
 
@@ -331,13 +331,14 @@ def get_dashboard_analytics(
     collection_map = {row.date: row.collection for row in payments_q}
     
     # 3. Fetch Expenses by day
+    from sqlalchemy import Date, cast
     expense_q = db.query(
-        ExpenseLog.date,
-        sql_func.coalesce(sql_func.sum(ExpenseLog.amount), 0).label("expense")
+        cast(FactoryExpense.timestamp, Date).label("date"),
+        sql_func.coalesce(sql_func.sum(FactoryExpense.amount), 0).label("expense")
     ).filter(
-        ExpenseLog.factory_id == factory_id,
-        ExpenseLog.date >= start_date
-    ).group_by(ExpenseLog.date).all()
+        FactoryExpense.factory_id == factory_id,
+        cast(FactoryExpense.timestamp, Date) >= start_date
+    ).group_by(cast(FactoryExpense.timestamp, Date)).all()
     
     expense_map = {row.date: row.expense for row in expense_q}
     
@@ -363,16 +364,16 @@ def get_dashboard_analytics(
         DailyProduction.date >= start_date
     ).scalar() or Decimal("45000.00")
     
-    total_elec = db.query(sql_func.coalesce(sql_func.sum(ExpenseLog.amount), 0)).filter(
-        ExpenseLog.factory_id == factory_id,
-        ExpenseLog.category.ilike("%electricity%"),
-        ExpenseLog.date >= start_date
+    total_elec = db.query(sql_func.coalesce(sql_func.sum(FactoryExpense.amount), 0)).filter(
+        FactoryExpense.factory_id == factory_id,
+        FactoryExpense.category.ilike("%electricity%"),
+        cast(FactoryExpense.timestamp, Date) >= start_date
     ).scalar() or Decimal("12000.00")
     
-    total_maint = db.query(sql_func.coalesce(sql_func.sum(ExpenseLog.amount), 0)).filter(
-        ExpenseLog.factory_id == factory_id,
-        ~ExpenseLog.category.ilike("%electricity%"),
-        ExpenseLog.date >= start_date
+    total_maint = db.query(sql_func.coalesce(sql_func.sum(FactoryExpense.amount), 0)).filter(
+        FactoryExpense.factory_id == factory_id,
+        ~FactoryExpense.category.ilike("%electricity%"),
+        cast(FactoryExpense.timestamp, Date) >= start_date
     ).scalar() or Decimal("6000.00")
     
     cost_breakdown = [

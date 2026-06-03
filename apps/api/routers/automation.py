@@ -1,15 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import os
-from uuid import uuid4
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
-from auth import require_owner
+from auth import generate_signed_portal_token, require_owner
 from db import get_db
 from models import Customer, Order, SalesInvoice, User
 from routers.sales import pending_payment_dues, factory_id_filter
@@ -38,10 +36,6 @@ class PaymentReminderTriggerResponse(BaseModel):
     webhook_url: str
 
 
-def generate_customer_portal_token() -> str:
-    return uuid4().hex + uuid4().hex
-
-
 @router.post("/automation/customers/{customer_id}/portal-link", response_model=PortalLinkResponse)
 def generate_customer_portal_link(
     customer_id: int,
@@ -58,8 +52,10 @@ def generate_customer_portal_link(
     if customer is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-    if not customer.portal_access_token:
-        customer.portal_access_token = generate_customer_portal_token()
+    customer.portal_access_token = generate_signed_portal_token(
+        customer_id=customer.id,
+        factory_id=int(current_user.factory_id),
+    )
     customer.store_token = customer.portal_access_token
     customer.is_portal_approved = True
     db.commit()

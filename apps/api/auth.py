@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - optional SaaS dependency
 
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "43200") # 30 days
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "480") # 8 hours
 OTP_EXPIRE_MINUTES = int(os.getenv("OTP_EXPIRE_MINUTES") or "10")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -635,6 +635,8 @@ def get_current_user(
     if user is None:
         raise credentials_error
     if user.factory_id is not None and user.factory_id > 0:
+        from services.tenant_context import set_current_tenant_id
+        set_current_tenant_id(user.factory_id)
         res = get_effective_subscription(db, user.factory_id)
         has_subscription_access = res["access_allowed"]
         if not has_subscription_access and not is_subscription_bypass_path(request.url.path):
@@ -1253,3 +1255,73 @@ def get_user_subscription(
         effective_expires_at=res["effective_expires_at"]
     )
 
+
+import hashlib
+import hmac
+import time
+
+def generate_signed_portal_token(customer_id: int, factory_id: int, validity_seconds: int = 2592000) -> str:
+    """Generates a secure time-bound signed token valid for 30 days by default."""
+    expires_at = int(time.time()) + validity_seconds
+    secret = get_jwt_secret_key().encode()
+    message = f"portal:{customer_id}:{factory_id}:{expires_at}".encode()
+    signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    return f"{customer_id}.{factory_id}.{expires_at}.{signature}"
+
+
+def decode_signed_portal_token(token: str) -> tuple[int, int] | None:
+    """Returns (customer_id, factory_id) when a signed portal token is valid."""
+    try:
+        customer_id_str, factory_id_str, expires_at_str, signature = token.split(".")
+        customer_id = int(customer_id_str)
+        factory_id = int(factory_id_str)
+        expires_at = int(expires_at_str)
+        if time.time() > expires_at:
+            return None
+        secret = get_jwt_secret_key().encode()
+        expected_message = f"portal:{customer_id}:{factory_id}:{expires_at}".encode()
+        expected_signature = hmac.new(secret, expected_message, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            return None
+        return customer_id, factory_id
+    except Exception:
+        return None
+
+def verify_signed_portal_token(token: str, customer_id: int, factory_id: int) -> bool:
+    """Verifies a cryptographically signed time-bound token."""
+    decoded = decode_signed_portal_token(token)
+    if decoded is None:
+        return False
+    return decoded == (int(customer_id), int(factory_id))
+
+
+def generate_storefront_session_token(customer_id: int, store_token: str, validity_seconds: int = 7200) -> str:
+    """Generates a secure cryptographically signed storefront session token."""
+    import base64
+    expires_at = int(time.time()) + validity_seconds
+    secret = get_jwt_secret_key().encode()
+    clean_token = store_token.strip()
+    message = f"storefront_session:{customer_id}:{clean_token}:{expires_at}".encode()
+    signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    b64_token = base64.b64encode(clean_token.encode()).decode()
+    return f"{customer_id}.{expires_at}.{b64_token}.{signature}"
+
+
+def decode_storefront_session_token(token: str) -> tuple[int, str] | None:
+    """Returns (customer_id, store_token) if the storefront session token is valid."""
+    import base64
+    try:
+        customer_id_str, expires_at_str, b64_token, signature = token.split(".", 3)
+        customer_id = int(customer_id_str)
+        expires_at = int(expires_at_str)
+        if time.time() > expires_at:
+            return None
+        store_token = base64.b64decode(b64_token.encode()).decode()
+        secret = get_jwt_secret_key().encode()
+        expected_message = f"storefront_session:{customer_id}:{store_token}:{expires_at}".encode()
+        expected_signature = hmac.new(secret, expected_message, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            return None
+        return customer_id, store_token
+    except Exception:
+        return None

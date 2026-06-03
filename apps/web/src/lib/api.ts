@@ -43,6 +43,17 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  
+  if (config.url) {
+    const storefrontMatch = config.url.match(/\/api\/storefront\/([^\/]+)/);
+    if (storefrontMatch && storefrontMatch[1]) {
+      const storeToken = storefrontMatch[1];
+      const sessionToken = sessionStorage.getItem(`storefront_session_${storeToken}`);
+      if (sessionToken) {
+        config.headers["X-Storefront-Session"] = sessionToken;
+      }
+    }
+  }
   return config;
 });
 

@@ -1,130 +1,487 @@
-# \# Munshi AI - Codex Instructions
+# Munshi AI - Master Project Context
 
-# 
+## Project Overview
 
-# \## Project
+Munshi AI is an AI-Powered Smart ERP / Factory Supervisor SaaS designed for paper cup and paper glass manufacturing units.
 
-# Munshi AI is an AI-powered Smart ERP / Factory Supervisor SaaS for paper cup/glass manufacturing units.
+The goal is to digitize and automate factory operations, reduce manual bookkeeping, provide real-time business visibility, and gradually evolve into an AI Supervisor capable of monitoring production, inventory, finance, CRM, and factory operations.
 
-# 
+---
 
-# \## Stack
+# Current Production Environment
 
-# \- Backend: FastAPI
+## Live URLs
 
-# \- Frontend: React + Vite
+Dashboard:
+https://munshiai.co.in
 
-# \- Database: PostgreSQL
+API:
+https://munshiai.co.in/api
 
-# \- Deployment: Docker Compose on Hostinger VPS
+n8n:
+https://n8n.munshiai.co.in
 
-# \- Reverse Proxy: Caddy
+---
 
-# \- Automation: n8n
+# Technology Stack
 
-# 
+Backend:
 
-# \## Live URLs
+* FastAPI
+* Python
 
-# \- Dashboard: https://munshiai.co.in
+Frontend:
 
-# \- API Base: https://munshiai.co.in/api
+* React
+* Vite
 
-# \- n8n: https://n8n.munshiai.co.in
+Database:
 
-# 
+* PostgreSQL
 
-# \## Golden Rules
+Infrastructure:
 
-# \- Never break multi-tenant `factory\_id` architecture.
+* Docker Compose
 
-# \- Always make backend and frontend changes together when a feature requires both.
+Reverse Proxy:
 
-# \- Do not modify production deployment, Docker, Caddy, env, or database migration files unless the task clearly requires it.
+* Caddy
 
-# \- Before changing anything, inspect existing routes, schemas, models, services, and frontend API calls.
+Automation:
 
-# \- Keep UI mobile-friendly and avoid horizontal scrolling.
+* n8n
 
-# \- Prefer small, safe, incremental changes.
+Hosting:
 
-# \- Show all files changed after completing the task.
+* Hostinger VPS
 
-# \- Explain how to test locally and what to deploy on Hostinger.
+---
 
-# 
+# Multi-Tenant Architecture
 
-# \## Backend Rules
+The entire system is multi-tenant.
 
-# \- Maintain FastAPI structure.
+Core rule:
 
-# \- Validate all request/response schemas.
+Every business record must belong to a specific factory.
 
-# \- Preserve existing database compatibility.
+Factory isolation is mandatory.
 
-# \- Any manual PostgreSQL changes must reflect correctly in backend APIs and frontend UI.
+Never allow data leakage between factories.
 
-# 
+Important field:
 
-# \## Frontend Rules
+factory_id
 
-# \- React/Vite code should remain clean and component-based.
+Every query, API, report, dashboard, inventory calculation, attendance record, order, invoice, production record and financial transaction must remain isolated using factory_id.
 
-# \- Improve readability and UX without breaking existing business logic.
+This rule must never be broken.
 
-# \- Dashboard and inventory pages should show structured data clearly.
+---
 
-# 
+# Authentication System
 
-# \## Deployment Rules
+Current status:
 
-# Local development path:
+Implemented:
 
-# C:\\Users\\Prashant\\OneDrive\\Desktop\\Coding Projects\\ai-erp-system
+* Login
+* Signup
+* Session-based authentication
 
-# 
+Planned:
 
-# Production folder on VPS:
+* Google Login
+* Country Code based phone number signup
+* Mobile number login
+* Subscription-aware access control
 
-# \~/factory-erp
+Requirements:
 
-# 
+* Existing authentication should never break.
+* Backend and frontend changes must remain synchronized.
 
-# Deployment flow:
+Security rules:
 
-# 1\. Local changes
+* Internal n8n/API automation endpoints must require `X-N8N-API-KEY`.
+* `N8N_API_KEY`, `JWT_SECRET_KEY`, and Super Admin secrets must fail closed when missing. Do not add hardcoded fallback secrets.
+* Machine template manual approval is a Super Admin-only action. Factory Owner/Sub-Owner users may submit templates but must not approve them manually.
 
-# 2\. Test locally
+---
 
-# 3\. git add .
+# Factory Onboarding Module
 
-# 4\. git commit
+Purpose:
 
-# 5\. git push origin main
+Capture factory setup information and initialize the ERP.
 
-# 6\. SSH to VPS
+Factory onboarding should collect:
 
-# 7\. cd \~/factory-erp
+* Factory details
+* Product types
+* Machine information
+* Worker information
+* Initial inventory
+* Existing attendance records
+* Existing financial records
 
-# 8\. git pull origin main
+Special Requirement:
 
-# 9\. docker-compose up -d --force-recreate --build web caddy api
+Historical attendance entered during onboarding must merge with future attendance records.
 
-# 10\. Reload Caddy if needed
+Salary calculations must include:
 
-# 
+Past Attendance
++
+Future Daily Attendance
+=======================
 
-# \## Response Style
+Final Salary Calculation
 
-# When I give a prompt:
+---
 
-# 1\. First inspect the relevant code.
+# Inventory Module
 
-# 2\. Then explain the plan briefly.
+Purpose:
 
-# 3\. Then make the changes.
+Track all inventory movement.
 
-# 4\. Then tell me exact test commands.
+Current inventory categories:
 
-# 5\. Then give deployment commands.
+Raw Material:
 
+* Paper Blank
+* Bottom
+
+Consumables:
+
+* Mobil Oil
+* Paraffin Oil
+* Electricity Usage
+
+Packaging:
+
+* Plastic Packets
+* Boxes
+
+Finished Goods:
+
+* Paper Cups
+* Paper Glasses
+
+Requirements:
+
+Inventory must support:
+
+* Stock In
+* Stock Out
+* Current Stock
+* Inventory History
+* Inventory Valuation
+
+UI Requirement:
+
+Avoid horizontal scrolling.
+
+Display inventory category-wise.
+
+Example:
+
+Section 1:
+Bottom Inventory
+
+Section 2:
+Blank Inventory
+
+Section 3:
+Packaging Inventory
+
+Section 4:
+Finished Goods Inventory
+
+---
+
+# Production Module
+
+Purpose:
+
+Track daily manufacturing.
+
+Production data includes:
+
+* Machine
+* Product
+* Shift
+* Production Quantity
+* Wastage
+* Operator
+
+Business Logic:
+
+Production affects:
+
+Raw Material Stock
+↓
+Wastage
+↓
+Finished Goods Stock
+
+All calculations must remain traceable.
+
+---
+
+# Wastage Module
+
+Purpose:
+
+Track production losses.
+
+Examples:
+
+* Blank wastage
+* Bottom wastage
+* Packaging wastage
+
+Requirements:
+
+Separate wastage reporting.
+
+Historical wastage analysis.
+
+Machine-wise wastage tracking.
+
+---
+
+# Worker Management Module
+
+Purpose:
+
+Manage factory workforce.
+
+Features:
+
+* Worker profiles
+* Attendance
+* Salary calculation
+
+Requirement:
+
+Attendance added during onboarding must merge with attendance recorded later.
+
+---
+
+# Finance Module
+
+Purpose:
+
+Track money movement.
+
+Features:
+
+* Purchases
+* Expenses
+* Sales
+* Payments Received
+* Outstanding Payments
+
+Future:
+
+* Profit & Loss
+* Cash Flow
+* AI Insights
+
+---
+
+# CRM Module
+
+Purpose:
+
+Manage customers.
+
+Features:
+
+* Customer database
+* Orders
+* Outstanding balances
+* Payment tracking
+
+Future:
+
+* Customer analytics
+* Purchase trends
+
+---
+
+# Order Management Module
+
+Purpose:
+
+Track customer orders.
+
+Flow:
+
+Order Created
+↓
+Inventory Reserved
+↓
+Dispatch
+↓
+Invoice
+↓
+Payment Collection
+
+---
+
+# Dispatch Module
+
+Purpose:
+
+Track shipment of finished goods.
+
+Requirements:
+
+* Dispatch records
+* Customer linkage
+* Inventory deduction
+
+---
+
+# Invoice Module
+
+Purpose:
+
+Generate customer invoices.
+
+Requirements:
+
+* Customer linked invoices
+* Payment status
+* Outstanding tracking
+
+---
+
+# Payment Reminder Automation
+
+Platform:
+n8n
+
+Purpose:
+
+Automatically remind customers about pending payments.
+
+Future Flow:
+
+Customer Due
+↓
+n8n Workflow
+↓
+Reminder Message
+↓
+Follow-up Tracking
+
+---
+
+# AI Supervisor Vision
+
+Long-Term Goal
+
+Gemma (Groq) powered AI Supervisor.
+
+Responsibilities:
+
+* Production Monitoring
+* Inventory Monitoring
+* Costing Analysis
+* Purchase Suggestions
+* Wastage Detection
+* Financial Insights
+* Outstanding Payment Tracking
+* Factory Health Monitoring
+
+AI should act like a digital factory manager.
+
+---
+
+# Dashboard Requirements
+
+Dashboard must prioritize readability.
+
+Avoid excessive charts.
+
+Prefer:
+
+* Key Metrics
+* Current Stock
+* Production Summary
+* Outstanding Payments
+* Customer Dues
+* Alerts
+
+Factory owners should understand business status within 30 seconds.
+
+---
+
+# Development Rules
+
+Before changing code:
+
+1. Inspect existing implementation.
+2. Understand backend and frontend flow.
+3. Preserve factory_id isolation.
+4. Preserve database compatibility.
+5. Avoid unnecessary refactoring.
+
+After changes:
+
+1. Show changed files.
+2. Explain root cause.
+3. Provide local test steps.
+4. Provide deployment commands.
+
+---
+
+# Deployment Workflow
+
+Local Development
+↓
+Testing
+↓
+Git Commit
+↓
+Git Push
+↓
+Hostinger Pull
+↓
+Docker Rebuild
+↓
+Production Verification
+
+Commands:
+
+git add .
+git commit
+git push origin main
+
+VPS:
+
+cd ~/factory-erp
+
+git pull origin main
+
+docker-compose up -d --force-recreate --build web api caddy
+
+---
+
+# Current Development Goal
+
+Transform Munshi AI from a working ERP into a production-ready SaaS that can be sold to manufacturing units.
+
+Priorities:
+
+1. Stability
+2. Data Accuracy
+3. Factory Isolation
+4. User Experience
+5. Automation
+6. Subscription Management
+7. AI Supervisor

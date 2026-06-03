@@ -11,6 +11,7 @@ from db import Base, get_db
 from machine_template_verifier import TemplateVerificationResult
 from routers import machine_templates
 from routers.machine_templates import get_template_verification_runner, router
+from routers.super_admin import require_super_admin
 
 
 def ensure_testclient_compatibility():
@@ -94,8 +95,14 @@ def test_template_requires_approval_before_general_visibility():
     app.dependency_overrides[get_current_active_user] = lambda: owner
     approve_response = owner_client.patch(f"/api/admin/templates/{submitted['id']}/approve")
 
+    assert approve_response.status_code == 401
+
+    app.dependency_overrides[require_super_admin] = lambda: "super-admin@test.com"
+    approve_response = owner_client.patch(f"/api/admin/templates/{submitted['id']}/approve")
+
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
+    assert approve_response.json()["ai_review"]["approved_by"] == "super-admin@test.com"
 
     app.dependency_overrides[get_current_user] = lambda: supervisor
     app.dependency_overrides[get_current_active_user] = lambda: supervisor

@@ -50,13 +50,18 @@ def override_get_current_user():
     global mock_user
     return mock_user
 
-main_app.dependency_overrides[get_db] = override_get_db
-main_app.dependency_overrides[get_current_user] = override_get_current_user
+@pytest.fixture(autouse=True)
+def setup_db_and_overrides():
+    main_app.dependency_overrides[get_db] = override_get_db
+    main_app.dependency_overrides[get_current_user] = override_get_current_user
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
+    for dep in [get_db, get_current_user]:
+        main_app.dependency_overrides.pop(dep, None)
 
 def test_operations_telemetry_pipeline():
     global mock_user
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
 
     # Create mock Factory and Users
@@ -102,5 +107,4 @@ def test_operations_telemetry_pipeline():
     assert "Worker profile" in data[0]["short_statement"]
     assert data[0]["relative_day"] in ["Today", "Yesterday"]
 
-    # Clean overrides
-    main_app.dependency_overrides.clear()
+
