@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "instructions": [
+    "AGENTS.md",
+    "README.md",
+    "production_readiness_audit.md",
+    "security_audit_report.md",
+    "e2e_integration_test_report.md",
+    "expanded_test_coverage_report.md",
+    "test_guardian_report.md"
+  ],
+
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  },
+
+  "share": "disabled"
+}
