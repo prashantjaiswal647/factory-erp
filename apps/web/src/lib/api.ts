@@ -1120,6 +1120,7 @@ export type CustomerVerificationResponse = {
   message: string;
   customer_id?: number;
   customer_name?: string;
+  storefront_session_token?: string | null;
 };
 
 export function verifyStorefrontCustomer(store_token: string, phone_number: string) {
@@ -1162,9 +1163,37 @@ export type OnboardingBulkUploadType =
 
 export type OnboardingBulkUploadResponse = {
   message: string;
+  overall_status?: "success" | "partial" | "failed" | "ok";
   rows_inserted: number;
   inserted_counts?: Partial<Record<OnboardingBulkUploadType | "master_onboarding", number>>;
+  operation_counts?: {
+    inserted?: number;
+    updated?: number;
+    skipped?: number;
+    failed?: number;
+    warnings?: number;
+  };
+  validation_report?: {
+    fatal_count: number;
+    warning_count: number;
+    info_count: number;
+    successful_rows: number;
+    total_rows_attempted: number;
+    fatal_errors: BulkValidationIssue[];
+    warnings: BulkValidationIssue[];
+    info: BulkValidationIssue[];
+  };
   failed_rows: Array<Record<string, unknown>>;
+};
+
+export type BulkValidationIssue = {
+  row: number | null;
+  field: string;
+  error: string;
+  severity: "fatal" | "warning" | "info";
+  suggested_correction?: string | null;
+  sheet?: string | null;
+  raw_value?: unknown;
 };
 
 export function downloadMasterOnboardingTemplate() {

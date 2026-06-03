@@ -32,6 +32,13 @@ from models import (
     PackagingProfile,
     RawMaterial,
     RawMaterialMetrics,
+    FinishedGoodsStock,
+    Inventory,
+    Machine,
+    MaterialYield,
+    PackagingProfile,
+    RawMaterial,
+    RawMaterialMetrics,
     PackagingMetrics,
     PlasticStock,
     User,
@@ -39,18 +46,6 @@ from models import (
     WorkerOpeningAttendance,
 )
 from schemas import (
-    CustomerPayload,
-    MachinePayload,
-    MaterialYieldPayload,
-    OnboardingCompleteRequest,
-    OnboardingCompleteResponse,
-    PackagingProfilePayload,
-    RawMaterialPayload,
-    Step1Request,
-    Step1Response,
-    Step2MachineItem,
-    Step2Request,
-    Step2Response,
     CustomerPayload,
     MachinePayload,
     MaterialYieldPayload,
@@ -78,6 +73,13 @@ from schemas import (
 from routers.operations import log_factory_operation
 from services.activity_logger import log_activity
 from services.n8n_sync import sync_data_to_n8n_bg
+from services.bulk_validation import (
+    BulkValidationReport,
+    ValidationIssue,
+    ValidationSeverity,
+    enrich_failed_rows,
+    make_report,
+)
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -418,10 +420,76 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
         )
         try:
             for row_variant in expand_bulk_row_variants(sub_tab_type, row):
-                valid_rows.append(model.model_validate(row_variant).model_dump())
+                validated_row = model.model_validate(row_variant).model_dump()
+                validated_row["_row_number"] = int(index) + 1
+                valid_rows.append(validated_row)
         except Exception as exc:
             failed_rows.append({"sheet": sheet_name or sub_tab_type, "row": int(index) + 1, "error": str(exc), "values": row})
     return valid_rows, failed_rows
+
+
+def bulk_unique_key(sub_tab_type: str, row: dict) -> tuple:
+    if sub_tab_type == "company_profile":
+        return ("company_profile",)
+    if sub_tab_type == "worker":
+        return (bulk_str(row.get("name")).lower(),)
+    if sub_tab_type == "machine":
+        return (bulk_str(row.get("machine_name")).lower(),)
+    if sub_tab_type == "blank_stock":
+        return (int(row["size_ml"]), bulk_str(row.get("material_name") or "Plain White").lower())
+    if sub_tab_type == "bottom_reel":
+        return (int(row["bottom_size_mm"]), "plain white")
+    if sub_tab_type == "box_stock":
+        return (bulk_str(row.get("box_type")).lower(),)
+    if sub_tab_type == "plastic_stock":
+        return (bulk_str(row.get("plastic_size_type")).lower(), int(row["used_for_cup_size_ml"]))
+    if sub_tab_type == "finished_goods":
+        product_size_ml = int(row["product_size_ml"])
+        variety = bulk_str(row.get("variety_design") or "Standard/White").lower() or "standard/white"
+        packaging_size_name = bulk_str(row.get("packaging_size_name"))
+        if not packaging_size_name:
+            packaging_size_name = f"{product_size_ml}ML - {row.get('variety_design') or 'Standard/White'}"
+        return (product_size_ml, variety, packaging_size_name.lower())
+    return tuple(sorted((key, str(value)) for key, value in row.items() if not key.startswith("_")))
+
+
+def dedupe_valid_bulk_rows(valid_by_type: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], list[ValidationIssue]]:
+    deduped: dict[str, list[dict]] = {key: [] for key in valid_by_type}
+    warnings: list[ValidationIssue] = []
+    sheet_names = {sub_tab_type: sheet_name for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items()}
+    sheet_names.update({
+        "blank_stock": "Raw Materials",
+        "bottom_reel": "Raw Materials",
+        "box_stock": "Raw Materials",
+        "plastic_stock": "Raw Materials",
+    })
+
+    for sub_tab_type, rows in valid_by_type.items():
+        by_key: dict[tuple, dict] = {}
+        for row in rows:
+            key = bulk_unique_key(sub_tab_type, row)
+            if key in by_key:
+                previous_row = by_key[key]
+                warnings.append(
+                    ValidationIssue(
+                        row=row.get("_row_number"),
+                        field="row_type",
+                        error="Duplicate row in uploaded workbook; the last matching ACTUAL row was used.",
+                        severity=ValidationSeverity.WARNING,
+                        suggested_correction="Keep only one ACTUAL row per unique item if you do not intend to override values.",
+                        sheet=sheet_names.get(sub_tab_type, sub_tab_type),
+                        raw_value=f"previous row {previous_row.get('_row_number')}",
+                    )
+                )
+            by_key[key] = row
+        deduped[sub_tab_type] = list(by_key.values())
+    return deduped, warnings
+
+
+def increment_bulk_stat(stats: dict[str, int] | None, key: str, value: int = 1) -> None:
+    if stats is None:
+        return
+    stats[key] = int(stats.get(key, 0)) + value
 
 
 def read_standard_sheet(workbook: dict, sheet_name: str, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
@@ -632,7 +700,7 @@ def log_bulk_inventory_uploads(
         )
 
 
-def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_rows: list[dict]) -> int:
+def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_rows: list[dict], stats: dict[str, int] | None = None) -> int:
     factory_id = int(current_user.factory_id)
     if not valid_rows:
         return 0
@@ -655,6 +723,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         factory.next_bill_of_supply_number = row["bill_of_supply_start_seq"]
         factory.next_tax_invoice_number = row["tax_invoice_start_seq"]
         factory.next_bill_of_supply_simple_number = row["bill_of_supply_simple_start_seq"]
+        increment_bulk_stat(stats, "updated")
         return 1
 
     if sub_tab_type == "worker":
@@ -670,6 +739,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         for row in valid_rows:
             worker_name = row["name"].strip()
             if not worker_name:
+                increment_bulk_stat(stats, "skipped")
                 continue
             worker_key = worker_name.lower()
             phone, _ = normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else (None, None)
@@ -678,6 +748,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 worker = Worker(factory_id=factory_id, name=worker_name)
                 db.add(worker)
                 existing_workers[worker_key] = worker
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             worker.phone = phone
             worker.daily_wage_rate = row["daily_wages"]
             worker.daily_wages = row["daily_wages"]
@@ -726,6 +799,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         for row in valid_rows:
             machine_name = row["machine_name"].strip()
             if not machine_name:
+                increment_bulk_stat(stats, "skipped")
                 continue
             machine = (
                 db.query(Machine)
@@ -739,6 +813,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if machine is None:
                 machine = Machine(factory_id=factory_id, name=machine_name)
                 db.add(machine)
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             machine.name = machine_name
             machine.machine_name = machine_name
             machine.machine_type = machine_name
@@ -773,6 +850,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if stock is None:
                 stock = BlankStock(factory_id=factory_id, blank_size_ml=blank_size_ml, variety=variety)
                 db.add(stock)
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             stock.linked_bottom_size_mm = blank_size_ml
             stock.weight_per_bora_kg = row["kg_per_sack"]
             stock.total_boras = stock.total_boras or 0
@@ -799,6 +879,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if stock is None:
                 stock = BottomStock(factory_id=factory_id, bottom_size_mm=bottom_size_mm, variety=variety)
                 db.add(stock)
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             stock.total_rolls = row["total_individual_rolls"]
             stock.total_weight_kg = row["total_weight_kg"]
             stock.total_qty_kg = row["total_weight_kg"]
@@ -822,6 +905,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if stock is None:
                 stock = BoxStock(factory_id=factory_id, packaging_size_name=packaging_size_name)
                 db.add(stock)
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             stock.box_type = packaging_size_name
             stock.quantity = row["box_quantity_pieces"]
             stock.total_boxes = row["box_quantity_pieces"]
@@ -848,6 +934,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if stock is None:
                 stock = PlasticStock(factory_id=factory_id, plastic_size_name=plastic_size_name, cup_size_ml=cup_size_ml)
                 db.add(stock)
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
             stock.total_boras = row["total_boras_sacks"]
             stock.weight_per_bora_kg = row["weight_per_bora_kg"]
             stock.price_per_kg = row["price_per_kg_rs"]
@@ -927,11 +1016,13 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                     variant_name=variety,
                 )
                 db.add(stock)
+                increment_bulk_stat(stats, "inserted")
             else:
                 stock.cup_size_ml = product_size_ml
                 stock.boxes_available = initial_stock_boxes
                 stock.category = "CUP_FINISHED"
                 stock.variant_name = variety
+                increment_bulk_stat(stats, "updated")
             saved_count += 1
         return saved_count
 
@@ -961,6 +1052,37 @@ def download_master_onboarding_template(
     )
 
 
+@v1_router.post("/bulk-upload/master/validate")
+async def validate_master_onboarding(
+    file: UploadFile = File(...),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+):
+    """
+    Dry-run validation: parse the Excel workbook and return a detailed row-by-row
+    validation report WITHOUT committing anything to the database.
+    """
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
+
+    valid_by_type, failed_rows = read_master_bulk_excel(await file.read())
+    valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
+
+    # Count total ACTUAL rows across all sheets
+    total_attempted = sum(len(rows) for rows in valid_by_type.values())
+    successful_rows = total_attempted  # in dry-run all valid rows are "would succeed"
+
+    issues = enrich_failed_rows(failed_rows) + duplicate_warnings
+    report = make_report(issues, successful_rows=successful_rows, total_rows_attempted=total_attempted + len(failed_rows))
+
+    return {
+        "dry_run": True,
+        "message": "Validation complete. No data was imported.",
+        "overall_status": "failed" if report.has_fatal else ("partial" if report.warning_issues else "ok"),
+        "validation_report": report.to_dict(),
+        "would_import_counts": {k: len(v) for k, v in valid_by_type.items() if v},
+    }
+
+
 @v1_router.post("/bulk-upload/master")
 async def bulk_upload_master_onboarding(
     background_tasks: BackgroundTasks,
@@ -972,23 +1094,71 @@ async def bulk_upload_master_onboarding(
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
     valid_by_type, failed_rows = read_master_bulk_excel(await file.read())
-    if failed_rows:
-        raise HTTPException(status_code=422, detail=failed_rows)
+    valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
+
+    # Build enriched validation report
+    total_attempted = sum(len(rows) for rows in valid_by_type.values()) + len(failed_rows)
+    issues = enrich_failed_rows(failed_rows) + duplicate_warnings
+
+    # Fatal errors block the entire import
+    fatal_issues = [i for i in issues if i.severity == ValidationSeverity.FATAL]
+    if fatal_issues:
+        report = make_report(issues, successful_rows=0, total_rows_attempted=total_attempted)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Import rejected due to validation errors. Fix the highlighted rows and upload again.",
+                "overall_status": "failed",
+                "validation_report": report.to_dict(),
+                # Keep legacy failed_rows for backward compatibility
+                "failed_rows": failed_rows,
+            },
+        )
+
     if not any(valid_by_type.values()):
-        raise HTTPException(status_code=422, detail=[{"sheet": "Workbook", "row": None, "error": "No valid rows found"}])
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "No importable rows found. Mark data rows with row_type = ACTUAL.",
+                "overall_status": "failed",
+                "validation_report": make_report([], 0, 0).to_dict(),
+                "failed_rows": [{"sheet": "Workbook", "row": None, "error": "No valid rows found"}],
+            },
+        )
 
     inserted_counts: dict[str, int] = {}
+    operation_counts: dict[str, int] = {
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+        "warnings": len([issue for issue in issues if issue.severity == ValidationSeverity.WARNING]),
+    }
     try:
         for sub_tab_type in BULK_TEMPLATE_COLUMNS:
-            inserted_counts[sub_tab_type] = apply_bulk_rows(db, current_user, sub_tab_type, valid_by_type.get(sub_tab_type, []))
+            inserted_counts[sub_tab_type] = apply_bulk_rows(
+                db,
+                current_user,
+                sub_tab_type,
+                valid_by_type.get(sub_tab_type, []),
+                operation_counts,
+            )
         db.commit()
         total_rows = sum(inserted_counts.values())
         log_bulk_upload(background_tasks, db, current_user, "master_onboarding", total_rows)
         log_bulk_inventory_uploads(background_tasks, db, current_user, inserted_counts)
+
+        report = make_report(issues, successful_rows=total_rows, total_rows_attempted=total_attempted)
+        overall_status = "partial" if report.warning_issues else "success"
+
         return {
             "message": "Master onboarding bulk upload completed",
+            "overall_status": overall_status,
             "rows_inserted": total_rows,
             "inserted_counts": inserted_counts,
+            "operation_counts": operation_counts,
+            "validation_report": report.to_dict(),
+            # kept for backward compatibility
             "failed_rows": [],
         }
     except HTTPException:
@@ -996,10 +1166,30 @@ async def bulk_upload_master_onboarding(
         raise
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=[{"sheet": "Database", "row": None, "error": str(exc.orig)}]) from exc
+        db_issues = enrich_failed_rows([{"sheet": "Database", "row": None, "error": str(exc.orig)}])
+        report = make_report(db_issues, successful_rows=0, total_rows_attempted=total_attempted)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Database integrity error. A duplicate or conflicting record may already exist. Review the validation report and upload again.",
+                "overall_status": "failed",
+                "validation_report": report.to_dict(),
+                "failed_rows": [{"sheet": "Database", "row": None, "error": str(exc.orig)}],
+            },
+        ) from exc
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=[{"sheet": "Database", "row": None, "error": str(exc)}]) from exc
+        db_issues = enrich_failed_rows([{"sheet": "Database", "row": None, "error": str(exc)}])
+        report = make_report(db_issues, successful_rows=0, total_rows_attempted=total_attempted)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Unexpected server error during import.",
+                "overall_status": "failed",
+                "validation_report": report.to_dict(),
+                "failed_rows": [{"sheet": "Database", "row": None, "error": str(exc)}],
+            },
+        ) from exc
 
 
 class OnboardingWorkerSummary(BaseModel):
@@ -1936,7 +2126,7 @@ def delete_onboarding_worker(
         )
     except Exception as e:
         db.rollback()
-        print(f"DELETE ERROR: {e}")
+        logger.warning("Worker delete failed for worker_id=%s factory_id=%s", worker_id, current_user.factory_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Worker delete karte waqt error aaya.",

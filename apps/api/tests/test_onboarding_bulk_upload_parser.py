@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from db import Base
 from models import BottomStock, Machine, Worker, WorkerOpeningAttendance
-from routers.onboarding import apply_bulk_rows, validate_bulk_frame
+from routers.onboarding import apply_bulk_rows, dedupe_valid_bulk_rows, validate_bulk_frame
 
 
 def test_bottom_reel_bulk_rows_default_blank_weight_to_zero():
@@ -33,6 +33,7 @@ def test_bottom_reel_bulk_rows_default_blank_weight_to_zero():
             "bottom_size_mm": 65,
             "total_individual_rolls": 49,
             "total_weight_kg": Decimal("0"),
+            "_row_number": 1,
         }
     ]
 
@@ -97,6 +98,82 @@ def test_worker_bulk_upload_updates_existing_worker_in_same_factory():
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
+
+
+def test_worker_bulk_upload_same_file_reupload_updates_without_duplicates():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        rows = [
+            {
+                "row_type": "ACTUAL",
+                "name": "Anjal Kumar",
+                "mobile_number": "8285817277",
+                "daily_wages": Decimal("400"),
+                "duty_hours": Decimal("8"),
+                "previous_attendance_details": Decimal("0"),
+            }
+        ]
+
+        first_stats = {"inserted": 0, "updated": 0, "skipped": 0}
+        first_count = apply_bulk_rows(db, current_user, "worker", rows, first_stats)
+        db.commit()
+
+        second_rows = [{**rows[0], "daily_wages": Decimal("450")}]
+        second_stats = {"inserted": 0, "updated": 0, "skipped": 0}
+        second_count = apply_bulk_rows(db, current_user, "worker", second_rows, second_stats)
+        db.commit()
+
+        workers = db.query(Worker).filter(Worker.factory_id == 2, Worker.name == "Anjal Kumar").all()
+        assert first_count == 1
+        assert second_count == 1
+        assert first_stats["inserted"] == 1
+        assert second_stats["updated"] == 1
+        assert len(workers) == 1
+        assert workers[0].daily_wages == Decimal("450")
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_duplicate_rows_in_same_workbook_are_deduped_with_warning():
+    valid_by_type = {
+        "worker": [
+            {
+                "row_type": "ACTUAL",
+                "name": "Anjal Kumar",
+                "mobile_number": "8285817277",
+                "daily_wages": Decimal("400"),
+                "duty_hours": Decimal("8"),
+                "previous_attendance_details": Decimal("0"),
+                "_row_number": 3,
+            },
+            {
+                "row_type": "ACTUAL",
+                "name": "Anjal Kumar",
+                "mobile_number": "8285817277",
+                "daily_wages": Decimal("450"),
+                "duty_hours": Decimal("8"),
+                "previous_attendance_details": Decimal("0"),
+                "_row_number": 4,
+            },
+        ]
+    }
+
+    deduped, warnings = dedupe_valid_bulk_rows(valid_by_type)
+
+    assert len(deduped["worker"]) == 1
+    assert deduped["worker"][0]["daily_wages"] == Decimal("450")
+    assert len(warnings) == 1
+    assert warnings[0].row == 4
+    assert warnings[0].severity == "warning"
 
 
 def test_bottom_reel_bulk_upload_updates_existing_stock_in_same_factory():
