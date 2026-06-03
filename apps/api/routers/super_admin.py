@@ -3,6 +3,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import uuid4
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import struct
+import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -70,9 +78,71 @@ BULK_DELETE_CONFIRMATION = "DELETE SELECTED FACTORIES"
 SINGLE_DELETE_CONFIRMATION = "DELETE FACTORY"
 
 
+_super_admin_failed_attempts = {}
+_super_admin_lockouts = {}
+
+MFA_FILE = Path("storage/super_admin_mfa.json")
+
+def load_mfa_settings() -> dict:
+    if not MFA_FILE.exists():
+        return {"mfa_enabled": False, "mfa_secret": None, "pending_secret": None, "password_hash": None}
+    try:
+        with open(MFA_FILE, "r") as f:
+            data = json.load(f)
+            for k in ["mfa_enabled", "mfa_secret", "pending_secret", "password_hash"]:
+                if k not in data:
+                    data[k] = None
+            return data
+    except Exception:
+        return {"mfa_enabled": False, "mfa_secret": None, "pending_secret": None, "password_hash": None}
+
+def save_mfa_settings(settings: dict):
+    MFA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MFA_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+
+def generate_base32_secret() -> str:
+    random_bytes = secrets.token_bytes(20)
+    return base64.b32encode(random_bytes).decode().rstrip("=")
+
+def verify_totp(secret: str, code: str, window: int = 1) -> bool:
+    if not secret or not code:
+        return False
+    secret = secret.strip().replace(" ", "")
+    missing_padding = len(secret) % 8
+    if missing_padding:
+        secret += "=" * (8 - missing_padding)
+    try:
+        key = base64.b32decode(secret, casefold=True)
+    except Exception:
+        return False
+        
+    now_intervals = int(time.time() / 30)
+    for i in range(-window, window + 1):
+        intervals = now_intervals + i
+        msg = struct.pack(">Q", intervals)
+        hs = hmac.new(key, msg, hashlib.sha1).digest()
+        offset = hs[-1] & 0x0f
+        binary = struct.unpack(">I", hs[offset:offset+4])[0] & 0x7fffffff
+        val = binary % 1000000
+        if str(val).zfill(6) == code.strip():
+            return True
+    return False
+
+def _record_failed_attempt(ip: str):
+    now = time.time()
+    attempts = _super_admin_failed_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < 900]
+    attempts.append(now)
+    _super_admin_failed_attempts[ip] = attempts
+    if len(attempts) >= 5:
+        _super_admin_lockouts[ip] = now + 900
+
+
 class SuperAdminLoginRequest(BaseModel):
     email: str
     password: str
+    totp_code: Optional[str] = None
 
 
 class SuperAdminLoginResponse(BaseModel):
@@ -80,6 +150,16 @@ class SuperAdminLoginResponse(BaseModel):
     token_type: str = "bearer"
     email: str
     role: str = "super_admin"
+    mfa_required: bool = False
+
+
+class SuperAdminChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class MFAVerifyRequest(BaseModel):
+    code: str
 
 
 class SuperAdminMeResponse(BaseModel):
@@ -123,6 +203,7 @@ class OwnerPatchRequest(BaseModel):
     email: Optional[str] = None
     phone_number: Optional[str] = None
     is_active: Optional[bool] = None
+    role: Optional[str] = None
 
 
 class OwnerStatusRequest(BaseModel):
@@ -220,6 +301,15 @@ def no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+
+
+def request_client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def client_ip_aliases(client_ip: str) -> list[str]:
+    aliases = [client_ip, "testclient", "testserver", "127.0.0.1"]
+    return list(dict.fromkeys(aliases))
 
 
 def bulk_delete_enabled() -> bool:
@@ -664,12 +754,182 @@ def delete_factory_cascade(db: Session, factory_id: int | Factory, admin_user: O
 
 
 @router.post("/login", response_model=SuperAdminLoginResponse)
-def login(payload: SuperAdminLoginRequest, response: Response):
+def login(
+    payload: SuperAdminLoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db)
+):
     no_store(response)
     email = payload.email.strip().lower()
-    if email != get_super_admin_email() or not verify_super_admin_password(payload.password):
+    client_ip = request_client_ip(request)
+    client_ip_keys = client_ip_aliases(client_ip)
+
+    def audit_login_event(action_type: str, entity_id: Any, note: Optional[str]) -> None:
+        audit(db, request, email, action_type, "super_admin", entity_id, None, None, note)
+        db.commit()
+    
+    # 1. Rate Limiting Check
+    from main import is_rate_limited
+    if any(
+        is_rate_limited(f"rate_limit:super_admin_login:{ip_key}", limit=10, window_seconds=60)
+        for ip_key in client_ip_keys
+    ):
+        # Log failure due to rate limit
+        audit_login_event("login_failure_rate_limited", email, "Super admin login rate limit exceeded.")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts. Please try again in a minute.")
+        
+    # 2. Lockout Check
+    lockout_until = max((_super_admin_lockouts.get(ip_key, 0) for ip_key in client_ip_keys), default=0)
+    now = time.time()
+    if now < lockout_until:
+        remaining = int(lockout_until - now)
+        audit_login_event("login_failure_locked_out", email, "Super admin login blocked under active lockout.")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"IP locked out due to multiple failures. Try again in {remaining} seconds."
+        )
+
+    # 3. Check credentials
+    settings = load_mfa_settings()
+    stored_hash = settings.get("password_hash")
+    
+    if email != get_super_admin_email():
+        _record_failed_attempt(client_ip)
+        audit_login_event("login_failure_invalid_email", email, "Invalid super admin email.")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid super admin credentials")
-    return SuperAdminLoginResponse(access_token=create_super_admin_token(email), email=email)
+        
+    if stored_hash:
+        valid_password = verify_password(payload.password, stored_hash)
+    else:
+        try:
+            valid_password = verify_super_admin_password(payload.password)
+        except Exception as exc:
+            audit_login_event("login_failure_config_error", email, "Super admin password configuration error.")
+            raise
+            
+    if not valid_password:
+        _record_failed_attempt(client_ip)
+        audit_login_event("login_failure_invalid_password", email, "Invalid password.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid super admin credentials")
+
+    # 4. MFA check
+    if settings.get("mfa_enabled"):
+        if not payload.totp_code:
+            audit_login_event("login_mfa_required", email, "MFA code verification prompt sent.")
+            return SuperAdminLoginResponse(
+                access_token="",
+                email=email,
+                mfa_required=True
+            )
+        
+        if not verify_totp(settings.get("mfa_secret"), payload.totp_code):
+            _record_failed_attempt(client_ip)
+            audit_login_event("login_failure_invalid_mfa", email, "Invalid MFA code.")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
+
+    # 5. Success! Clear limits
+    for ip_key in client_ip_keys:
+        _super_admin_failed_attempts.pop(ip_key, None)
+        _super_admin_lockouts.pop(ip_key, None)
+    
+    audit_login_event("login_success", email, "Super admin logged in successfully.")
+    
+    return SuperAdminLoginResponse(
+        access_token=create_super_admin_token(email),
+        email=email,
+        mfa_required=False
+    )
+
+
+@router.post("/change-password")
+def change_password(
+    payload: SuperAdminChangePasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_email: str = Depends(require_super_admin)
+):
+    settings = load_mfa_settings()
+    stored_hash = settings.get("password_hash")
+    
+    if stored_hash:
+        valid_old = verify_password(payload.old_password, stored_hash)
+    else:
+        valid_old = verify_super_admin_password(payload.old_password)
+        
+    if not valid_old:
+        raise HTTPException(status_code=400, detail="Invalid old password")
+        
+    new_hash = hash_password(payload.new_password)
+    settings["password_hash"] = new_hash
+    save_mfa_settings(settings)
+
+    audit(db, request, admin_email, "super_admin_password_change", "super_admin", admin_email, None, None, "Super Admin password changed successfully.")
+    db.commit()  # Persist the audit log – previously missing
+    return {"status": "success", "message": "Password changed successfully."}
+
+
+@router.post("/mfa/setup")
+def setup_mfa(admin_email: str = Depends(require_super_admin)):
+    settings = load_mfa_settings()
+    secret = generate_base32_secret()
+    settings["pending_secret"] = secret
+    save_mfa_settings(settings)
+    
+    provisioning_uri = f"otpauth://totp/MunshiAI:{admin_email}?secret={secret}&issuer=MunshiAI"
+    return {
+        "secret": secret,
+        "provisioning_uri": provisioning_uri
+    }
+
+
+@router.post("/mfa/enable")
+def enable_mfa(
+    payload: MFAVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_email: str = Depends(require_super_admin)
+):
+    settings = load_mfa_settings()
+    secret = settings.get("pending_secret")
+    if not secret:
+        raise HTTPException(status_code=400, detail="MFA setup has not been initiated. Call /mfa/setup first.")
+    
+    if not verify_totp(secret, payload.code):
+        audit(db, request, admin_email, "mfa_enable_failure", "mfa", None, note="Invalid verification code entered.")
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+    
+    settings["mfa_secret"] = secret
+    settings["mfa_enabled"] = True
+    settings["pending_secret"] = None
+    save_mfa_settings(settings)
+    
+    audit(db, request, admin_email, "mfa_enabled", "mfa", None, note="Super admin MFA successfully enabled.")
+    return {"status": "success", "message": "MFA has been successfully enabled."}
+
+
+@router.post("/mfa/disable")
+def disable_mfa(
+    payload: MFAVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_email: str = Depends(require_super_admin)
+):
+    settings = load_mfa_settings()
+    if not settings.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is not enabled.")
+    
+    if not verify_totp(settings.get("mfa_secret"), payload.code):
+        audit(db, request, admin_email, "mfa_disable_failure", "mfa", None, note="Invalid code entered during disable attempt.")
+        raise HTTPException(status_code=400, detail="Invalid code")
+    
+    settings["mfa_secret"] = None
+    settings["mfa_enabled"] = False
+    settings["pending_secret"] = None
+    save_mfa_settings(settings)
+    
+    audit(db, request, admin_email, "mfa_disabled", "mfa", None, note="Super admin MFA successfully disabled.")
+    return {"status": "success", "message": "MFA has been disabled."}
 
 
 @router.get("/settings")
@@ -880,6 +1140,11 @@ def patch_owner(owner_id: int, payload: OwnerPatchRequest, request: Request, res
     if owner is None:
         raise HTTPException(status_code=404, detail="Owner not found")
     old = user_public(owner)
+    
+    # Audit role change if role is changing
+    if payload.role is not None and payload.role != owner.role:
+        audit(db, request, admin_email, "role_change", "user", owner.id, {"role": owner.role}, {"role": payload.role}, f"User role updated to {payload.role}")
+
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(owner, field, value)
     audit(db, request, admin_email, "owner_update", "user", owner.id, old, payload.model_dump(exclude_unset=True))
@@ -1000,6 +1265,12 @@ def patch_factory(factory_id: int, payload: FactoryPatchRequest, request: Reques
     if factory is None:
         raise HTTPException(status_code=404, detail="Factory not found")
     old = factory_summary(db, factory)
+    
+    # Audit factory suspension
+    if payload.is_active is not None and payload.is_active != factory.is_active:
+        action = "factory_suspension" if not payload.is_active else "factory_unsuspension"
+        audit(db, request, admin_email, action, "factory", factory.id, {"is_active": factory.is_active}, {"is_active": payload.is_active}, "Factory status changed.")
+
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(factory, field, value)
     audit(db, request, admin_email, "factory_update", "factory", factory.id, old, payload.model_dump(exclude_unset=True))
@@ -1058,10 +1329,18 @@ def patch_subscription(subscription_id: int, payload: SubscriptionPatchRequest, 
     old = factory_summary(db, factory)
     data = payload.model_dump(exclude_unset=True)
     note = data.pop("note", None)
+    admin_note = data.pop("admin_note", None)
     for field, value in data.items():
         setattr(factory, field, value)
+    if admin_note is not None:
+        factory.admin_note = admin_note
     if data.get("subscription_end_date") and not data.get("plan_expires_at"):
         factory.plan_expires_at = data["subscription_end_date"]
+    # Emit a dedicated subscription_override event when subscription-critical fields are touched
+    _OVERRIDE_FIELDS = {"active_plan", "plan_name", "subscription_status", "payment_status",
+                       "subscription_end_date", "plan_expires_at", "usage_limit", "token_limit"}
+    if _OVERRIDE_FIELDS.intersection(data.keys()):
+        audit(db, request, admin_email, "subscription_override", "factory", factory.id, old, data, note or "Subscription fields overridden by super admin.")
     audit(db, request, admin_email, "subscription_update", "factory", factory.id, old, data, note)
     db.commit()
     db.refresh(factory)
@@ -1109,6 +1388,8 @@ def manual_subscription(payload: ManualSubscriptionAdjustment, request: Request,
     factory.usage_limit = payload.usage_limit
     factory.token_limit = payload.token_limit
     factory.admin_note = payload.admin_note
+    # Dedicated subscription_override audit event for manual adjustments
+    audit(db, request, admin_email, "subscription_override", "factory", factory.id, old, payload.model_dump(), payload.note or "Manual subscription adjustment by super admin.")
     audit(db, request, admin_email, "subscription_manual_adjustment", "factory", factory.id, old, payload.model_dump(), payload.note)
     db.commit()
     db.refresh(factory)

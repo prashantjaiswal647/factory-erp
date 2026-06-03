@@ -117,6 +117,53 @@ def test_storefront_session_token_cryptography():
     expired_token = generate_storefront_session_token(customer_id=10, store_token="test_store_token_123", validity_seconds=-1)
     assert decode_storefront_session_token(expired_token) is None
 
+def test_storefront_session_token_rotates_on_reverification():
+    """Verify each customer verification can issue a distinct signed session token for rotation."""
+    first_token = generate_storefront_session_token(customer_id=10, store_token="test_store_token_123")
+    second_token = generate_storefront_session_token(customer_id=10, store_token="test_store_token_123")
+
+    assert first_token != second_token
+    assert decode_storefront_session_token(first_token) == (10, "test_store_token_123")
+    assert decode_storefront_session_token(second_token) == (10, "test_store_token_123")
+
+def test_storefront_session_cookie_is_hardened_for_production(monkeypatch):
+    """Verify production storefront cookies are HttpOnly, Secure, Strict, and explicitly expiring."""
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("STOREFRONT_COOKIE_SECURE", raising=False)
+    client = TestClient(main_app)
+
+    response = client.post(
+        "/api/store/verify-customer",
+        json={"store_token": "test_store_token_123", "phone_number": "9876543210"},
+    )
+
+    assert response.status_code == 200
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "storefront_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=strict" in set_cookie
+    assert "Max-Age=7200" in set_cookie
+    assert "expires=" in set_cookie.lower()
+
+def test_storefront_cookie_secure_can_be_disabled_only_for_local_dev(monkeypatch):
+    """Verify local HTTP development can opt out of Secure while retaining HttpOnly and Strict."""
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("STOREFRONT_COOKIE_SECURE", raising=False)
+    client = TestClient(main_app)
+
+    response = client.post(
+        "/api/store/verify-customer",
+        json={"store_token": "test_store_token_123", "phone_number": "9876543210"},
+    )
+
+    assert response.status_code == 200
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "storefront_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" not in set_cookie
+    assert "SameSite=strict" in set_cookie
+
 def test_verify_customer_rate_limiting():
     """Verify that the verify-customer endpoint rate limits requests from the same IP client (5 requests/minute)."""
     client = TestClient(main_app)
@@ -376,4 +423,3 @@ def test_priority3_machine_onboarding_access_control():
         
     # Clean up overrides
     main_app.dependency_overrides.pop(get_current_user, None)
-

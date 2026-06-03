@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 import random
 import re
@@ -35,6 +36,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 public_router = APIRouter(prefix="/auth", tags=["auth"])
 v1_router = APIRouter(prefix="/api/v1", tags=["v1"])
+logger = logging.getLogger(__name__)
 
 
 def is_trial_bypass_enabled() -> bool:
@@ -190,17 +192,17 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     if user is None and "@" not in identifier:
         user = get_user_by_username(db, identifier)
     if user is None:
-        print(f"AUTH DEBUG: User not found for identifier={identifier!r}")
+        logger.info("Authentication rejected: user not found")
         return None
     try:
         password_matches = verify_password(password, user.password_hash)
     except Exception as exc:
-        print(f"AUTH DEBUG: Password hash verification error for user_id={user.id}, identifier={identifier!r}: {exc}")
+        logger.warning("Authentication rejected: password hash verification failed for user_id=%s", user.id, exc_info=True)
         return None
     if not password_matches:
-        print(f"AUTH DEBUG: Password mismatch for user_id={user.id}, identifier={identifier!r}")
+        logger.info("Authentication rejected: password mismatch for user_id=%s", user.id)
         return None
-    print(f"AUTH DEBUG: Authentication success for user_id={user.id}, role={user.role}, factory_id={user.factory_id}")
+    logger.info("Authentication succeeded for user_id=%s role=%s factory_id=%s", user.id, user.role, user.factory_id)
     return user
 
 
@@ -510,17 +512,20 @@ def resolve_factory_subscription(factory: Optional[Factory]) -> dict:
 
 
 def log_subscription_resolution(factory_id: Optional[int], res: dict) -> None:
-    print(
+    logger.info(
         "[SUBSCRIPTION_RESOLVER] "
-        f"factory_id={factory_id} "
-        f"active_plan={res.get('active_plan')} "
-        f"plan_name={res.get('plan_name')} "
-        f"subscription_status={res.get('subscription_status')} "
-        f"payment_status={res.get('payment_status')} "
-        f"subscription_end_date={res.get('subscription_end_date')} "
-        f"plan_expires_at={res.get('plan_expires_at')} "
-        f"days_left={res.get('days_left')} "
-        f"access_allowed={res.get('access_allowed')}"
+        "factory_id=%s active_plan=%s plan_name=%s subscription_status=%s "
+        "payment_status=%s subscription_end_date=%s plan_expires_at=%s "
+        "days_left=%s access_allowed=%s",
+        factory_id,
+        res.get("active_plan"),
+        res.get("plan_name"),
+        res.get("subscription_status"),
+        res.get("payment_status"),
+        res.get("subscription_end_date"),
+        res.get("plan_expires_at"),
+        res.get("days_left"),
+        res.get("access_allowed"),
     )
 
 
@@ -757,7 +762,7 @@ def request_otp(
     otp = generate_otp()
     store_otp(db, full_phone_number, otp)
     # MOCK: In production, integrate Twilio / AWS SNS / MSG91 here.
-    print(f"[MOCK OTP] Phone: {full_phone_number} | OTP: {otp}")
+    logger.info("Mock OTP generated for auth request")
     return {"message": "OTP sent successfully (mock)", "phone_number": full_phone_number}
 
 
@@ -817,7 +822,7 @@ def login_for_access_token(
     x_factory_id: Optional[int] = Header(default=None, alias="X-Factory-ID"),
     db: Session = Depends(get_db),
 ):
-    print(f"AUTH DEBUG: OAuth login attempt username={form_data.username!r}")
+    logger.info("OAuth password login attempt received")
     user = authenticate_user(db, form_data.username, form_data.password)
     if user is None:
         raise HTTPException(
@@ -853,16 +858,16 @@ def login_for_access_token(
 @public_router.post("/login", response_model=LoginResponse)
 @public_router.post("/login/", response_model=LoginResponse, include_in_schema=False)
 def login_json(payload: LoginRequest, db: Session = Depends(get_db)):
-    print(f"AUTH DEBUG: JSON login attempt identifier={payload.identifier.strip()!r}")
+    logger.info("JSON login attempt received")
     user = authenticate_user(db, payload.identifier.strip(), payload.password)
     if user is None:
-        print(f"AUTH DEBUG: JSON login rejected identifier={payload.identifier.strip()!r}")
+        logger.info("JSON login rejected")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
     if user.factory_id is None or user.factory_id <= 0:
-        print(f"AUTH DEBUG: JSON login rejected, factory missing user_id={user.id}, factory_id={user.factory_id}")
+        logger.warning("JSON login rejected: factory missing for user_id=%s", user.id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Factory is not assigned",
@@ -943,7 +948,7 @@ def signup_json(payload: SignupRequest, background_tasks: BackgroundTasks, db: S
 
     # Legacy Google Sheet task commented out (now handled by n8n sheets automation)
     # background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
-    print(f"[SIGNUP] Skipping legacy google sheets task for factory_id={factory.id} - handled by n8n flow")
+    logger.info("Signup completed; legacy Google Sheets task skipped for factory_id=%s", factory.id)
 
     return {
         "message": "Signup successful. Please log in.",
@@ -1058,7 +1063,7 @@ def complete_google_signup(payload: GoogleSignupCompleteRequest, background_task
 
     # Legacy Google Sheet task commented out (now handled by n8n sheets automation)
     # background_tasks.add_task(initialize_factory_google_sheet_task, factory.id)
-    print(f"[GOOGLE SIGNUP] Skipping legacy google sheets task for factory_id={factory.id} - handled by n8n flow")
+    logger.info("Google signup completed; legacy Google Sheets task skipped for factory_id=%s", factory.id)
 
     return build_login_response(user, db)
 
@@ -1298,27 +1303,41 @@ def verify_signed_portal_token(token: str, customer_id: int, factory_id: int) ->
 def generate_storefront_session_token(customer_id: int, store_token: str, validity_seconds: int = 7200) -> str:
     """Generates a secure cryptographically signed storefront session token."""
     import base64
+    import json
+    import secrets
     expires_at = int(time.time()) + validity_seconds
     secret = get_jwt_secret_key().encode()
     clean_token = store_token.strip()
-    message = f"storefront_session:{customer_id}:{clean_token}:{expires_at}".encode()
+    nonce = secrets.token_urlsafe(16)
+    payload = {"store_token": clean_token, "nonce": nonce}
+    b64_token = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    message = f"storefront_session:{customer_id}:{clean_token}:{expires_at}:{nonce}".encode()
     signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
-    b64_token = base64.b64encode(clean_token.encode()).decode()
     return f"{customer_id}.{expires_at}.{b64_token}.{signature}"
 
 
 def decode_storefront_session_token(token: str) -> tuple[int, str] | None:
     """Returns (customer_id, store_token) if the storefront session token is valid."""
     import base64
+    import json
     try:
         customer_id_str, expires_at_str, b64_token, signature = token.split(".", 3)
         customer_id = int(customer_id_str)
         expires_at = int(expires_at_str)
         if time.time() > expires_at:
             return None
-        store_token = base64.b64decode(b64_token.encode()).decode()
+        decoded_payload = base64.urlsafe_b64decode(b64_token.encode()).decode()
+        nonce = ""
+        try:
+            payload = json.loads(decoded_payload)
+            store_token = str(payload.get("store_token") or "")
+            nonce = str(payload.get("nonce") or "")
+        except json.JSONDecodeError:
+            store_token = decoded_payload
         secret = get_jwt_secret_key().encode()
-        expected_message = f"storefront_session:{customer_id}:{store_token}:{expires_at}".encode()
+        expected_message = f"storefront_session:{customer_id}:{store_token}:{expires_at}:{nonce}".encode()
+        if not nonce:
+            expected_message = f"storefront_session:{customer_id}:{store_token}:{expires_at}".encode()
         expected_signature = hmac.new(secret, expected_message, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected_signature):
             return None

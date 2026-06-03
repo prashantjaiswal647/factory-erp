@@ -67,6 +67,8 @@ The entire system is multi-tenant. Factory isolation is mandatory.
 ### 2. Token Security
 * **Access Tokens**: Default JWT access token expiration is set to a secure 8-hour window (`ACCESS_TOKEN_EXPIRE_MINUTES = 480`) to limit token theft window.
 * **Storefront Session Validation**: Storefront access requires a short-lived cryptographically signed token validated via `X-Storefront-Session` header or `storefront_session` cookie.
+* **Storefront Cookie Policy**: Production storefront cookies must be `HttpOnly`, `Secure`, `SameSite=Strict`, path-scoped to `/`, and explicitly time-limited. Local HTTP development may disable `Secure` only through local/test environment configuration.
+* **Sanitized Logging**: Runtime code must use Python `logging`, not `print()`, and must never log JWTs, API keys, passwords, OTPs, phone numbers, emails, webhook URLs, request payload dumps, or customer personal data.
 
 ### 3. Role-Based Access Control (RBAC) Boundaries
 * **Super Admin**: Manual approval of global machine templates is a Super Admin-only action (uses `require_super_admin`).

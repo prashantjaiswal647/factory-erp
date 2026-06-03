@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 import hmac
@@ -225,9 +225,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     instead of dropping headers during 500 runtime crashes.
     """
     import traceback
-    print("====== CRITICAL SCRIPT RUNTIME ERROR TRACE ======")
-    traceback.print_exc()
-    print("=================================================")
+    logging.getLogger(__name__).exception("Critical script runtime error")
     
     # Send detailed string tracking mapping back to browser for clear testing debug insight
     return JSONResponse(
@@ -701,11 +699,11 @@ def seed_default_users(db: Session):
         factory = Factory(name=factory_name)
         db.add(factory)
         db.flush()
-        print(f"AUTH SEED DEBUG: Created default factory id={factory.id}, name={factory_name!r}")
+        logger.info("Default factory seed created with factory_id=%s", factory.id)
     owner_pw = os.getenv("DEFAULT_OWNER_PASSWORD") or "OwnerPass123"
     if get_user_by_username(db, "owner") is None:
         db.add(User(factory_id=factory.id, username="owner", password_hash=hash_password(owner_pw), role="Owner"))
-        print("AUTH SEED DEBUG: Created legacy default owner username='owner'")
+        logger.info("Legacy default owner seed created for factory_id=%s", factory.id)
     admin_email = os.getenv("DEFAULT_ADMIN_EMAIL") or "admin@test.com"
     admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD") or "admin123"
     existing_users = db.query(User.id).limit(1).first()
@@ -730,9 +728,9 @@ def seed_default_users(db: Session):
                     is_active=True,
                 )
             )
-            print(f"AUTH SEED DEBUG: Created default admin login email={admin_email!r} password={admin_password!r}")
+            logger.info("Default admin seed created for factory_id=%s", factory.id)
         else:
-            print(f"AUTH SEED DEBUG: Default admin already exists email={admin_email!r}")
+            logger.info("Default admin seed already exists")
     db.commit()
 
 def verify_n8n_api_key(x_n8n_api_key: Optional[str] = Header(default=None)) -> None:
@@ -920,6 +918,32 @@ class CustomerVerificationResponse(BaseModel):
     storefront_session_token: Optional[str] = None
 
 
+STOREFRONT_SESSION_COOKIE_NAME = "storefront_session"
+STOREFRONT_SESSION_MAX_AGE_SECONDS = int(os.getenv("STOREFRONT_SESSION_MAX_AGE_SECONDS") or "7200")
+
+
+def is_local_cookie_environment() -> bool:
+    env_values = {
+        (os.getenv("ENV") or "").strip().lower(),
+        (os.getenv("APP_ENV") or "").strip().lower(),
+    }
+    if env_values & {"production", "prod"}:
+        return False
+    return bool(env_values & {
+        "development",
+        "dev",
+        "local",
+        "test",
+    })
+
+
+def storefront_cookie_secure_enabled() -> bool:
+    configured = os.getenv("STOREFRONT_COOKIE_SECURE")
+    if configured is not None:
+        return configured.strip().lower() not in {"0", "false", "no", "off"}
+    return not is_local_cookie_environment()
+
+
 def resolve_storefront_customer(db: Session, store_token: str) -> Optional[Customer]:
     token = (store_token or "").strip()
     if not token:
@@ -949,6 +973,16 @@ _rate_limit_store: Dict[str, list] = {}
 
 def is_rate_limited(key: str, limit: int, window_seconds: int) -> bool:
     now = time.time()
+    if key in _rate_limit_store:
+        timestamps = _rate_limit_store.get(key, [])
+        timestamps = [t for t in timestamps if now - t < window_seconds]
+        if len(timestamps) >= limit:
+            _rate_limit_store[key] = timestamps
+            return True
+        timestamps.append(now)
+        _rate_limit_store[key] = timestamps
+        return False
+
     redis_url = os.getenv("REDIS_URL")
     if redis_url:
         try:
@@ -1013,15 +1047,21 @@ def verify_customer_storefront(
         raise HTTPException(status_code=403, detail="Distributor verification failed. Mobile number is not mapped to this store account.")
         
     from auth import generate_storefront_session_token
-    session_token = generate_storefront_session_token(customer.id, payload.store_token)
+    session_token = generate_storefront_session_token(
+        customer.id,
+        payload.store_token,
+        validity_seconds=STOREFRONT_SESSION_MAX_AGE_SECONDS,
+    )
     
     response.set_cookie(
-        key="storefront_session",
+        key=STOREFRONT_SESSION_COOKIE_NAME,
         value=session_token,
         httponly=True,
-        secure=False,  # Can be overridden or False for local HTTP dev
-        samesite="lax",
-        max_age=7200
+        secure=storefront_cookie_secure_enabled(),
+        samesite="strict",
+        max_age=STOREFRONT_SESSION_MAX_AGE_SECONDS,
+        expires=datetime.now(timezone.utc) + timedelta(seconds=STOREFRONT_SESSION_MAX_AGE_SECONDS),
+        path="/",
     )
 
     return CustomerVerificationResponse(
