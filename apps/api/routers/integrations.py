@@ -1,6 +1,7 @@
 import os
 import httpx
 import hashlib
+import hmac
 from typing import Optional
 from datetime import date
 from decimal import Decimal
@@ -16,6 +17,20 @@ from models import Factory, User, Customer, PackagingProfile, Inventory, SalesIn
 from telegram_crypto import encrypt_token, decrypt_token
 
 router = APIRouter(tags=["integrations"])
+
+
+def require_n8n_api_key(x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY")) -> None:
+    expected_api_key = (os.getenv("N8N_API_KEY") or "").strip()
+    if not expected_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="N8N_API_KEY is not configured",
+        )
+    if not x_n8n_api_key or not hmac.compare_digest(x_n8n_api_key.strip(), expected_api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Invalid system secret header key",
+        )
 
 
 # Existing schemas
@@ -126,7 +141,11 @@ def save_telegram_integration(
 
 # Existing LLM Webhook (Groq Llama3 fallback for n8n)
 @router.post("/api/ai/n8n-webhook", response_model=N8NAIWebhookResponse)
-def telegram_ai_n8n_webhook(payload: N8NAIWebhookRequest, db: Session = Depends(get_db)):
+def telegram_ai_n8n_webhook(
+    payload: N8NAIWebhookRequest,
+    _: None = Depends(require_n8n_api_key),
+    db: Session = Depends(get_db),
+):
     try:
         factory_id = int(payload.factory_id)
     except (TypeError, ValueError) as exc:
@@ -260,17 +279,9 @@ async def telegram_setup_webhook(
 @router.post("/api/v1/internal/bot-lookup", response_model=BotLookupResponse)
 def internal_bot_lookup(
     payload: BotLookupRequest,
-    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db)
 ):
-    # Enforce system secret API header validation
-    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Invalid system secret header key",
-        )
-
     # Search for factory associated with this Telegram Bot username
     factory = db.query(Factory).filter(Factory.telegram_bot_username == payload.bot_username.strip()).first()
     if not factory:
@@ -307,17 +318,9 @@ def internal_bot_lookup(
 @router.post("/api/v1/invoices/basic-generate", response_model=InvoiceGenerateResponse)
 def basic_generate_invoice(
     payload: InvoiceGenerateRequest,
-    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db)
 ):
-    # Enforce system secret API header validation
-    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Invalid system secret header key",
-        )
-
     factory_id = payload.factory_id
     factory = db.query(Factory).filter(Factory.id == factory_id).first()
     if not factory:
@@ -472,17 +475,9 @@ class InvoiceGenerateModeResponse(BaseModel):
 @router.post("/api/v1/internal/bot-context", response_model=BotContextResponse)
 def internal_bot_context(
     payload: BotContextRequest,
-    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db)
 ):
-    # Enforce system secret API header validation
-    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Invalid system secret header key",
-        )
-
     incoming_chat_id = payload.chat_id.strip()
     incoming_bot_token = payload.bot_token.strip()
 
@@ -534,17 +529,9 @@ def internal_bot_context(
 @router.get("/api/v1/reports/summary")
 def get_reports_summary(
     factory_id: int,
-    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db)
 ):
-    # Enforce system secret API header validation
-    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Invalid system secret header key",
-        )
-
     factory = db.query(Factory).filter(Factory.id == factory_id).first()
     if not factory:
         raise HTTPException(
@@ -579,17 +566,9 @@ from sqlalchemy import func as sql_func
 @router.post("/api/v1/invoices/generate", response_model=InvoiceGenerateModeResponse)
 def generate_mode_invoice(
     payload: InvoiceGenerateModeRequest,
-    x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY"),
+    _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db)
 ):
-    # Enforce system secret API header validation
-    expected_api_key = os.getenv("N8N_API_KEY", "replace_with_a_strong_n8n_to_api_secret")
-    if not x_n8n_api_key or x_n8n_api_key != expected_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Invalid system secret header key",
-        )
-
     factory_id = payload.factory_id
     mode = payload.invoice_mode.lower().strip()
 

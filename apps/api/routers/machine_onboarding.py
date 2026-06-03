@@ -61,7 +61,7 @@ def _dynamic_machine_response(machine: Machine) -> Dict[str, Any]:
 @router.post("", response_model=MachineOnboardingResponse, status_code=status.HTTP_201_CREATED)
 def create_machine_onboarding(
     payload: MachineOnboardingCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(MACHINE_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     machine = MachineOnboarding(
@@ -80,7 +80,7 @@ def create_machine_onboarding(
 def list_machine_onboardings(
     custom_field_key: Optional[str] = Query(default=None, max_length=100),
     custom_field_value: Optional[str] = Query(default=None, max_length=255),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_permissions(MACHINE_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
     query = db.query(MachineOnboarding).filter(MachineOnboarding.factory_id == current_user.factory_id)

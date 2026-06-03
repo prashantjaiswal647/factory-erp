@@ -8,6 +8,7 @@ from auth import check_permissions, get_current_user
 from db import SessionLocal, get_db
 from machine_template_verifier import verify_machine_template_submission
 from models import MachineTemplate, User
+from routers.super_admin import require_super_admin
 
 
 router = APIRouter(tags=["machine-templates"])
@@ -111,7 +112,7 @@ def list_templates(
 @router.patch("/api/admin/templates/{template_id}/approve", response_model=MachineTemplateResponse)
 def approve_template(
     template_id: int,
-    current_user: User = Depends(check_permissions(["Owner"])),
+    admin_email: str = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ):
     template = db.query(MachineTemplate).filter(MachineTemplate.id == template_id).first()
@@ -122,7 +123,7 @@ def approve_template(
     template.ai_review = {
         **(template.ai_review or {}),
         "manual_approval": True,
-        "approved_by": current_user.id,
+        "approved_by": admin_email,
     }
     db.commit()
     db.refresh(template)

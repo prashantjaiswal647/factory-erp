@@ -8,7 +8,9 @@ def get_encryption_key() -> bytes:
     Derives a cryptographically secure 32-byte URL-safe base64 key
     from the JWT_SECRET_KEY environment variable.
     """
-    secret = os.getenv("JWT_SECRET_KEY", "fallback-secret-key-for-telegram-encryption-12345")
+    secret = os.getenv("JWT_SECRET_KEY")
+    if not secret:
+        raise RuntimeError("JWT_SECRET_KEY environment variable is required for Telegram token encryption")
     digest = hashes.Hash(hashes.SHA256())
     digest.update(secret.encode())
     key_bytes = digest.finalize()
