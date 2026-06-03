@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_OTHER",
+  "summary": "Updated Security Audit Report after Sprints A & B, evaluating P0/P1/P2/P3 vulnerabilities, verifying fixed issues (SEC-01 through SEC-07, SEC-10, SEC-11), listing remaining security risks (like debug logs and super admin MFA), and presenting the production readiness and pilot factory verdict.",
+  "updatedAt": "2026-06-03T06:03:25.535039900Z"
+}

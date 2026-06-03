@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_TASK",
+  "summary": "Report by the Munshi AI Test Guardian detailing the running and validation of the critical test suite. Explains the root causes of the process pollution and dependency overrides errors in test_e2e_erp_flow.py and test_operations_telemetry_pipeline.py, the business impact, the minimal fixes applied, and the final 100% green test run results.",
+  "updatedAt": "2026-06-03T05:16:05.019658700Z"
+}

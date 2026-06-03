@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Walkthrough of the test coverage expansion and integration testing results for Munshi AI ERP. Details the root causes identified, fixes applied to the tests, the NameError resolved in the operations router, and lists the final test suite run results and coverage report metrics.",
+  "updatedAt": "2026-06-03T05:00:06.315322700Z"
+}

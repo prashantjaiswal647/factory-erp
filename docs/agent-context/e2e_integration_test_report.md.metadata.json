@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_TASK",
+  "summary": "E2E Integration Test Report validating the full Munshi AI ERP operations flow from Inventory setup, Daily Production, Sales, Invoicing, Outstanding Bills, Payments, to Deletion/Reversal edge cases, accompanied by a test coverage report.",
+  "updatedAt": "2026-06-03T04:36:31.323387200Z"
+}
