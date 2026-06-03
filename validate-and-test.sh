@@ -43,8 +43,14 @@ echo "==> Step B: Isolated Docker build gate"
 cd "${ROOT_DIR}"
 VITE_API_URL="${VITE_API_URL:-}" "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" build --no-cache api web
 
-echo "==> Step B: Isolated container startup gate"
-VITE_API_URL="${VITE_API_URL:-}" "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d --build --force-recreate postgres redis api web
+echo "==> Step B: Isolated database startup gate"
+VITE_API_URL="${VITE_API_URL:-}" "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d --force-recreate postgres redis
+
+echo "==> Step B: Alembic migration gate"
+VITE_API_URL="${VITE_API_URL:-}" "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" run --rm api alembic upgrade head
+
+echo "==> Step B: Isolated application startup gate"
+VITE_API_URL="${VITE_API_URL:-}" "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d --force-recreate api web
 
 echo "==> Waiting for FastAPI health"
 for attempt in {1..60}; do

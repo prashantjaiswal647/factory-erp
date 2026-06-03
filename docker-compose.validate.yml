@@ -25,6 +25,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
       DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: validate-jwt-secret

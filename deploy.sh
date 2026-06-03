@@ -27,31 +27,28 @@ fi
 echo "==> Pulling latest repository changes"
 git pull --ff-only
 
-echo "==> Stopping existing containers"
-"${COMPOSE[@]}" down --remove-orphans
+echo "==> Ensuring database is running before backup"
+VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" up -d postgres
+
+BACKUP_DIR="${APP_DIR}/storage/backups"
+BACKUP_FILE="${BACKUP_DIR}/pre_alembic_$(date +%F_%H%M%S).dump"
+mkdir -p "${BACKUP_DIR}"
+
+echo "==> Creating pre-migration PostgreSQL backup"
+"${COMPOSE[@]}" exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "${BACKUP_FILE}"
+echo "==> Backup created: ${BACKUP_FILE}"
 
 echo "==> Rebuilding api and web with no cache for ${PRODUCTION_DOMAIN}"
 VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" build --pull --no-cache api web
 
+echo "==> Starting database dependencies"
+VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" up -d postgres redis
+
+echo "==> Applying Alembic database migrations"
+VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" run --rm api alembic upgrade head
+
 echo "==> Starting production stack"
 VITE_API_URL="${PRODUCTION_DOMAIN}" CORS_ORIGINS="${PRODUCTION_DOMAIN},https://www.munshiai.co.in" "${COMPOSE[@]}" up -d --force-recreate
-
-echo "==> Syncing Database Schemas and Metadata Columns..."
-"${COMPOSE[@]}" exec -T api python -B - <<'PY'
-try:
-    from db import engine
-    from main import ensure_runtime_schema
-    from models import Base
-
-    Base.metadata.create_all(bind=engine)
-    ensure_runtime_schema()
-    print("Schema synced successfully!")
-except Exception as e:
-    import traceback
-    print("Schema sync failed:", str(e))
-    traceback.print_exc()
-    raise
-PY
 
 echo "==> Removing unused Docker images"
 docker image prune -f
