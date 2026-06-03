@@ -16,7 +16,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r apps/api/requirements.txt
       - run: pip install pytest pytest-asyncio httpx
-      - run: cd apps/api && pytest tests/ -v
+      - run: cd apps/api && PYTHONPATH=. python -B -m pytest tests/ -v
 
   frontend-tests:
     runs-on: ubuntu-latest
