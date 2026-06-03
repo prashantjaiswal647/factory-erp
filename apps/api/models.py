@@ -1363,3 +1363,130 @@ class WastageLog(TenantMixin, Base):
     date = Column(Date, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
+
+
+# ==================== COMPATIBILITY CONSOLIDATION LISTENERS ====================
+from sqlalchemy import event, inspect
+from sqlalchemy.orm import Session
+
+@event.listens_for(Session, 'before_flush')
+def before_session_flush(session, flush_context, instances):
+    # 1. Handle inserts (session.new)
+    for obj in list(session.new):
+        if isinstance(obj, Worker):
+            existing = session.query(Employee).filter(Employee.factory_id == obj.factory_id, Employee.name == obj.name).first()
+            if not existing:
+                employee = Employee(
+                    factory_id=obj.factory_id,
+                    name=obj.name,
+                    role=obj.shift_type or "Operator",
+                    daily_wage=obj.daily_wages or obj.daily_wage_rate or 0
+                )
+                session.add(employee)
+        elif isinstance(obj, FactoryExpense):
+            existing = session.query(ExpenseLog).filter(
+                ExpenseLog.factory_id == obj.factory_id,
+                ExpenseLog.description == obj.expense_name,
+                ExpenseLog.amount == obj.amount
+            ).first()
+            if not existing:
+                log = ExpenseLog(
+                    factory_id=obj.factory_id,
+                    date=obj.timestamp.date() if obj.timestamp else func.current_date(),
+                    category=obj.category or "General",
+                    description=obj.expense_name or "General Expense",
+                    amount=obj.amount or 0,
+                    payment_method="Cash"
+                )
+                session.add(log)
+        elif isinstance(obj, FinishedGoodsStock):
+            profile = session.query(PackagingProfile).filter(PackagingProfile.id == obj.packaging_profile_id).first()
+            if profile:
+                variety = obj.variant_name or "Standard/White"
+                existing = session.query(FinalProductStock).filter(
+                    FinalProductStock.factory_id == obj.factory_id,
+                    FinalProductStock.product_size_ml == obj.cup_size_ml,
+                    FinalProductStock.variety == variety,
+                    FinalProductStock.packaging_size_name == profile.profile_name
+                ).first()
+                if not existing:
+                    fp = FinalProductStock(
+                        factory_id=obj.factory_id,
+                        product_size_ml=obj.cup_size_ml,
+                        variety=variety,
+                        packaging_size_name=profile.profile_name,
+                        pieces_per_packet=profile.cups_per_poly or 1,
+                        current_quantity=obj.boxes_available * (profile.box_capacity or 1),
+                        total_boxes=obj.boxes_available,
+                        loose_packets=0,
+                        packets_per_box_limit=profile.polys_per_box or 1
+                    )
+                    session.add(fp)
+
+    # 2. Handle updates (session.dirty)
+    for obj in list(session.dirty):
+        if isinstance(obj, Worker):
+            # Query db for current database state before flush updates it
+            old_row = session.query(Worker.name).filter(Worker.id == obj.id).first()
+            old_name = old_row[0] if old_row else obj.name
+            session.query(Employee).filter(Employee.factory_id == obj.factory_id, Employee.name == old_name).update({
+                Employee.name: obj.name,
+                Employee.role: obj.shift_type or "Operator",
+                Employee.daily_wage: obj.daily_wages or obj.daily_wage_rate or 0
+            }, synchronize_session=False)
+        elif isinstance(obj, FactoryExpense):
+            old_row = session.query(FactoryExpense.expense_name, FactoryExpense.amount).filter(FactoryExpense.id == obj.id).first()
+            old_name = old_row[0] if old_row else obj.expense_name
+            old_amount = old_row[1] if old_row else obj.amount
+            session.query(ExpenseLog).filter(
+                ExpenseLog.factory_id == obj.factory_id,
+                ExpenseLog.description == old_name,
+                ExpenseLog.amount == old_amount
+            ).update({
+                ExpenseLog.date: obj.timestamp.date() if obj.timestamp else func.current_date(),
+                ExpenseLog.category: obj.category or "General",
+                ExpenseLog.description: obj.expense_name or "General Expense",
+                ExpenseLog.amount: obj.amount or 0
+            }, synchronize_session=False)
+        elif isinstance(obj, FinishedGoodsStock):
+            profile = session.query(PackagingProfile).filter(PackagingProfile.id == obj.packaging_profile_id).first()
+            if profile:
+                variety = obj.variant_name or "Standard/White"
+                session.query(FinalProductStock).filter(
+                    FinalProductStock.factory_id == obj.factory_id,
+                    FinalProductStock.product_size_ml == obj.cup_size_ml,
+                    FinalProductStock.variety == variety,
+                    FinalProductStock.packaging_size_name == profile.profile_name
+                ).update({
+                    FinalProductStock.current_quantity: obj.boxes_available * (profile.box_capacity or 1),
+                    FinalProductStock.total_boxes: obj.boxes_available
+                }, synchronize_session=False)
+
+    # 3. Handle deletes (session.deleted)
+    for obj in list(session.deleted):
+        if isinstance(obj, Worker):
+            session.query(Employee).filter(Employee.factory_id == obj.factory_id, Employee.name == obj.name).delete(synchronize_session=False)
+        elif isinstance(obj, FactoryExpense):
+            session.query(ExpenseLog).filter(
+                ExpenseLog.factory_id == obj.factory_id,
+                ExpenseLog.description == obj.expense_name,
+                ExpenseLog.amount == obj.amount
+            ).delete(synchronize_session=False)
+
+# Machine event trigger remains as mapper hooks (no history needed)
+@event.listens_for(Machine, 'before_insert')
+@event.listens_for(Machine, 'before_update')
+def sync_machine_columns(mapper, connection, target):
+    if target.speed_per_minute:
+        target.speed_bpm = target.speed_per_minute
+        target.speed_cups_per_minute = target.speed_per_minute
+        target.default_speed = float(target.speed_per_minute)
+    elif target.speed_bpm:
+        target.speed_per_minute = target.speed_bpm
+        target.speed_cups_per_minute = target.speed_bpm
+        target.default_speed = float(target.speed_bpm)
+        
+    if target.mould_size_ml:
+        target.cup_size_ml = target.mould_size_ml
+        target.current_mould_size = str(target.mould_size_ml)
+        target.default_mould_size = str(target.mould_size_ml)
