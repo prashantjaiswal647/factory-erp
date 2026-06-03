@@ -131,7 +131,7 @@ export default function App() {
         <Route
           path="daily-sequence"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor", "Operator"]}>
               <DailySequencePage />
             </PrivateRoute>
           }
