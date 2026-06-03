@@ -2810,10 +2810,39 @@ def delete_onboarding_entry(
                 db.commit()
                 trigger_delete_sync()
                 return None
-        elif type_lower in ("box", "boxstock", "carton box", "carton"):
+        elif type_lower in ("box", "boxstock", "carton box", "carton", "packaging", "inventory"):
             entry = db.query(BoxStock).filter(BoxStock.id == actual_id, BoxStock.factory_id == factory_id).first()
             if entry:
                 db.delete(entry)
+                db.commit()
+                trigger_delete_sync()
+                return None
+            inv_entry = db.query(Inventory).filter(Inventory.id == actual_id, Inventory.factory_id == factory_id).first()
+            if inv_entry:
+                profiles = db.query(PackagingProfile).filter(
+                    (PackagingProfile.box_inventory_id == actual_id) |
+                    (PackagingProfile.poly_inventory_id == actual_id)
+                ).all()
+
+                from models import DailyProduction
+                has_production_links = False
+                for profile in profiles:
+                    linked_log = db.query(DailyProduction).filter(
+                        DailyProduction.factory_id == factory_id,
+                        sql_func.lower(DailyProduction.packaging_size_name) == profile.profile_name.lower(),
+                    ).first()
+                    if linked_log:
+                        has_production_links = True
+                        break
+
+                if has_production_links:
+                    inv_entry.item_name = f"[DELETED] {inv_entry.item_name}"
+                    db.add(inv_entry)
+                else:
+                    for profile in profiles:
+                        db.query(FinishedGoodsStock).filter(FinishedGoodsStock.packaging_profile_id == profile.id).delete()
+                        db.delete(profile)
+                    db.delete(inv_entry)
                 db.commit()
                 trigger_delete_sync()
                 return None

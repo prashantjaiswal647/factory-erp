@@ -1585,15 +1585,29 @@ export function deleteDailyProductionLog(logId: number) {
 }
 
 export function deleteOnboardingEntry(entryId: string, type?: string) {
+  const normalizedType = normalizeOnboardingDeleteType(entryId, type);
   return api.delete(`/api/onboarding/entry/${entryId}`, {
-    params: type ? { type } : undefined
+    params: normalizedType ? { type: normalizedType } : undefined
   });
 }
 
 export function deleteOnboardingItem(itemId: number, type: string) {
+  const normalizedType = normalizeOnboardingDeleteType(String(itemId), type) || type;
   return api.delete(`/api/v1/onboarding/items/${itemId}`, {
-    params: { type }
+    params: { type: normalizedType }
   });
+}
+
+function normalizeOnboardingDeleteType(entryId: string, type?: string) {
+  const raw = String(type || "").trim().toLowerCase();
+  const id = String(entryId || "").toLowerCase();
+  if (id.startsWith("blank-") || raw.includes("blank")) return "blankstock";
+  if (id.startsWith("bottom-") || raw.includes("bottom")) return "bottomstock";
+  if (id.startsWith("box-") || raw.includes("box") || raw.includes("carton") || raw.includes("packaging")) return "boxstock";
+  if (id.startsWith("plastic-") || raw.includes("plastic")) return "plasticstock";
+  if (id.startsWith("polybag-") || raw.includes("polybag")) return "polybagstock";
+  if (id.startsWith("final-") || raw.includes("final") || raw.includes("cup")) return "final";
+  return type;
 }
 
 export type ActivityLog = {
