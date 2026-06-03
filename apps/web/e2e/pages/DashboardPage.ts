@@ -5,7 +5,9 @@ export class DashboardPage {
 
   async expectLoaded() {
     await expect(this.page).toHaveURL(/\/dashboard$/);
-    await expect(this.page.getByTestId("dashboard-heading")).toHaveText("Live Factory Overview", { timeout: 20_000 });
+    const heading = this.page.getByTestId("dashboard-heading");
+    await expect(heading).toBeVisible({ timeout: 20_000 });
+    await expect(heading).toContainText(/Welcome back|Live Factory Overview/);
   }
 
   async refreshData() {

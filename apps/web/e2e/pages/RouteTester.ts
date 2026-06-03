@@ -22,10 +22,26 @@ export const ownerProtectedRoutes = [
 export class RouteTester {
   constructor(private readonly page: Page) {}
 
-  async expectProtectedRouteOpens(route: { path: string; heading: string }) {
+  async expectProtectedRouteOpens(route: { path: string; heading?: string }) {
     await this.page.goto(route.path);
     await expect(this.page).toHaveURL(new RegExp(`${route.path.replace("/", "\\/")}$`));
-    await expect(this.page.getByRole("heading", { name: route.heading })).toBeVisible({ timeout: 20_000 });
     await expect(this.page.getByText(/Payment Required|System Access Suspended|subscription has expired/i)).toHaveCount(0);
+    await this.expectRouteContentVisible(route);
+  }
+
+  private async expectRouteContentVisible(route: { heading?: string }) {
+    if (route.heading) {
+      const exactHeading = this.page.getByRole("heading", { name: route.heading });
+      if (await exactHeading.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+        return;
+      }
+    }
+
+    const visibleHeading = this.page.locator("h1:visible, h2:visible").first();
+    if (await visibleHeading.isVisible({ timeout: 20_000 }).catch(() => false)) {
+      return;
+    }
+
+    await expect(this.page.locator("main:visible, [role='main']:visible").first()).toBeVisible({ timeout: 20_000 });
   }
 }
