@@ -1,4 +1,4 @@
-# Munshi AI - Master Project Context
+# Munshi AI - Master Project Context & AI Playbook
 
 ## Project Overview
 
@@ -8,480 +8,186 @@ The goal is to digitize and automate factory operations, reduce manual bookkeepi
 
 ---
 
-# Current Production Environment
+## Current Readiness Status
 
-## Live URLs
-
-Dashboard:
-https://munshiai.co.in
-
-API:
-https://munshiai.co.in/api
-
-n8n:
-https://n8n.munshiai.co.in
+* **Migrations**: Complete & Idempotent (Alembic baseline setup, runtime migrations removed)
+* **Factory Isolation**: Verified (adversarial multi-tenant tests passing)
+* **Security**: P0 = 0, P1 = 0 (secured webhooks, storefront sessions, rate limiting, and tightened RBAC)
+* **Testing**: Active Expansion (69+ tests passing in the backend suite)
+* **Pilot Deployment**: Approved (safe for first pilot factory onboarding)
+* **AI Supervisor**: Future Phase (integrates with Groq/Gemma)
 
 ---
 
-# Technology Stack
+## Current Production Environment
 
-Backend:
-
-* FastAPI
-* Python
-
-Frontend:
-
-* React
-* Vite
-
-Database:
-
-* PostgreSQL
-
-Infrastructure:
-
-* Docker Compose
-
-Reverse Proxy:
-
-* Caddy
-
-Automation:
-
-* n8n
-
-Hosting:
-
-* Hostinger VPS
+### Live URLs
+* **Dashboard**: [https://munshiai.co.in](https://munshiai.co.in)
+* **API**: [https://munshiai.co.in/api](https://munshiai.co.in/api)
+* **n8n**: [https://n8n.munshiai.co.in](https://n8n.munshiai.co.in)
 
 ---
 
-# Multi-Tenant Architecture
+## Technology Stack & Architecture
 
-The entire system is multi-tenant.
+### Backend
+* **FastAPI (Python)**: Application framework.
+* **Alembic**: Database migration management.
+* **SQLAlchemy**: ORM for database modeling.
 
-Core rule:
+### Frontend
+* **React + Vite (TypeScript)**: Single Page Application client.
 
-Every business record must belong to a specific factory.
+### Database
+* **PostgreSQL**: Production database engine.
 
-Factory isolation is mandatory.
+### Infrastructure & Reverse Proxy
+* **Docker Compose**: Containerized multi-service runtime.
+* **Caddy**: Reverse proxy managing SSL/TLS certificates and load routing.
 
-Never allow data leakage between factories.
-
-Important field:
-
-factory_id
-
-Every query, API, report, dashboard, inventory calculation, attendance record, order, invoice, production record and financial transaction must remain isolated using factory_id.
-
-This rule must never be broken.
-
----
-
-# Authentication System
-
-Current status:
-
-Implemented:
-
-* Login
-* Signup
-* Session-based authentication
-
-Planned:
-
-* Google Login
-* Country Code based phone number signup
-* Mobile number login
-* Subscription-aware access control
-
-Requirements:
-
-* Existing authentication should never break.
-* Backend and frontend changes must remain synchronized.
-
-Security rules:
-
-* Internal n8n/API automation endpoints must require `X-N8N-API-KEY`.
-* `N8N_API_KEY`, `JWT_SECRET_KEY`, and Super Admin secrets must fail closed when missing. Do not add hardcoded fallback secrets.
-* Machine template manual approval is a Super Admin-only action. Factory Owner/Sub-Owner users may submit templates but must not approve them manually.
+### Automation
+* **n8n**: Workflow automation for alerts, reports, and reminders.
 
 ---
 
-# Factory Onboarding Module
+## Multi-Tenant & Factory Isolation Rules
 
-Purpose:
-
-Capture factory setup information and initialize the ERP.
-
-Factory onboarding should collect:
-
-* Factory details
-* Product types
-* Machine information
-* Worker information
-* Initial inventory
-* Existing attendance records
-* Existing financial records
-
-Special Requirement:
-
-Historical attendance entered during onboarding must merge with future attendance records.
-
-Salary calculations must include:
-
-Past Attendance
-+
-Future Daily Attendance
-=======================
-
-Final Salary Calculation
+The entire system is multi-tenant. Factory isolation is mandatory.
+* **Core Rule**: Every business record must belong to a specific factory. Never allow data leakage between factories.
+* **Multi-Tenant Filter**: Every query, API, report, dashboard, inventory calculation, attendance record, order, invoice, production record, and financial transaction must remain isolated using the `factory_id` filter (managed in `tenant_context.py`).
 
 ---
 
-# Inventory Module
+## Authentication & Authorization (RBAC) Rules
 
-Purpose:
+### 1. Webhook Security
+* All n8n/internal API automation endpoints (e.g., `/api/ai/n8n-webhook`, `/api/v1/internal/bot-lookup`) must require validation of the `X-N8N-API-KEY` header matching the `N8N_API_KEY` environment secret.
+* Fallback default secrets in code are strictly prohibited. Endpoints must fail-closed (e.g., return `503 Service Unavailable` or `401 Unauthorized`) if production secrets are missing.
 
-Track all inventory movement.
+### 2. Token Security
+* **Access Tokens**: Default JWT access token expiration is set to a secure 8-hour window (`ACCESS_TOKEN_EXPIRE_MINUTES = 480`) to limit token theft window.
+* **Storefront Session Validation**: Storefront access requires a short-lived cryptographically signed token validated via `X-Storefront-Session` header or `storefront_session` cookie.
 
-Current inventory categories:
-
-Raw Material:
-
-* Paper Blank
-* Bottom
-
-Consumables:
-
-* Mobil Oil
-* Paraffin Oil
-* Electricity Usage
-
-Packaging:
-
-* Plastic Packets
-* Boxes
-
-Finished Goods:
-
-* Paper Cups
-* Paper Glasses
-
-Requirements:
-
-Inventory must support:
-
-* Stock In
-* Stock Out
-* Current Stock
-* Inventory History
-* Inventory Valuation
-
-UI Requirement:
-
-Avoid horizontal scrolling.
-
-Display inventory category-wise.
-
-Example:
-
-Section 1:
-Bottom Inventory
-
-Section 2:
-Blank Inventory
-
-Section 3:
-Packaging Inventory
-
-Section 4:
-Finished Goods Inventory
+### 3. Role-Based Access Control (RBAC) Boundaries
+* **Super Admin**: Manual approval of global machine templates is a Super Admin-only action (uses `require_super_admin`).
+* **Owner, Sub-Owner, Supervisor**: Permitted to manage machine onboarding settings, dynamic machine setups, list/view templates, and record/view expenses.
+* **Operator & Worker**: Strictly blocked (returns `403 Forbidden`) from modifying machine onboarding settings, managing template approvals, and viewing or recording expenses.
+* **Operator Exception**: Operators are permitted to query active dynamic machines (GET `/api/machines/active`) to select active machines when entering daily production logs.
 
 ---
 
-# Production Module
+## Database Migration Rules
 
-Purpose:
-
-Track daily manufacturing.
-
-Production data includes:
-
-* Machine
-* Product
-* Shift
-* Production Quantity
-* Wastage
-* Operator
-
-Business Logic:
-
-Production affects:
-
-Raw Material Stock
-↓
-Wastage
-↓
-Finished Goods Stock
-
-All calculations must remain traceable.
+* **No Startup Schema Modification**: Creating or altering tables during FastAPI startup or request handlers is prohibited.
+* **Alembic Control**: All database schema changes must be version-tracked inside the `alembic/versions` directory.
+* **Baseline Revision**: Revision `20260603_0001` serves as the initial runtime schema baseline.
+* **Additive and Idempotent**: Migrations must be designed to safely execute on existing databases containing production data without drops.
+* **Safe Rollbacks**: Downgrade routines must return `None` or not perform destructive column drops. System rollbacks are handled via PostgreSQL backup pre-migration checkpoints.
 
 ---
 
-# Wastage Module
+## Deployment & Backup Rules
 
-Purpose:
-
-Track production losses.
-
-Examples:
-
-* Blank wastage
-* Bottom wastage
-* Packaging wastage
-
-Requirements:
-
-Separate wastage reporting.
-
-Historical wastage analysis.
-
-Machine-wise wastage tracking.
-
----
-
-# Worker Management Module
-
-Purpose:
-
-Manage factory workforce.
-
-Features:
-
-* Worker profiles
-* Attendance
-* Salary calculation
-
-Requirement:
-
-Attendance added during onboarding must merge with attendance recorded later.
-
----
-
-# Finance Module
-
-Purpose:
-
-Track money movement.
-
-Features:
-
-* Purchases
-* Expenses
-* Sales
-* Payments Received
-* Outstanding Payments
-
-Future:
-
-* Profit & Loss
-* Cash Flow
-* AI Insights
-
----
-
-# CRM Module
-
-Purpose:
-
-Manage customers.
-
-Features:
-
-* Customer database
-* Orders
-* Outstanding balances
-* Payment tracking
-
-Future:
-
-* Customer analytics
-* Purchase trends
-
----
-
-# Order Management Module
-
-Purpose:
-
-Track customer orders.
-
-Flow:
-
-Order Created
-↓
-Inventory Reserved
-↓
-Dispatch
-↓
-Invoice
-↓
-Payment Collection
-
----
-
-# Dispatch Module
-
-Purpose:
-
-Track shipment of finished goods.
-
-Requirements:
-
-* Dispatch records
-* Customer linkage
-* Inventory deduction
-
----
-
-# Invoice Module
-
-Purpose:
-
-Generate customer invoices.
-
-Requirements:
-
-* Customer linked invoices
-* Payment status
-* Outstanding tracking
-
----
-
-# Payment Reminder Automation
-
-Platform:
-n8n
-
-Purpose:
-
-Automatically remind customers about pending payments.
-
-Future Flow:
-
-Customer Due
-↓
-n8n Workflow
-↓
-Reminder Message
-↓
-Follow-up Tracking
-
----
-
-# AI Supervisor Vision
-
-Long-Term Goal
-
-Gemma (Groq) powered AI Supervisor.
-
-Responsibilities:
-
-* Production Monitoring
-* Inventory Monitoring
-* Costing Analysis
-* Purchase Suggestions
-* Wastage Detection
-* Financial Insights
-* Outstanding Payment Tracking
-* Factory Health Monitoring
-
-AI should act like a digital factory manager.
-
----
-
-# Dashboard Requirements
-
-Dashboard must prioritize readability.
-
-Avoid excessive charts.
-
-Prefer:
-
-* Key Metrics
-* Current Stock
-* Production Summary
-* Outstanding Payments
-* Customer Dues
-* Alerts
-
-Factory owners should understand business status within 30 seconds.
-
----
-
-# Development Rules
-
-Before changing code:
-
-1. Inspect existing implementation.
-2. Understand backend and frontend flow.
-3. Preserve factory_id isolation.
-4. Preserve database compatibility.
-5. Avoid unnecessary refactoring.
-
-After changes:
-
-1. Show changed files.
-2. Explain root cause.
-3. Provide local test steps.
-4. Provide deployment commands.
-
----
-
-# Deployment Workflow
-
-Local Development
-↓
-Testing
-↓
-Git Commit
-↓
-Git Push
-↓
-Hostinger Pull
-↓
-Docker Rebuild
-↓
-Production Verification
+### Deployment Workflow
+Local Development → Testing → Git Commit → Git Push → Hostinger Pull → Docker Rebuild → Production Verification
 
 Commands:
-
+```bash
 git add .
-git commit
+git commit -m "commit message"
 git push origin main
+```
 
 VPS:
-
+```bash
 cd ~/factory-erp
-
 git pull origin main
-
 docker-compose up -d --force-recreate --build web api caddy
+```
+
+### Backup Pipelines
+* Daily PostgreSQL database dumps are automatically triggered via `backup.sh`.
+* Dump files are written to `/src/storage/backups`.
+* Retention policy: Automatically prunes files older than 7 days.
 
 ---
 
-# Current Development Goal
+## Testing & Quality Assurance Rules
 
-Transform Munshi AI from a working ERP into a production-ready SaaS that can be sold to manufacturing units.
+Before modifying any code:
+1. Run relevant tests.
+2. Preserve factory_id isolation.
+3. Preserve security controls.
+4. Preserve migration compatibility.
+5. Preserve SaaS multi-tenancy.
 
-Priorities:
+### Test Execution Commands
+Always run the backend test suite with PYTHONPATH set:
+```bash
+$env:PYTHONPATH="apps/api"
+python -m pytest apps/api/tests/
+```
 
-1. Stability
-2. Data Accuracy
-3. Factory Isolation
-4. User Experience
-5. Automation
-6. Subscription Management
-7. AI Supervisor
+### Critical Verification Areas
+* **E2E ERP Flow**: Validates inventory counts, sales invoices, collections, and deletions/reversals.
+* **Factory Isolation**: Asserts zero data leakage between distinct factory datasets.
+* **Bulk Upload Idempotency**: Ensures duplicate rows in Excel uploads are skipped, modified rows are updated, and new rows are inserted.
+* **Salary Calculations**: Combines onboarding historical attendance and future daily logs to settle net wage payments.
+
+---
+
+## Known Remaining Risks (Audit Debt)
+
+* **Super Admin Panel**: `/api/super-admin/login` has no rate-limiting or MFA protection.
+* **Webhook Abuse**: Lacks rate-limit bounds on public n8n endpoints, introducing potential Groq API usage cost exhaustion.
+* **Log Leakage**: Debug `print` logs in `auth.py` write user emails/phone numbers to standard stdout.
+* **Client-Side Auth**: JWT tokens are stored in React client `localStorage` (XSS vector).
+
+---
+
+## Core Business Modules & Vision
+
+### Factory Onboarding Module
+* **Purpose**: Capture factory setup information and initialize the ERP.
+* **Fields**: Factory details, product types, machine info, worker profiles, initial inventory, opening attendance, and opening financial balances.
+* **Salary Integration**: Onboarding attendance history merges with daily logs. Salary calculation formula:
+  `Past Onboarding Attendance + Future Daily Attendance = Final Salary Settlement`
+
+### Inventory Module
+* **Purpose**: Track all raw materials, consumables, packaging, and finished goods movement.
+* **UI Constraint**: Display inventory category-wise without horizontal scrolling (Bottom, Blanks, Packaging, Finished Goods).
+* **Inventory History**: Supports Stock In, Stock Out, Current Stock, Valuation, and audit history.
+
+### Production Module
+* **Purpose**: Track daily manufacturing output, wastage, and machines performance.
+* **Business Logic**: Production directly affects inventory balances:
+  `Raw Material Stock -> Wastage -> Finished Goods Stock`
+
+### Wastage Module
+* **Purpose**: Track production losses separately. Exposes machine-wise wastage and category-wise wastage logs for historical audits.
+
+### Worker Management Module
+* **Purpose**: Manage factory workforce, profile details, daily attendance, advance payments, and salary payroll calculations.
+
+### Finance Module
+* **Purpose**: Track purchases, expenses, sales, and collections. Provides P&L, cash flow tracking, and AI budget optimization suggestions in future phases.
+
+### CRM & Order Management Module
+* **Purpose**: Manage customer accounts, balances, payment terms, and invoice flows.
+* **Order Flow**: Order Created -> Inventory Reserved -> Dispatch -> Invoice -> Payment Collection.
+
+### Dispatch & Invoice Modules
+* **Purpose**: Record finished goods shipments, auto-deduct inventory, and generate PDF invoices containing payment terms and QR codes.
+
+### Payment Reminder Automation
+* **Purpose**: Workflow in n8n queries outstanding dues and triggers WhatsApp alerts to customers with payment portal access links.
+
+---
+
+## SaaS Future Roadmap
+
+1. **pgBouncer Integration**: Support high database request throughput connection pooling.
+2. **Automated Payment Gateways**: Integrate Stripe or Razorpay webhooks to handle plan upgrades and automatic tenant locking.
+3. **MFA Enforcements**: Enforce Multi-Factor Authentication on the Super Admin console.
+4. **Log Sanitization**: Clean stdout prints to use Python logging.
+5. **AI Supervisor Vision**: Evolve the LLM core using groq/gemma into a proactive manager monitoring costing, suggests purchase times, alerts on unusual wastage, and checks factory health indicators.
