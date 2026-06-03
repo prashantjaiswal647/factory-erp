@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -21,6 +22,7 @@ from schemas import AnalyticsSummaryResponse
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 v1_router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 MONEY_QUANT = Decimal("0.01")
+logger = logging.getLogger(__name__)
 
 
 def to_money(value) -> Decimal:
@@ -80,7 +82,7 @@ def generate_llm_insights(stats: dict) -> tuple[str, str]:
             if text:
                 return text, "groq"
         except Exception as exc:
-            print(f"DASHBOARD GROQ ERROR: {exc}")
+            logger.warning("Dashboard Groq insight generation failed", exc_info=True)
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
@@ -98,7 +100,7 @@ def generate_llm_insights(stats: dict) -> tuple[str, str]:
             if text.strip():
                 return text.strip(), "openai"
         except Exception as exc:
-            print(f"DASHBOARD OPENAI ERROR: {exc}")
+            logger.warning("Dashboard OpenAI insight generation failed", exc_info=True)
 
     return fallback_insights(stats), "fallback"
 
@@ -159,7 +161,7 @@ def get_dashboard_summary(
             data = json.loads(cached_data)
             return AiDashboardStats(**data)
     except Exception as exc:
-        print(f"Redis cache interception error: {exc}")
+        logger.warning("Redis cache read failed for dashboard stats", exc_info=True)
 
     # Fallback to postgres DB query
     today = date.today()
@@ -215,7 +217,7 @@ def get_dashboard_summary(
         try:
             r.setex(cache_key, 300, json.dumps(stats, default=str))
         except Exception as exc:
-            print(f"Redis cache save error: {exc}")
+            logger.warning("Redis cache save failed for dashboard stats", exc_info=True)
 
     return AiDashboardStats(**stats)
 
@@ -434,7 +436,7 @@ def get_analytics_summary(
             data = json.loads(cached_data)
             return AnalyticsSummaryResponse(**data)
     except Exception as exc:
-        print(f"Redis cache interception error for analytics summary: {exc}")
+        logger.warning("Redis cache read failed for analytics summary", exc_info=True)
 
     today = date.today()
     start_of_month = date(today.year, today.month, 1)
@@ -474,7 +476,7 @@ def get_analytics_summary(
         try:
             r.setex(cache_key, 300, json.dumps(stats, default=str))
         except Exception as exc:
-            print(f"Redis cache save error for analytics summary: {exc}")
+            logger.warning("Redis cache save failed for analytics summary", exc_info=True)
 
     return AnalyticsSummaryResponse(**stats)
 

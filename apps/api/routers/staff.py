@@ -1,3 +1,4 @@
+import logging
 import re
 import random
 from typing import Literal, Optional
@@ -26,6 +27,8 @@ from db import get_db
 from models import User, SuperAdminAuditLog, Worker, AppUsageLog, TokenUsageLog, WorkerOpeningAttendance
 from schemas import OpeningAttendanceCreate, OpeningAttendanceResponse
 from services.activity_logger import log_activity
+
+logger = logging.getLogger(__name__)
 from services.n8n_sync import sync_data_to_n8n_bg
 
 # Existing router prefixes
@@ -701,7 +704,7 @@ def request_factory_id(
 
     otp = generate_otp()
     store_otp(db, full_phone, otp)
-    print(f"[MOCK FACTORY ID OTP] Phone: {full_phone} | OTP: {otp}")
+    logger.info("Mock factory-id OTP generated for owner lookup")
     return {"message": "OTP sent successfully (mock)", "phone_number": full_phone}
 
 

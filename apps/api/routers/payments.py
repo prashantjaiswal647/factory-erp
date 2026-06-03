@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import json
+import logging
 import os
 from typing import List, Optional, Union
 from urllib import request as urlrequest
@@ -20,6 +21,7 @@ from services.activity_logger import log_activity
 
 router = APIRouter(tags=["payments"])
 MONEY_QUANT = Decimal("0.01")
+logger = logging.getLogger(__name__)
 
 
 def to_money(value) -> Decimal:
@@ -60,7 +62,7 @@ def send_n8n_whatsapp_event(payload: dict) -> None:
         with urlrequest.urlopen(req, timeout=5) as response:
             response.read()
     except Exception as exc:
-        print(f"N8N WEBHOOK ERROR: {exc}")
+        logger.warning("N8N WhatsApp webhook dispatch failed", exc_info=True)
 
 
 def calculate_customer_outstanding(db: Session, factory_id: int, customer: Customer) -> tuple[Decimal, Decimal, Decimal]:

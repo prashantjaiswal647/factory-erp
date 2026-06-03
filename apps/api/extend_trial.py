@@ -1,8 +1,11 @@
 import argparse
+import logging
 from datetime import datetime, timedelta, timezone
 
 from db import SessionLocal
 from models import Factory, User
+
+logger = logging.getLogger(__name__)
 
 
 def extend_trial(phone_number: str, days: int) -> None:
@@ -23,10 +26,7 @@ def extend_trial(phone_number: str, days: int) -> None:
         factory.payment_status = "payment_pending"
         db.commit()
 
-        print(
-            f"Extended trial for factory_id={factory.id} "
-            f"until {factory.trial_end_date.isoformat()}"
-        )
+        logger.info("Extended trial for factory_id=%s until %s", factory.id, factory.trial_end_date.isoformat())
     finally:
         db.close()
 

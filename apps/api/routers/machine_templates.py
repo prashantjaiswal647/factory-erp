@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -12,6 +13,7 @@ from routers.super_admin import require_super_admin
 
 
 router = APIRouter(tags=["machine-templates"])
+logger = logging.getLogger(__name__)
 
 TemplateStatus = Literal["processing", "pending", "approved", "rejected"]
 
@@ -34,7 +36,7 @@ class MachineTemplateResponse(MachineTemplateCreate):
 
 def notify_admin_for_manual_review(template: MachineTemplate) -> None:
     # Hook for email, Slack, n8n, or internal notification creation.
-    print(f"Machine template {template.id} requires manual review.")
+    logger.info("Machine template requires manual review template_id=%s", template.id)
 
 
 def run_ai_template_verification(template_id: int, session_factory: sessionmaker = SessionLocal) -> None:

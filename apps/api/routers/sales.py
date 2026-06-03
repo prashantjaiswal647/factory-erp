@@ -781,7 +781,7 @@ async def send_owner_sale_alert_email(
 ) -> None:
     mail_config = build_mail_config()
     if mail_config is None:
-        print("Owner sale alert email skipped: SMTP_USER, SMTP_PASSWORD, SMTP_FROM, or SMTP_HOST is not configured")
+        logger.info("Owner sale alert email skipped because SMTP configuration is incomplete")
         return
 
     attachment = {
@@ -1275,7 +1275,7 @@ def create_sales_order(
                 filename=f"sale-entry-{order.id}.pdf",
             )
         else:
-            print(f"Owner sale alert email skipped: no owner email found for factory_id={factory_id}")
+            logger.info("Owner sale alert email skipped: no owner email found for factory_id=%s", factory_id)
 
     return SalesOrderCreateResponse(
         order_id=order.id,
@@ -1709,8 +1709,8 @@ def list_pending_sales(
             for order in orders
         ]
     except Exception as e:
-        print(f"Error in pending sales: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("Pending sales query failed for factory_id=%s", current_user.factory_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error fetching pending sales") from e
 
 
 @router.post("/order/{order_id}/approve", response_model=SalesOrderActionResponse)
@@ -1832,9 +1832,9 @@ def approve_sales_order(
         db.rollback()
         raise
     except Exception as exc:
-        print(f"Error approving sales order {order_id}: {exc}")
+        logger.warning("Sales order approval failed for order_id=%s factory_id=%s", order_id, current_user.factory_id, exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Order approval failed: {exc}") from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Order approval failed") from exc
 
     background_tasks.add_task(
         sync_data_to_n8n_bg,
@@ -1891,9 +1891,9 @@ def reject_sales_order(
         db.rollback()
         raise
     except Exception as exc:
-        print(f"Error rejecting sales order {order_id}: {exc}")
+        logger.warning("Sales order rejection failed for order_id=%s factory_id=%s", order_id, current_user.factory_id, exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Order rejection failed: {exc}") from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Order rejection failed") from exc
 
 
 @router.get("/outstanding", response_model=SalesOutstandingResponse)

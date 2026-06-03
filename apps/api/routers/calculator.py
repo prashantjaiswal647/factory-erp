@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,7 @@ from models import DailyProduction, FinalProductStock, User
 
 
 router = APIRouter(prefix="/api/calculator", tags=["calculator"])
+logger = logging.getLogger(__name__)
 
 MONEY_QUANT = Decimal("0.01")
 PIECE_QUANT = Decimal("0.0001")
@@ -284,7 +286,7 @@ def generate_ai_insights(ideal: Dict[str, Any], actual: Dict[str, Any], rows: Li
         response = llm.invoke(prompt)
         return str(getattr(response, "content", response)).strip() or fallback
     except Exception as exc:
-        print(f"AI COMPARE ERROR: {exc}")
+        logger.warning("AI comparison insight generation failed", exc_info=True)
         return fallback
 
 

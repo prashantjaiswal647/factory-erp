@@ -45,8 +45,7 @@ def push_invoice_to_n8n_bg(payload: dict[str, Any]) -> None:
         try:
             logger.info(
                 "Dispatching invoice data body context to n8n endpoint. "
-                "webhook_url=%s factory_id=%s invoice_id=%s",
-                webhook_url,
+                "factory_id=%s invoice_id=%s",
                 factory_id,
                 invoice_id,
             )
@@ -57,29 +56,22 @@ def push_invoice_to_n8n_bg(payload: dict[str, Any]) -> None:
                 "Server response string trace status: %s",
                 response.status_code,
             )
-            logger.info(
-                "N8N invoice workflow response trace: webhook_url=%s response_body=%s",
-                webhook_url,
-                response.text[:500],
-            )
             response.raise_for_status()
-            print(f"N8N invoice workflow accepted: webhook_url={webhook_url}, status_code={response.status_code}")
+            logger.info("N8N invoice workflow accepted with status_code=%s", response.status_code)
             return
         except Exception as exc:
             logger.exception(
                 "N8N invoice workflow endpoint failed and was ignored for this endpoint. "
-                "webhook_url=%s factory_id=%s invoice_id=%s error=%s",
-                webhook_url,
+                "factory_id=%s invoice_id=%s error=%s",
                 factory_id,
                 invoice_id,
                 exc,
             )
-            print(f"N8N invoice workflow failed and was ignored: webhook_url={webhook_url}, error={exc}")
 
     logger.error(
         "N8N invoice workflow dispatch failed for all configured endpoints. "
-        "factory_id=%s invoice_id=%s attempted_urls=%s",
+        "factory_id=%s invoice_id=%s attempted_endpoint_count=%s",
         factory_id,
         invoice_id,
-        webhook_urls,
+        len(webhook_urls),
     )

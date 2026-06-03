@@ -221,7 +221,7 @@ def mark_worker_present_for_production(
         .first()
     )
     if existing_log is not None:
-        print("Automatic attendance skipped; existing attendance log found:", existing_log.id)
+        logger.info("Automatic attendance skipped; existing attendance log found id=%s", existing_log.id)
         return None
 
     duty_hours = float(worker.duty_hours or worker.shift_hours or 8.0)
@@ -251,7 +251,7 @@ def mark_worker_present_for_production(
     except Exception as log_error:
         logger.exception("Suppressed activity log failure for automatic attendance: %s", log_error)
 
-    print("Automatic attendance marked Present for production worker:", attendance_log.id)
+    logger.info("Automatic attendance marked present for production worker attendance_log_id=%s", attendance_log.id)
     return attendance_log
 
 
@@ -263,10 +263,9 @@ def create_daily_production(
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
 ):
-    print("Incoming Payload Details: ", payload.dict())
     factory_id = str(current_user.factory_id)
     if payload.factory_id and str(payload.factory_id) != factory_id:
-        print("Incoming payload factory_id ignored in favor of authenticated user factory_id:", payload.factory_id, factory_id)
+        logger.warning("Incoming production payload factory_id ignored in favor of authenticated factory_id")
     if payload.worker_id <= 0:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

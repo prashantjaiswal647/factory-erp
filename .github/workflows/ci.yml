@@ -26,5 +26,5 @@ jobs:
         with:
           node-version: "22"
       - run: cd apps/web && npm install
-      - run: cd apps/web && npm run type-check
+      - run: cd apps/web && npm run build
       - run: cd apps/web && npx vitest run

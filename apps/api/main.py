@@ -221,16 +221,26 @@ app.mount("/media", StaticFiles(directory="./volumes/media"), name="media")
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """
-    Patched trace system to print real errors to docker console logs 
-    instead of dropping headers during 500 runtime crashes.
+    Sanitized trace system to print real errors to docker console logs 
+    and return a generic error response with a request ID to prevent detail leakage.
     """
-    import traceback
-    logging.getLogger(__name__).exception("Critical script runtime error")
+    import uuid
+    request_id = request.headers.get("x-request-id")
+    if not request_id:
+        request_id = getattr(request.state, "request_id", None)
+    if not request_id:
+        request_id = str(uuid.uuid4())
+
+    logging.getLogger(__name__).exception(
+        "Critical script runtime error [Request ID: %s]", request_id
+    )
     
-    # Send detailed string tracking mapping back to browser for clear testing debug insight
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": f"Internal server error: {str(exc)}"},
+        content={
+            "detail": "An internal server error occurred.",
+            "request_id": request_id
+        },
         headers={
             "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:5173"),
             "Access-Control-Allow-Credentials": "true"
