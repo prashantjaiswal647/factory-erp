@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
+import logging
 from typing import Any
 
 from reportlab.lib import colors
@@ -12,6 +13,8 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from db import SessionLocal
 from models import Factory, OutstandingBill, PaymentCollection
+
+logger = logging.getLogger(__name__)
 
 
 def number_to_words_in_words(num: float) -> str:
@@ -97,8 +100,8 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
                 factory_gst = factory.gst_number or ""
                 factory_address = factory.address or ""
                 factory_place = factory.address_place or ""
-        except Exception as e:
-            print(f"Error fetching factory details in PDF build: {e}")
+        except Exception:
+            logger.warning("Error fetching factory details in PDF build", exc_info=True)
         finally:
             db.close()
 
@@ -312,8 +315,8 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
                         col.payment_mode,
                         _money(col.amount_collected)
                     ])
-        except Exception as e:
-            print(f"Error fetching payments in PDF build: {e}")
+        except Exception:
+            logger.warning("Error fetching payments in PDF build", exc_info=True)
         finally:
             db.close()
 
@@ -397,8 +400,8 @@ def build_accountant_summary_pdf(month: int, year: int, summary_data: dict[str, 
                 factory_name = factory.factory_name or factory.name
                 factory_gst = factory.gst_number or ""
                 factory_address = factory.address or ""
-        except Exception as e:
-            print(f"Error fetching factory details in summary PDF: {e}")
+        except Exception:
+            logger.warning("Error fetching factory details in summary PDF", exc_info=True)
         finally:
             db.close()
 
