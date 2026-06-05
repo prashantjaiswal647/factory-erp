@@ -16,7 +16,39 @@ jobs:
           python-version: "3.12"
       - run: pip install -r apps/api/requirements.txt
       - run: pip install pytest pytest-asyncio httpx
+      - run: python -B scripts/check_backend_policies.py
       - run: cd apps/api && PYTHONPATH=. python -B -m pytest tests/ -v
+
+  backend-postgres-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ai_erp_test
+          POSTGRES_USER: erp_admin
+          POSTGRES_PASSWORD: testpassword123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r apps/api/requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Run Postgres isolation tests
+        env:
+          P0_ISOLATION_DATABASE_URL: postgresql://erp_admin:testpassword123@localhost:5432/ai_erp_test
+        run: |
+          cd apps/api && PYTHONPATH=. python -B -m pytest tests/test_onboarding_isolation.py tests/test_remaining_p0_isolation.py -v
 
   frontend-tests:
     runs-on: ubuntu-latest

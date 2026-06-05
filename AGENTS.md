@@ -186,6 +186,11 @@ Duplicate/overlapping model families currently require careful consolidation:
 - `FinalProductStock` and `FinishedGoodsStock`
 - Multiple machine setup/configuration models
 
+Current incremental status:
+- `Worker` is canonical for new staff, attendance, advance-payment, production, and onboarding writes.
+- `Employee` remains as a compatibility table. Attendance and advance-payment records retain `employee_id` while preferring/backfilling `worker_id` only for exact same-factory matches.
+- Compatibility listeners remain active; do not remove `Employee` or its legacy foreign keys until production backfill and compatibility usage are verified over time.
+
 Rules:
 - Do not use destructive migrations as the first step.
 - Use compatibility views, service adapters, or read/write facades first.

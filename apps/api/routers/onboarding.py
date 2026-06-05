@@ -21,7 +21,6 @@ from models import (
     BoxStock,
     CostingMaster,
     Customer,
-    Employee,
     Factory,
     FactorySettings,
     FinalProductStock,
@@ -2631,7 +2630,6 @@ def complete_onboarding(
         worker_names = []
         for worker_payload in payload.workers:
             upsert_worker(db, factory_id, worker_payload)
-            upsert_employee_from_worker(db, factory_id, worker_payload)
             worker_names.append(worker_payload.name.strip())
 
         for customer_payload in payload.customers:
@@ -2865,22 +2863,6 @@ def upsert_worker(db: Session, factory_id: int, payload: WorkerPayload) -> Worke
     worker.shift_type = payload.shift_type
     worker.shift_timing = payload.shift_type
     return worker
-
-
-def upsert_employee_from_worker(db: Session, factory_id: int, payload: WorkerPayload) -> Employee:
-    employee = (
-        db.query(Employee)
-        .filter(Employee.factory_id == factory_id)
-        .filter(sql_func.lower(Employee.name) == payload.name.lower())
-        .first()
-    )
-    if employee is None:
-        employee = Employee(factory_id=factory_id, name=payload.name.strip())
-        db.add(employee)
-
-    employee.role = "Worker"
-    employee.daily_wage = payload.daily_salary
-    return employee
 
 
 def upsert_customer(db: Session, factory_id: int, payload: CustomerPayload) -> Customer:

@@ -1,5 +1,4 @@
-import pytest
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,6 +9,8 @@ from models import (
     Factory,
     Worker,
     Employee,
+    AttendanceLog,
+    AdvancePayment,
     FactoryExpense,
     ExpenseLog,
     PackagingProfile,
@@ -77,6 +78,121 @@ def test_worker_employee_synchronization():
         assert employee is None
     finally:
         db.close()
+
+
+def test_worker_attendance_and_advance_keep_employee_compatibility():
+    db = init_db()
+    try:
+        worker = Worker(factory_id=1, name="Canonical Worker", daily_wages=Decimal("450.00"))
+        db.add(worker)
+        db.commit()
+
+        employee = (
+            db.query(Employee)
+            .filter(Employee.factory_id == 1, Employee.name == "Canonical Worker")
+            .one()
+        )
+
+        attendance = AttendanceLog(
+            factory_id=1,
+            worker_id=worker.id,
+            date=date(2026, 6, 5),
+            status="Present",
+        )
+        advance = AdvancePayment(
+            factory_id=1,
+            worker_id=worker.id,
+            date=date(2026, 6, 5),
+            amount=125,
+        )
+        db.add_all([attendance, advance])
+        db.commit()
+
+        assert attendance.worker_id == worker.id
+        assert attendance.employee_id == employee.id
+        assert attendance.worker.id == worker.id
+        assert advance.worker_id == worker.id
+        assert advance.employee_id == employee.id
+        assert advance.worker.id == worker.id
+    finally:
+        db.close()
+
+
+def test_legacy_employee_attendance_and_advance_resolve_to_worker():
+    db = init_db()
+    try:
+        worker = Worker(factory_id=1, name="Legacy Compatible", daily_wages=Decimal("400.00"))
+        db.add(worker)
+        db.commit()
+        employee = (
+            db.query(Employee)
+            .filter(Employee.factory_id == 1, Employee.name == "Legacy Compatible")
+            .one()
+        )
+
+        attendance = AttendanceLog(
+            factory_id=1,
+            employee_id=employee.id,
+            date=date(2026, 6, 6),
+            status="Present",
+        )
+        advance = AdvancePayment(
+            factory_id=1,
+            employee_id=employee.id,
+            date=date(2026, 6, 6),
+            amount=75,
+        )
+        db.add_all([attendance, advance])
+        db.commit()
+
+        assert attendance.employee_id == employee.id
+        assert attendance.worker_id == worker.id
+        assert advance.employee_id == employee.id
+        assert advance.worker_id == worker.id
+    finally:
+        db.close()
+
+
+def test_legacy_employee_compatibility_never_crosses_factory_boundary():
+    db = init_db()
+    try:
+        second_factory = Factory(id=2, name="Other Factory")
+        employee = Employee(
+            factory_id=1,
+            name="Shared Name",
+            role="Worker",
+            daily_wage=Decimal("300.00"),
+        )
+        other_factory_worker = Worker(
+            factory_id=2,
+            name="Shared Name",
+            daily_wages=Decimal("300.00"),
+        )
+        db.add_all([second_factory, employee, other_factory_worker])
+        db.commit()
+
+        attendance = AttendanceLog(
+            factory_id=1,
+            employee_id=employee.id,
+            date=date(2026, 6, 7),
+            status="Present",
+        )
+        advance = AdvancePayment(
+            factory_id=1,
+            employee_id=employee.id,
+            date=date(2026, 6, 7),
+            amount=50,
+        )
+        db.add_all([attendance, advance])
+        db.commit()
+
+        assert attendance.employee_id == employee.id
+        assert attendance.worker_id is None
+        assert advance.employee_id == employee.id
+        assert advance.worker_id is None
+    finally:
+        db.close()
+
 
 def test_expense_synchronization():
     db = init_db()

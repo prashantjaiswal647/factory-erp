@@ -731,6 +731,9 @@ class Worker(TenantMixin, Base):
     shift_type = Column(String(100), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
+    attendance_logs = relationship("AttendanceLog", foreign_keys="AttendanceLog.worker_id")
+    advance_payments = relationship("AdvancePayment", foreign_keys="AdvancePayment.worker_id")
+
     __table_args__ = (
         CheckConstraint("daily_wages >= 0", name="ck_workers_daily_wages_non_negative"),
         CheckConstraint("daily_wage_rate >= 0", name="ck_workers_daily_wage_rate_non_negative"),
@@ -826,6 +829,7 @@ class AttendanceLog(TenantMixin, Base):
     overtime_hours = Column(Float, nullable=False, default=0)
 
     employee = relationship("Employee", back_populates="attendance_logs")
+    worker = relationship("Worker", back_populates="attendance_logs", foreign_keys=[worker_id])
 
     __table_args__ = (
         UniqueConstraint("factory_id", "date", "employee_id", name="uq_attendance_logs_factory_date_employee"),
@@ -847,6 +851,7 @@ class AdvancePayment(TenantMixin, Base):
     is_settled = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
 
     employee = relationship("Employee", back_populates="advance_payments")
+    worker = relationship("Worker", back_populates="advance_payments", foreign_keys=[worker_id])
 
     __table_args__ = (
         CheckConstraint("amount >= 0", name="ck_advance_payments_amount_non_negative"),
@@ -1369,11 +1374,45 @@ class WastageLog(TenantMixin, Base):
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 
+
+def _sync_worker_employee_reference(session: Session, obj) -> None:
+    """Populate the compatibility FK only for a same-factory name match."""
+    if not isinstance(obj, (AttendanceLog, AdvancePayment)):
+        return
+
+    if obj.worker_id is not None and obj.employee_id is None:
+        worker = obj.worker or session.get(Worker, obj.worker_id)
+        if worker is None or worker.factory_id != obj.factory_id:
+            return
+        employee = (
+            session.query(Employee)
+            .filter(Employee.factory_id == obj.factory_id, Employee.name == worker.name)
+            .first()
+        )
+        if employee is not None:
+            obj.employee_id = employee.id
+        return
+
+    if obj.employee_id is not None and obj.worker_id is None:
+        employee = obj.employee or session.get(Employee, obj.employee_id)
+        if employee is None or employee.factory_id != obj.factory_id:
+            return
+        worker = (
+            session.query(Worker)
+            .filter(Worker.factory_id == obj.factory_id, Worker.name == employee.name)
+            .first()
+        )
+        if worker is not None:
+            obj.worker_id = worker.id
+
+
 @event.listens_for(Session, 'before_flush')
 def before_session_flush(session, flush_context, instances):
     # 1. Handle inserts (session.new)
     for obj in list(session.new):
-        if isinstance(obj, Worker):
+        if isinstance(obj, (AttendanceLog, AdvancePayment)):
+            _sync_worker_employee_reference(session, obj)
+        elif isinstance(obj, Worker):
             existing = session.query(Employee).filter(Employee.factory_id == obj.factory_id, Employee.name == obj.name).first()
             if not existing:
                 employee = Employee(

@@ -61,8 +61,33 @@ else
   echo "==> Caddy service is not defined in docker-compose.yml; skipping Caddy restart"
 fi
 
-echo "==> Verifying production health endpoint"
-curl -fsS "${PRODUCTION_DOMAIN}/api/health" >/dev/null
+HEALTH_URL="https://munshiai.co.in/api/health"
+HEALTH_MAX_ATTEMPTS=30
+HEALTH_SLEEP_SECONDS=3
+
+echo "==> Verifying production health endpoint: ${HEALTH_URL}"
+for HEALTH_ATTEMPT in $(seq 1 "${HEALTH_MAX_ATTEMPTS}"); do
+  HTTP_STATUS="$(curl -sS -o /dev/null -w "%{http_code}" "${HEALTH_URL}" || true)"
+
+  if [[ "${HTTP_STATUS}" == "200" ]]; then
+    echo "==> Production health endpoint is healthy"
+    break
+  fi
+
+  if [[ "${HEALTH_ATTEMPT}" == "${HEALTH_MAX_ATTEMPTS}" ]]; then
+    echo "ERROR: Production health endpoint did not return HTTP 200 after ${HEALTH_MAX_ATTEMPTS} attempts. Last status: ${HTTP_STATUS}" >&2
+    echo "==> Docker Compose status"
+    "${COMPOSE[@]}" ps || true
+    echo "==> Last 100 API logs"
+    "${COMPOSE[@]}" logs --tail=100 api || true
+    echo "==> Last 100 Caddy logs"
+    "${COMPOSE[@]}" logs --tail=100 caddy || true
+    exit 1
+  fi
+
+  echo "==> Health endpoint not ready yet. Attempt ${HEALTH_ATTEMPT}/${HEALTH_MAX_ATTEMPTS}, status: ${HTTP_STATUS}. Retrying in ${HEALTH_SLEEP_SECONDS}s..."
+  sleep "${HEALTH_SLEEP_SECONDS}"
+done
 
 echo "==> Deployment complete"
 "${COMPOSE[@]}" ps
