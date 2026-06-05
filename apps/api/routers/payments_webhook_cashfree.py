@@ -34,23 +34,47 @@ async def cashfree_webhook(request: Request, db: Session = Depends(get_db)):
     if not event_id:
         raise HTTPException(status_code=400, detail="Cashfree event_id is required")
     event_type = str(payload.get("type") or data.get("event_type") or "")
-    event = CashfreeWebhookEvent(
-        cf_event_id=str(event_id),
-        cf_event_type=event_type or None,
-        payload=payload,
-        signature=signature,
-        status="received",
+    event_id = str(event_id)
+    event = (
+        db.query(CashfreeWebhookEvent)
+        .filter(CashfreeWebhookEvent.cf_event_id == event_id)
+        .first()
     )
-    try:
-        db.add(event)
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+    if event is not None and event.status == "processed":
         return {"ok": True, "duplicate": True}
+
+    if event is None:
+        event = CashfreeWebhookEvent(
+            cf_event_id=event_id,
+            cf_event_type=event_type or None,
+            payload=payload,
+            signature=signature,
+            status="received",
+        )
+        try:
+            db.add(event)
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            event = (
+                db.query(CashfreeWebhookEvent)
+                .filter(CashfreeWebhookEvent.cf_event_id == event_id)
+                .one()
+            )
+            if event.status == "processed":
+                return {"ok": True, "duplicate": True}
+    if event.status != "received" or event.error_message is not None:
+        event.status = "received"
+        event.error_message = None
+        event.processed_at = None
+    event.cf_event_type = event_type or None
+    event.payload = payload
+    event.signature = signature
+    db.commit()
     try:
         result = process_cashfree_event(db, event_type, payload)
         event = db.query(CashfreeWebhookEvent).filter(
-            CashfreeWebhookEvent.cf_event_id == str(event_id)
+            CashfreeWebhookEvent.cf_event_id == event_id
         ).one()
         event.status = "processed"
         event.processed_at = datetime.now(timezone.utc)
@@ -60,7 +84,7 @@ async def cashfree_webhook(request: Request, db: Session = Depends(get_db)):
     except Exception as exc:
         db.rollback()
         failed = db.query(CashfreeWebhookEvent).filter(
-            CashfreeWebhookEvent.cf_event_id == str(event_id)
+            CashfreeWebhookEvent.cf_event_id == event_id
         ).one()
         failed.status = "failed"
         failed.error_message = str(exc)[:2000]

@@ -409,9 +409,16 @@ def resolve_factory_subscription(factory: Optional[Factory]) -> dict:
     # Extract raw fields
     raw_active_plan = getattr(factory, "active_plan", None)
     raw_plan_name = getattr(factory, "plan_name", None)
-    raw_subscription_end_date = as_utc(getattr(factory, "subscription_end_date", None) or getattr(factory, "subscription_end", None))
+    raw_subscription_end_date = as_utc(
+        getattr(factory, "subscription_end_date", None)
+        or getattr(factory, "subscription_end", None)
+        or getattr(factory, "current_period_end", None)
+    )
     raw_plan_expires_at = as_utc(getattr(factory, "plan_expires_at", None))
-    raw_trial_end_date = as_utc(getattr(factory, "trial_end_date", None))
+    raw_trial_end_date = as_utc(
+        getattr(factory, "trial_end_date", None)
+        or getattr(factory, "trial_end", None)
+    )
         
     subscription_status = getattr(factory, "subscription_status", None)
     payment_status = getattr(factory, "payment_status", None)
