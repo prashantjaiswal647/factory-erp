@@ -125,3 +125,26 @@ Alternatives considered
 
 Consequences
   P0.1 (T1 isolation test) and P0.2/P0.3 (lint rules) in `CURRENT_STATUS.md` §3 are mandatory before pilot. Every new feature requires a `factory_id` scope test. Every bulk write requires an isolation assertion. The rule is enforced by CI, not by code review. The schema-compat listener pattern for Worker/Employee, ExpenseLog/FactoryExpense, and FinishedGoodsStock/FinalProductStock must never cross factory boundaries; this is verified by `tests/test_model_consolidation_sync.py`.
+
+---
+
+## 7. API base URL normalization / redirect loop fix
+
+Date: 2026-06-05
+
+Decision
+  (a) `VITE_API_URL` must be the production origin only (e.g. `https://munshiai.co.in`). It must NEVER include the `/api` suffix. `apps/web/src/lib/api.ts getBaseURL()` strips a trailing `/api` defensively so older env values still work, but the canonical value is origin-only.
+  (b) `apps/api/main.py` constructs the FastAPI app with `redirect_slashes=False`. Trailing-slash mismatches between frontend and backend return 404, never 307.
+  (c) `Caddyfile` uses explicit `reverse_proxy` blocks with `header_up Host {host}`, `header_up X-Real-IP {remote_host}`, `header_up X-Forwarded-For {remote_host}`, `header_up X-Forwarded-Proto {scheme}` on BOTH upstreams (`api:8000` and `web:80`). The site block also includes `encode gzip zstd`.
+
+Reason
+  Production was systematically returning `ERR_TOO_MANY_REDIRECTS` for every `/api/*` path. Root cause was a `/api/api/...` double prefix caused by `VITE_API_URL` including the `/api` suffix, combined with FastAPI's default `redirect_slashes=True` issuing 307s that Caddy and the browser could not break out of. The fix is four small edits, but the rules it codifies prevent recurrence. A future operator who sets `VITE_API_URL=https://munshiai.co.in/api` will not reintroduce the bug because the `docker-compose.yml` comment documents the correct value AND `getBaseURL()` auto-normalizes legacy values. A future contributor who adds a new `/api/*` route will not create a redirect loop because `redirect_slashes=False` is global. A future contributor who touches the Caddyfile will not accidentally drop the explicit `reverse_proxy` block because the comment block above it documents why it is there.
+
+Alternatives considered
+  (a) Set `VITE_API_URL` correctly and rely on operator discipline. Rejected: silent regressions are inevitable; the `getBaseURL()` normalization is the safety net.
+  (b) Keep `redirect_slashes=True` and align every frontend call to the exact backend route shape. Rejected: makes the frontend brittle to backend renames and adds a redirect round-trip on every cold call.
+  (c) Use Caddy `handle_path` to strip `/api/*` prefix before forwarding. Rejected: FastAPI routes are registered under `/api/...` prefixes and changing this would require touching every router.
+  (d) Move the API to a subdomain (e.g. `api.munshiai.co.in`) and drop Caddy `/api/*` routing entirely. Deferred to 10+ factories when the routing surface justifies the operational overhead.
+
+Consequences
+  `apps/web npm run build` is the deploy gate. `Caddyfile` and `apps/api/main.py` are the two files that must be touched together when adding a new `/api/*` route. The deploy must rebuild `api`, `web`, and `caddy` in that order so the new bundle is live before any request hits the new Caddy config. The actual production Caddy container name is `factory-erp-caddy-1` (Docker Compose project-name prefix); see `AGENTS.md` §14.

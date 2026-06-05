@@ -83,6 +83,7 @@ The foundation works. The pilot blockers (P0/P1 in `CURRENT_STATUS.md`) are the 
 - Frontend CI uses `npm run build` (P0 fix landed).
 - Global 500 responses do not expose internal exception strings (P0 fix landed).
 - Secret-handling checklist is documented.
+- API base URL normalization / redirect loop fix: `getBaseURL` strips a trailing `/api` from `VITE_API_URL`; `FastAPI(redirect_slashes=False)`; `Caddyfile` uses explicit `reverse_proxy` blocks with `header_up` and `encode gzip zstd`. Codified in `DECISIONS.md` #7.
 
 ### Still Open
 

@@ -221,6 +221,8 @@ Rules:
 - `deploy.sh` aborts if the working tree has uncommitted changes.
 - Production flow: backup -> Alembic -> recreate containers -> verify `/api/health`.
 - Do not push directly to VPS without using `deploy.sh`; it handles env vars (`VITE_API_URL`, `CORS_ORIGINS`) and backup.
+- Production Caddy container name is `factory-erp-caddy-1` (Docker Compose project-name prefix on the Hostinger VPS). Reload with `docker compose restart factory-erp-caddy-1` or recreate with `docker compose up -d --force-recreate caddy`. When adding a new `/api/*` route, the deploy must rebuild `api`, `web`, and `caddy` in that order so the new bundle is live before any request can hit the new Caddy config.
+- Health check is `GET https://munshiai.co.in/api/health`. `curl -I` (HEAD) returns 405. Use `curl -s -o /dev/null -w "%{http_code}\n" https://munshiai.co.in/api/health` to assert 200. See `DECISIONS.md` #7 for the VITE_API_URL / redirect_slashes / Caddyfile routing contract.
 
 ## 15. Multi-Tenant Rules
 
