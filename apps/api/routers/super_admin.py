@@ -297,6 +297,28 @@ class SingleFactoryDeleteRequest(BaseModel):
     confirmation: str
 
 
+def apply_factory_subscription_update(factory: Factory, data: dict) -> None:
+    """Keep the Factory subscription columns synchronized for partial admin edits."""
+    for field, value in data.items():
+        setattr(factory, field, value)
+
+    if "active_plan" in data and "plan_name" not in data:
+        factory.plan_name = data["active_plan"]
+    elif "plan_name" in data and "active_plan" not in data:
+        factory.active_plan = data["plan_name"]
+
+    if "subscription_start_date" in data:
+        factory.subscription_start = data["subscription_start_date"]
+
+    if "subscription_end_date" in data:
+        factory.subscription_end = data["subscription_end_date"]
+        if "plan_expires_at" not in data:
+            factory.plan_expires_at = data["subscription_end_date"]
+    elif "plan_expires_at" in data:
+        factory.subscription_end_date = data["plan_expires_at"]
+        factory.subscription_end = data["plan_expires_at"]
+
+
 def no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -1330,12 +1352,9 @@ def patch_subscription(subscription_id: int, payload: SubscriptionPatchRequest, 
     data = payload.model_dump(exclude_unset=True)
     note = data.pop("note", None)
     admin_note = data.pop("admin_note", None)
-    for field, value in data.items():
-        setattr(factory, field, value)
+    apply_factory_subscription_update(factory, data)
     if admin_note is not None:
         factory.admin_note = admin_note
-    if data.get("subscription_end_date") and not data.get("plan_expires_at"):
-        factory.plan_expires_at = data["subscription_end_date"]
     # Emit a dedicated subscription_override event when subscription-critical fields are touched
     _OVERRIDE_FIELDS = {"active_plan", "plan_name", "subscription_status", "payment_status",
                        "subscription_end_date", "plan_expires_at", "usage_limit", "token_limit"}
@@ -1357,10 +1376,7 @@ def owner_subscription(owner_id: int, payload: OwnerSubscriptionRequest, request
     old = factory_summary(db, factory)
     data = payload.model_dump(exclude_unset=True)
     note = data.pop("note", None)
-    for field, value in data.items():
-        setattr(factory, field, value)
-    if data.get("subscription_end_date") and not data.get("plan_expires_at"):
-        factory.plan_expires_at = data["subscription_end_date"]
+    apply_factory_subscription_update(factory, data)
     audit(db, request, admin_email, "owner_subscription_update", "factory", factory.id, old, data, note)
     db.commit()
     db.refresh(factory)

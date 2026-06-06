@@ -171,13 +171,6 @@ export default function Layout() {
   const trialEndLabel = subData?.raw_trial_end_date ? new Date(subData.raw_trial_end_date).toLocaleDateString("en-IN") : "";
   const subscriptionEndDate = planExpiresAt ? new Date(planExpiresAt) : null;
   const layoutSubscriptionEndDate = layoutStatus?.subscription_end ? new Date(layoutStatus.subscription_end) : subscriptionEndDate;
-  const expiresSoon = Boolean(
-    subscriptionStatus === "active" &&
-      subscriptionEndDate &&
-      subscriptionEndDate.getTime() - Date.now() <= 7 * 24 * 60 * 60 * 1000 &&
-      subscriptionEndDate.getTime() >= Date.now()
-  );
-
   function handleSignOut() {
     sessionStorage.removeItem("dismiss_banner");
     logout();

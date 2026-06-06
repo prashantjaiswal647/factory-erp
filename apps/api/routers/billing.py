@@ -482,10 +482,10 @@ def billing_status(
     db: Session = Depends(get_db),
 ):
     set_no_store_headers(response)
+    res = get_effective_subscription(db, current_user.factory_id)
     factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
-    res = get_effective_subscription(db, current_user.factory_id)
     return status_payload(factory, current_user, res)
 
 
