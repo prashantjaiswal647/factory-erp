@@ -1,13 +1,28 @@
 munshiai.co.in, www.munshiai.co.in {
-    # Forward all API paths directly to FastAPI container port 8000
+    # Forward all API paths directly to FastAPI container port 8000.
+    # Explicit reverse_proxy block preserves Host / X-Real-IP /
+    # X-Forwarded-* headers so FastAPI sees the real client and scheme.
     handle /api/* {
-        reverse_proxy api:8000
+        reverse_proxy api:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
-    
-    # Forward everything else to static web container build files
+
+    # Forward everything else to the static web container (SPA fallback).
     handle {
-        reverse_proxy web:80
+        reverse_proxy web:80 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
+
+    # Enable response compression for both upstreams.
+    encode gzip zstd
 }
 
 api.munshiai.co.in {

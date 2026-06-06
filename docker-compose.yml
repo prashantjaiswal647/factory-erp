@@ -57,6 +57,14 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
+        # VITE_API_URL must be the production ORIGIN only (no /api suffix).
+        # API calls already prepend /api/... paths.
+        # Accepted values:
+        #   VITE_API_URL=https://munshiai.co.in        (correct, recommended)
+        #   VITE_API_URL=https://www.munshiai.co.in   (also correct)
+        #   VITE_API_URL=                              (uses window.location.origin)
+        # The /api suffix is auto-stripped by apps/web/src/lib/api.ts so
+        # older .env values that included it still work.
         VITE_API_URL: ${VITE_API_URL:-}
     container_name: ai-erp-web
     restart: always

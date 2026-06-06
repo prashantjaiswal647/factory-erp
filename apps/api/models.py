@@ -26,7 +26,7 @@ class Factory(Base):
     __tablename__ = "factories"
     __table_args__ = (
         CheckConstraint(
-            "subscription_status IN ('trial_active', 'trial_expired', 'active', 'inactive', 'expired', 'cancelled', 'payment_pending', 'trial', 'suspended')",
+            "subscription_status IN ('trial_active', 'trial_expired', 'active', 'inactive', 'expired', 'cancelled', 'payment_pending', 'trial', 'suspended', 'pending', 'past_due')",
             name="ck_factories_subscription_status",
         ),
     )
@@ -62,6 +62,14 @@ class Factory(Base):
     address = Column(Text, nullable=True)
     razorpay_customer_id = Column(String(255), nullable=True)
     razorpay_subscription_id = Column(String(255), nullable=True)
+    cashfree_customer_id = Column(String(64), nullable=True, index=True)
+    cashfree_subscription_id = Column(String(64), nullable=True)
+    cashfree_plan_code = Column(String(32), nullable=True)
+    trial_end = Column(DateTime(timezone=True), nullable=True)
+    current_period_start = Column(DateTime(timezone=True), nullable=True)
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
+    next_billing_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
     telegram_bot_token = Column(String(255), nullable=True)
     telegram_token = Column(String(500), nullable=True)
     telegram_chat_id = Column(String(255), nullable=True)
@@ -159,9 +167,37 @@ class SubscriptionPayment(Base):
     payment_status = Column(String(50), nullable=False, default="paid", server_default="paid", index=True)
     provider = Column(String(50), nullable=True)
     provider_payment_id = Column(String(255), nullable=True, index=True)
+    cf_order_id = Column(String(64), nullable=True)
+    cf_payment_id = Column(String(64), nullable=True)
+    cf_invoice_id = Column(String(64), nullable=True)
+    cf_event_id = Column(
+        String(128),
+        ForeignKey("cashfree_webhook_events.cf_event_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     subscription_start_date = Column(DateTime(timezone=True), nullable=False)
     subscription_end_date = Column(DateTime(timezone=True), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class CashfreeWebhookEvent(Base):
+    __tablename__ = "cashfree_webhook_events"
+    __table_args__ = (
+        UniqueConstraint("cf_event_id", name="uq_cashfree_webhook_events_cf_event_id"),
+        Index("ix_cashfree_webhook_events_status", "status", "received_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    cf_event_id = Column(String(128), nullable=False)
+    cf_event_type = Column(String(64), nullable=True)
+    factory_id = Column(Integer, ForeignKey("factories.id", ondelete="SET NULL"), nullable=True, index=True)
+    payload = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
+    signature = Column(String(512), nullable=True)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(16), nullable=False, default="received", server_default="received")
+    error_message = Column(Text, nullable=True)
 
 
 class SuperAdminAuditLog(Base):

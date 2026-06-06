@@ -4,7 +4,15 @@ const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 const getBaseURL = () => {
   const configuredUrl = import.meta.env.VITE_API_URL;
-  if (configuredUrl) return trimTrailingSlash(configuredUrl);
+  if (configuredUrl) {
+    let base = trimTrailingSlash(configuredUrl);
+    // Normalize: strip a trailing /api suffix so that API calls which
+    // already prepend /api/... do not produce /api/api/... doubling.
+    if (base.toLowerCase().endsWith("/api")) {
+      base = base.slice(0, -4);
+    }
+    return base;
+  }
 
   if (typeof window === "undefined") return "";
 

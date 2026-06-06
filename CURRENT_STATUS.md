@@ -83,3 +83,8 @@ Deferred past this runway: pgBouncer, centralized monitoring, enterprise securit
   - Items deferred to P2 are not forgotten; they are sequenced. Most become important at 5+ factories, urgent at 10+.
   - Production URL: https://munshiai.co.in (API at /api). Local repo at C:\Users\Prashant\OneDrive\Desktop\Coding Projects\ai-erp-system.
   - When asked to do something outside this priority list, check whether it fits "P0 production incident, tenant-isolation bug, security issue, or data-loss risk" before doing it.
+
+## 6. Recently Resolved P0 Incidents (2026-06-05)
+
+  - API base URL normalization / redirect loop fix: production inventory, onboarding, dashboard, and billing endpoints were returning `ERR_TOO_MANY_REDIRECTS` for every `/api/*` path. Root cause was a misconfigured `VITE_API_URL` that included the `/api` suffix, combined with FastAPI's default `redirect_slashes=True` and a Caddyfile that lacked explicit `reverse_proxy` blocks. Fixed in 4 files: `apps/web/src/lib/api.ts` (`getBaseURL` now strips a trailing `/api` defensively), `apps/api/main.py` (`FastAPI(redirect_slashes=False)`), `Caddyfile` (explicit `reverse_proxy` blocks with `header_up` and `encode gzip zstd`), `docker-compose.yml` (documentation comment on `VITE_API_URL`). Frontend `npm run build` passed. Hostinger VPS deploy pending. Codified as `DECISIONS.md` #7.
+  - Open (separate frontend issue, not a routing fix): Recharts `width/height -1` warning is in a page outside the routing-fix inspection scope (likely `DashboardPage.tsx` or an analytics component). Track as its own ticket; fix in the file that hosts the chart.

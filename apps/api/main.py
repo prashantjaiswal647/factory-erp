@@ -83,6 +83,9 @@ from routers import payments
 from routers import dashboard
 from routers import attendance
 from routers import billing
+from routers import billing_admin
+from routers import billing_v1
+from routers import payments_webhook_cashfree
 from routers import staff
 from routers import super_admin
 from routers import expenses
@@ -93,7 +96,7 @@ from routers.daily_sequence import router as daily_sequence_router
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AI ERP API", version="0.1.0")
+app = FastAPI(title="AI ERP API", version="0.1.0", redirect_slashes=False)
 
 # ==================== CORS SECURITY LAYER CONFIGURATION ====================
 def parse_cors_origins() -> List[str]:
@@ -194,6 +197,9 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(dashboard.v1_router)
     application.include_router(attendance.router)
     application.include_router(billing.router)
+    application.include_router(billing_v1.router)
+    application.include_router(billing_admin.router)
+    application.include_router(payments_webhook_cashfree.router)
     application.include_router(staff.router)
     application.include_router(staff.v1_router)
     application.include_router(staff.staff_v1_router)

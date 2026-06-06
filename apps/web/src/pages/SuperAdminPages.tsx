@@ -4,6 +4,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import PasswordInput from "../components/PasswordInput";
+import ActivateSubscriptionButton from "../components/billing/ActivateSubscriptionButton";
 import { superAdminApi } from "../lib/api";
 
 const ADMIN_TOKEN_KEY = "munshi_super_admin_token";
@@ -1047,6 +1048,7 @@ function SubscriptionModal({ factory, onClose, onSaved }: { factory: FactoryReco
           <Input label="Admin Note" value={note} onChange={setNote} />
         </div>
         <div className="mt-5 flex justify-end gap-2">
+          <ActivateSubscriptionButton factoryId={factory.id} />
           <button className="rounded-md border px-4 py-2 text-sm font-bold" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
           <button className="rounded-md bg-[#6D28D9] px-4 py-2 text-sm font-bold text-white disabled:bg-zinc-300" type="button" onClick={save} disabled={isSaving}>
             {isSaving ? "Saving..." : "Save Change"}
