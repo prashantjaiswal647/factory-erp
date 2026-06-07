@@ -277,7 +277,7 @@ def test_finished_goods_final_product_synchronization():
         assert fp is not None
         assert fp.packaging_size_name == "250ML Special Packing"
         assert fp.total_boxes == 15
-        assert fp.current_quantity == 15 * 500
+        assert fp.current_quantity == 15
 
         # 2. Update FinishedGoodsStock
         fg.boxes_available = 25
@@ -289,7 +289,7 @@ def test_finished_goods_final_product_synchronization():
             FinalProductStock.variety == "Special Design"
         ).first()
         assert fp.total_boxes == 25
-        assert fp.current_quantity == 25 * 500
+        assert fp.current_quantity == 25
     finally:
         db.close()
 

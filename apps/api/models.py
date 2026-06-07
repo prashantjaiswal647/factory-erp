@@ -1500,13 +1500,27 @@ def before_session_flush(session, flush_context, instances):
                     FinalProductStock.packaging_size_name == profile.profile_name
                 ).first()
                 if not existing:
+                    for new_obj in session.new:
+                        if isinstance(new_obj, FinalProductStock):
+                            if (new_obj.factory_id == obj.factory_id and
+                                new_obj.product_size_ml == obj.cup_size_ml and
+                                new_obj.variety == variety and
+                                new_obj.packaging_size_name == profile.profile_name):
+                                existing = new_obj
+                                break
+                if existing:
+                    existing.current_quantity = obj.boxes_available
+                    existing.total_boxes = obj.boxes_available
+                    existing.pieces_per_packet = profile.cups_per_poly or 1
+                    existing.packets_per_box_limit = profile.polys_per_box or 1
+                else:
                     fp = FinalProductStock(
                         factory_id=obj.factory_id,
                         product_size_ml=obj.cup_size_ml,
                         variety=variety,
                         packaging_size_name=profile.profile_name,
                         pieces_per_packet=profile.cups_per_poly or 1,
-                        current_quantity=obj.boxes_available * (profile.box_capacity or 1),
+                        current_quantity=obj.boxes_available,
                         total_boxes=obj.boxes_available,
                         loose_packets=0,
                         packets_per_box_limit=profile.polys_per_box or 1
@@ -1542,15 +1556,39 @@ def before_session_flush(session, flush_context, instances):
             profile = session.query(PackagingProfile).filter(PackagingProfile.id == obj.packaging_profile_id).first()
             if profile:
                 variety = obj.variant_name or "Standard/White"
-                session.query(FinalProductStock).filter(
+                existing = session.query(FinalProductStock).filter(
                     FinalProductStock.factory_id == obj.factory_id,
                     FinalProductStock.product_size_ml == obj.cup_size_ml,
                     FinalProductStock.variety == variety,
                     FinalProductStock.packaging_size_name == profile.profile_name
-                ).update({
-                    FinalProductStock.current_quantity: obj.boxes_available * (profile.box_capacity or 1),
-                    FinalProductStock.total_boxes: obj.boxes_available
-                }, synchronize_session=False)
+                ).first()
+                if not existing:
+                    for new_obj in session.new:
+                        if isinstance(new_obj, FinalProductStock):
+                            if (new_obj.factory_id == obj.factory_id and
+                                new_obj.product_size_ml == obj.cup_size_ml and
+                                new_obj.variety == variety and
+                                new_obj.packaging_size_name == profile.profile_name):
+                                existing = new_obj
+                                break
+                if existing:
+                    existing.current_quantity = obj.boxes_available
+                    existing.total_boxes = obj.boxes_available
+                    existing.pieces_per_packet = profile.cups_per_poly or 1
+                    existing.packets_per_box_limit = profile.polys_per_box or 1
+                else:
+                    fp = FinalProductStock(
+                        factory_id=obj.factory_id,
+                        product_size_ml=obj.cup_size_ml,
+                        variety=variety,
+                        packaging_size_name=profile.profile_name,
+                        pieces_per_packet=profile.cups_per_poly or 1,
+                        current_quantity=obj.boxes_available,
+                        total_boxes=obj.boxes_available,
+                        loose_packets=0,
+                        packets_per_box_limit=profile.polys_per_box or 1
+                    )
+                    session.add(fp)
 
     # 3. Handle deletes (session.deleted)
     for obj in list(session.deleted):
