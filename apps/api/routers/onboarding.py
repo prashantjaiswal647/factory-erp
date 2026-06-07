@@ -31,13 +31,6 @@ from models import (
     PackagingProfile,
     RawMaterial,
     RawMaterialMetrics,
-    FinishedGoodsStock,
-    Inventory,
-    Machine,
-    MaterialYield,
-    PackagingProfile,
-    RawMaterial,
-    RawMaterialMetrics,
     PackagingMetrics,
     PlasticStock,
     User,
@@ -619,6 +612,47 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
     return valid_by_type, failed_rows
 
 
+def inspect_finished_goods_sheet(file_bytes: bytes) -> dict:
+    import pandas as pd
+
+    debug_info = {
+        "sheet_name": None,
+        "normalized_headers": [],
+        "rows_read": 0,
+        "rows_inserted": 0,
+        "rows_updated": 0,
+        "rows_skipped": 0,
+        "skip_reasons": [],
+        "created_finished_goods_stock_ids": [],
+        "created_final_product_stock_ids": [],
+        "matched_existing_final_product_stock_ids": [],
+    }
+    workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=object)
+    sheet_name = next(
+        (name for name in workbook if canonical_bulk_header(name) == "finished_goods"),
+        None,
+    )
+    if sheet_name is None:
+        available = ", ".join(str(name) for name in workbook) or "none"
+        debug_info["skip_reasons"].append(
+            f"Finished Goods sheet not imported because the worksheet was not found. Available sheets: {available}"
+        )
+        return debug_info
+
+    debug_info["sheet_name"] = sheet_name
+    frame = workbook[sheet_name]
+    if len(frame.index) < 2:
+        debug_info["skip_reasons"].append(
+            "Finished Goods sheet not imported because the header row is missing"
+        )
+        return debug_info
+
+    debug_info["normalized_headers"] = [
+        header for header in (canonical_bulk_header(value) for value in frame.iloc[1].tolist()) if header
+    ]
+    return debug_info
+
+
 def build_master_onboarding_workbook() -> BytesIO:
     import pandas as pd
     from openpyxl.styles import Font, PatternFill
@@ -744,7 +778,67 @@ def log_bulk_inventory_uploads(
         )
 
 
-def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_rows: list[dict], stats: dict[str, int] | None = None) -> int:
+def sync_finished_goods_to_final_product_stock(
+    db: Session,
+    factory_id: int,
+    stock: FinishedGoodsStock,
+    fg_debug_info: dict | None = None,
+) -> FinalProductStock:
+    profile = (
+        db.query(PackagingProfile)
+        .filter(
+            PackagingProfile.factory_id == factory_id,
+            PackagingProfile.id == stock.packaging_profile_id,
+        )
+        .first()
+    )
+    if profile is None:
+        raise ValueError(
+            f"Finished Goods sheet not imported because packaging profile {stock.packaging_profile_id} "
+            f"does not belong to factory {factory_id}"
+        )
+
+    variety = (stock.variant_name or "Standard/White").strip() or "Standard/White"
+    packaging_size_name = profile.profile_name.strip()
+    final_stock = (
+        db.query(FinalProductStock)
+        .filter(
+            FinalProductStock.factory_id == factory_id,
+            FinalProductStock.product_size_ml == stock.cup_size_ml,
+            sql_func.lower(FinalProductStock.variety) == variety.lower(),
+            sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower(),
+        )
+        .with_for_update()
+        .first()
+    )
+    if final_stock is None:
+        final_stock = FinalProductStock(
+            factory_id=factory_id,
+            product_size_ml=stock.cup_size_ml,
+            variety=variety,
+            packaging_size_name=packaging_size_name,
+            pieces_per_packet=profile.cups_per_poly or 1,
+            packets_per_box_limit=profile.polys_per_box or 1,
+            current_quantity=stock.boxes_available or 0,
+            total_boxes=stock.boxes_available or 0,
+            loose_packets=0,
+        )
+        db.add(final_stock)
+        db.flush()
+        if fg_debug_info is not None:
+            fg_debug_info["created_final_product_stock_ids"].append(final_stock.id)
+    else:
+        final_stock.pieces_per_packet = profile.cups_per_poly or 1
+        final_stock.packets_per_box_limit = profile.polys_per_box or 1
+        final_stock.current_quantity = stock.boxes_available or 0
+        final_stock.total_boxes = stock.boxes_available or 0
+        db.flush()
+        if fg_debug_info is not None:
+            fg_debug_info["matched_existing_final_product_stock_ids"].append(final_stock.id)
+    return final_stock
+
+
+def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_rows: list[dict], stats: dict[str, int] | None = None, fg_debug_info: dict | None = None) -> int:
     factory_id = int(current_user.factory_id)
     if not valid_rows:
         return 0
@@ -1045,6 +1139,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
 
     if sub_tab_type == "finished_goods":
         saved_count = 0
+        if fg_debug_info is not None:
+            fg_debug_info["rows_read"] = len(valid_rows)
         for row in valid_rows:
             product_size_ml = int(row["product_size_ml"])
             variety = (row.get("variety_design") or "Standard/White").strip() or "Standard/White"
@@ -1106,7 +1202,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 .with_for_update()
                 .first()
             )
-            if stock is None:
+            is_new_stock = stock is None
+            if is_new_stock:
                 stock = FinishedGoodsStock(
                     factory_id=factory_id,
                     cup_size_ml=product_size_ml,
@@ -1125,6 +1222,14 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 increment_bulk_stat(stats, "updated")
 
             db.flush()
+            if fg_debug_info is not None:
+                if is_new_stock:
+                    fg_debug_info["rows_inserted"] += 1
+                else:
+                    fg_debug_info["rows_updated"] += 1
+                fg_debug_info["created_finished_goods_stock_ids"].append(stock.id)
+
+            sync_finished_goods_to_final_product_stock(db, factory_id, stock, fg_debug_info)
 
             saved_count += 1
         return saved_count
@@ -1196,12 +1301,30 @@ async def bulk_upload_master_onboarding(
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
-    valid_by_type, failed_rows = read_master_bulk_excel(await file.read())
+    file_bytes = await file.read()
+    fg_debug_info = inspect_finished_goods_sheet(file_bytes)
+    valid_by_type, failed_rows = read_master_bulk_excel(file_bytes)
+
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
 
     # Build enriched validation report
     total_attempted = sum(len(rows) for rows in valid_by_type.values()) + len(failed_rows)
     issues = enrich_failed_rows(failed_rows) + duplicate_warnings
+
+    # Extract any failures or skip reasons for Finished Goods
+    fg_errors = [err for err in failed_rows if err.get("sheet") == "Finished Goods"]
+    if fg_errors:
+        for err in fg_errors:
+            reason = err.get("error") or "unknown validation error"
+            missing = err.get("missing_headers")
+            if missing:
+                reason = f"{reason}; missing headers: {', '.join(missing)}"
+            fg_debug_info["skip_reasons"].append(
+                f"Finished Goods sheet not imported because {reason}"
+            )
+            fg_debug_info["rows_skipped"] += 1
+    elif fg_debug_info["sheet_name"] and not valid_by_type.get("finished_goods"):
+        fg_debug_info["skip_reasons"].append("Finished Goods sheet not imported because no ACTUAL rows were found or sheet is empty")
 
     # Fatal errors block the entire import
     fatal_issues = [i for i in issues if i.severity == ValidationSeverity.FATAL]
@@ -1213,8 +1336,8 @@ async def bulk_upload_master_onboarding(
                 "message": "Import rejected due to validation errors. Fix the highlighted rows and upload again.",
                 "overall_status": "failed",
                 "validation_report": report.to_dict(),
-                # Keep legacy failed_rows for backward compatibility
                 "failed_rows": failed_rows,
+                "fg_debug_info": fg_debug_info,
             },
         )
 
@@ -1226,6 +1349,7 @@ async def bulk_upload_master_onboarding(
                 "overall_status": "failed",
                 "validation_report": make_report([], 0, 0).to_dict(),
                 "failed_rows": [{"sheet": "Workbook", "row": None, "error": "No valid rows found"}],
+                "fg_debug_info": fg_debug_info,
             },
         )
 
@@ -1245,6 +1369,7 @@ async def bulk_upload_master_onboarding(
                 sub_tab_type,
                 valid_by_type.get(sub_tab_type, []),
                 operation_counts,
+                fg_debug_info=fg_debug_info if sub_tab_type == "finished_goods" else None
             )
         db.commit()
         total_rows = sum(inserted_counts.values())
@@ -1257,10 +1382,10 @@ async def bulk_upload_master_onboarding(
         # Calculate dynamic summary status counts for response
         summary_payload = {
             "finished_goods": {
-                "read": len(valid_by_type.get("finished_goods", [])),
-                "inserted": len([r for r in valid_by_type.get("finished_goods", []) if r.get("_row_number")]), # approximated stats
-                "updated": 0,
-                "skipped": 0,
+                "read": fg_debug_info["rows_read"],
+                "inserted": fg_debug_info["rows_inserted"],
+                "updated": fg_debug_info["rows_updated"],
+                "skipped": fg_debug_info["rows_skipped"],
             },
             "workers": {
                 "read": len(valid_by_type.get("worker", [])),
@@ -1296,6 +1421,7 @@ async def bulk_upload_master_onboarding(
             "operation_counts": operation_counts,
             "validation_report": report.to_dict(),
             "summary": summary_payload,
+            "fg_debug_info": fg_debug_info,
             "errors": [err for err in failed_rows],
             # kept for backward compatibility
             "failed_rows": [],

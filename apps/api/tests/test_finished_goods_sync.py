@@ -187,6 +187,52 @@ def test_select_existing_finished_good_in_production(app_factory):
 
 # ────────────────────── Test 2: create new variant from production form ──────────────────────
 
+def test_bulk_uploaded_finished_goods_appear_in_final_stock_api(app_factory):
+    from routers.onboarding import apply_bulk_rows
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    user = SimpleNamespace(id=1, factory_id=1)
+    rows = [
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 210,
+            "variety_design": "Lovely day",
+            "packaging_size_name": "210- lovely day - 48*62",
+            "pcs_per_packet": 48,
+            "packets_per_box": 62,
+            "initial_stock_boxes": 20,
+        },
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 250,
+            "variety_design": "Spectra",
+            "packaging_size_name": "250 Spectra - 45*62",
+            "pcs_per_packet": 45,
+            "packets_per_box": 62,
+            "initial_stock_boxes": 23,
+        },
+    ]
+
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == 2
+    db.commit()
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == 2
+    db.commit()
+
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == 2
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 2
+    assert {
+        (row["product_size_ml"], row["variety"], row["packaging_size_name"], row["current_quantity"])
+        for row in payload
+    } == {
+        (210, "Lovely day", "210- lovely day - 48*62", 20),
+        (250, "Spectra", "250 Spectra - 45*62", 23),
+    }
+
+
 def test_create_new_packing_variant_from_production_page(app_factory):
     client, db = app_factory(factory_id=1)
     seed_factory(db, 1)

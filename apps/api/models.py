@@ -1509,7 +1509,7 @@ def before_session_flush(session, flush_context, instances):
                                 existing = new_obj
                                 break
                 if existing:
-                    existing.current_quantity = obj.boxes_available * (profile.box_capacity or 1)
+                    existing.current_quantity = obj.boxes_available
                     existing.total_boxes = obj.boxes_available
                     existing.pieces_per_packet = profile.cups_per_poly or 1
                     existing.packets_per_box_limit = profile.polys_per_box or 1
@@ -1520,7 +1520,7 @@ def before_session_flush(session, flush_context, instances):
                         variety=variety,
                         packaging_size_name=profile.profile_name,
                         pieces_per_packet=profile.cups_per_poly or 1,
-                        current_quantity=obj.boxes_available * (profile.box_capacity or 1),
+                        current_quantity=obj.boxes_available,
                         total_boxes=obj.boxes_available,
                         loose_packets=0,
                         packets_per_box_limit=profile.polys_per_box or 1
@@ -1572,7 +1572,7 @@ def before_session_flush(session, flush_context, instances):
                                 existing = new_obj
                                 break
                 if existing:
-                    existing.current_quantity = obj.boxes_available * (profile.box_capacity or 1)
+                    existing.current_quantity = obj.boxes_available
                     existing.total_boxes = obj.boxes_available
                     existing.pieces_per_packet = profile.cups_per_poly or 1
                     existing.packets_per_box_limit = profile.polys_per_box or 1
@@ -1583,7 +1583,7 @@ def before_session_flush(session, flush_context, instances):
                         variety=variety,
                         packaging_size_name=profile.profile_name,
                         pieces_per_packet=profile.cups_per_poly or 1,
-                        current_quantity=obj.boxes_available * (profile.box_capacity or 1),
+                        current_quantity=obj.boxes_available,
                         total_boxes=obj.boxes_available,
                         loose_packets=0,
                         packets_per_box_limit=profile.polys_per_box or 1

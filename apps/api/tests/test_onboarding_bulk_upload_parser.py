@@ -10,7 +10,14 @@ from sqlalchemy.pool import StaticPool
 
 from db import Base
 from models import BottomStock, Customer, Factory, Machine, Worker, WorkerOpeningAttendance
-from routers.onboarding import apply_bulk_rows, build_master_onboarding_workbook, dedupe_valid_bulk_rows, validate_bulk_frame
+from routers.onboarding import (
+    apply_bulk_rows,
+    build_master_onboarding_workbook,
+    dedupe_valid_bulk_rows,
+    inspect_finished_goods_sheet,
+    read_master_bulk_excel,
+    validate_bulk_frame,
+)
 
 
 def customer_row(**overrides):
@@ -584,3 +591,88 @@ def test_finished_goods_bulk_upload_creates_final_product_stock():
         db.close()
         Base.metadata.drop_all(bind=engine)
 
+
+def test_finished_goods_real_workbook_headers_are_parsed_and_reupload_is_idempotent():
+    workbook = build_master_onboarding_workbook()
+    frames = pd.read_excel(BytesIO(workbook.getvalue()), sheet_name=None, header=None)
+    finished_goods = frames["Finished Goods"]
+    real_rows = [
+        ["ACTUAL", 210, "Lovely day", "210- lovely day - 48*62", 48, 62, 20],
+        ["ACTUAL", 210, "Lovely day", "210- lovely day - 45*67", 45, 65, 26],
+    ]
+    frames["Finished Goods"] = pd.concat(
+        [finished_goods, pd.DataFrame(real_rows, columns=finished_goods.columns)],
+        ignore_index=True,
+    )
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, frame in frames.items():
+            frame.to_excel(writer, sheet_name=sheet_name, index=False, header=False)
+    file_bytes = output.getvalue()
+
+    debug_info = inspect_finished_goods_sheet(file_bytes)
+    valid_by_type, failed_rows = read_master_bulk_excel(file_bytes)
+
+    assert debug_info["sheet_name"] == "Finished Goods"
+    assert debug_info["normalized_headers"] == [
+        "row_type",
+        "product_size_ml",
+        "variety_design",
+        "packaging_size_name",
+        "pcs_per_packet",
+        "packets_per_box",
+        "initial_stock_boxes",
+    ]
+    assert failed_rows == []
+    assert len(valid_by_type["finished_goods"]) == 2
+
+    from models import FinalProductStock, FinishedGoodsStock
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        user = SimpleNamespace(id=1, factory_id=2)
+        first_debug = {**debug_info}
+        first_debug.update({
+            "rows_inserted": 0,
+            "rows_updated": 0,
+            "created_finished_goods_stock_ids": [],
+            "created_final_product_stock_ids": [],
+            "matched_existing_final_product_stock_ids": [],
+        })
+        apply_bulk_rows(db, user, "finished_goods", valid_by_type["finished_goods"], {}, first_debug)
+        db.commit()
+
+        assert db.query(FinishedGoodsStock).filter(FinishedGoodsStock.factory_id == 2).count() == 2
+        canonical_rows = (
+            db.query(FinalProductStock)
+            .filter(FinalProductStock.factory_id == 2)
+            .order_by(FinalProductStock.packaging_size_name)
+            .all()
+        )
+        assert len(canonical_rows) == 2
+        assert [row.total_boxes for row in canonical_rows] == [26, 20]
+        canonical_ids = [row.id for row in canonical_rows]
+
+        second_debug = {
+            **first_debug,
+            "rows_read": 0,
+            "rows_inserted": 0,
+            "rows_updated": 0,
+            "created_finished_goods_stock_ids": [],
+            "created_final_product_stock_ids": [],
+            "matched_existing_final_product_stock_ids": [],
+        }
+        apply_bulk_rows(db, user, "finished_goods", valid_by_type["finished_goods"], {}, second_debug)
+        db.commit()
+
+        assert db.query(FinishedGoodsStock).filter(FinishedGoodsStock.factory_id == 2).count() == 2
+        assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 2).count() == 2
+        assert sorted(second_debug["matched_existing_final_product_stock_ids"]) == sorted(canonical_ids)
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
