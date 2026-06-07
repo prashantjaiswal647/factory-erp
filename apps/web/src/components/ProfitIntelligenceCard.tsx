@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 
 import { getTodayProfit, type ProfitResponse } from "../lib/api";
 
-
 const statusClasses: Record<string, string> = {
   EXCELLENT: "border-emerald-200 bg-emerald-50 text-emerald-700",
   GOOD: "border-blue-200 bg-blue-50 text-blue-700",
@@ -12,12 +11,13 @@ const statusClasses: Record<string, string> = {
   DATA_NOT_AVAILABLE: "border-zinc-200 bg-zinc-50 text-zinc-600",
 };
 
-function money(value: number | string) {
+function money(value: number | string | undefined | null) {
+  if (value == null) return "₹0";
   return typeof value === "number" ? `₹${value.toLocaleString("en-IN")}` : value;
 }
 
-function margin(value: number | null) {
-  return value == null ? "Not available" : `${value.toFixed(1)}%`;
+function margin(value: number | null | undefined) {
+  return value == null ? "Not available" : `${Number(value).toFixed(1)}%`;
 }
 
 export default function ProfitIntelligenceCard() {
@@ -28,6 +28,9 @@ export default function ProfitIntelligenceCard() {
   }, []);
 
   if (!data) return null;
+
+  const status = data.profit_status || "DATA_NOT_AVAILABLE";
+  const marginPct = data.profit_margin_percent;
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm" aria-label="Profit intelligence">
@@ -42,10 +45,10 @@ export default function ProfitIntelligenceCard() {
           </div>
         </div>
         <div className="min-w-[145px]">
-          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusClasses[data.profit_status]}`}>
-            {data.profit_status.replace(/_/g, " ")}
+          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusClasses[status] || statusClasses.DATA_NOT_AVAILABLE}`}>
+            {(status || "").replace(/_/g, " ")}
           </span>
-          <p className="mt-2 text-xs text-zinc-600">Margin {typeof data.profit_margin_percent === "number" ? `${data.profit_margin_percent.toFixed(1)}%` : data.profit_margin_percent}</p>
+          <p className="mt-2 text-xs text-zinc-600">Margin {typeof marginPct === "number" ? `${marginPct.toFixed(1)}%` : marginPct || "Not available"}</p>
         </div>
         <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
           {[
@@ -62,9 +65,10 @@ export default function ProfitIntelligenceCard() {
         </div>
         <div className="min-w-[165px] text-xs">
           <p className="text-zinc-500">Largest Risk</p>
-          <p className="mt-1 font-bold text-zinc-900">{data.largest_profit_risk}</p>
+          <p className="mt-1 font-bold text-zinc-900">{data.largest_profit_risk || "None"}</p>
         </div>
       </div>
     </section>
   );
 }
+
