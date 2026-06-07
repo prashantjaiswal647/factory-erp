@@ -21,6 +21,7 @@ import WastageIntelligenceCard from "../components/WastageIntelligenceCard";
 import ProfitIntelligenceCard from "../components/ProfitIntelligenceCard";
 import PerSizeProfitCard from "../components/PerSizeProfitCard";
 import WeeklyDigestCard from "../components/WeeklyDigestCard";
+import { WidgetErrorBoundary } from "../components/ErrorBoundary";
 import {
   approveSalesOrder,
   getDashboardAnalytics,
@@ -57,6 +58,8 @@ const todayFormatter = new Intl.DateTimeFormat("en-IN", {
   month: "short",
   year: "numeric"
 });
+
+const safeArray = <T,>(arr: T[] | undefined | null): T[] => Array.isArray(arr) ? arr : [];
 
 export default function DashboardPage() {
   const [workers, setWorkers] = useState<DashboardWorker[]>([]);
@@ -136,22 +139,22 @@ export default function DashboardPage() {
   }
 
   const finishedBoxes = useMemo(
-    () => inventory
+    () => safeArray(inventory)
       .filter((row) => normalizedType(row) === "Final Product")
       .reduce((sum, row) => sum + Number(row.quantity || row.current_quantity || 0), 0),
     [inventory]
   );
   const shiftTarget = useMemo(
-    () => machines.reduce((sum, machine) => sum + Number(machine.target_output_per_shift || 0), 0),
+    () => safeArray(machines).reduce((sum, machine) => sum + Number(machine.target_output_per_shift || 0), 0),
     [machines]
   );
   const targetProgress = shiftTarget > 0 ? Math.min(100, Math.round((finishedBoxes / shiftTarget) * 100)) : 0;
-  const activeMachines = machines.filter((machine) => machine.is_active !== false).length;
-  const dailyWages = workers.reduce((sum, worker) => sum + Number(worker.daily_wages || 0), 0);
-  const totalWastage = (productionAlerts?.alerts || []).reduce((sum, alert) => sum + Number(alert.wastage_kg || 0), 0);
+  const activeMachines = safeArray(machines).filter((machine) => machine.is_active !== false).length;
+  const dailyWages = safeArray(workers).reduce((sum, worker) => sum + Number(worker.daily_wages || 0), 0);
+  const totalWastage = safeArray(productionAlerts?.alerts).reduce((sum, alert) => sum + Number(alert.wastage_kg || 0), 0);
   const stockRisks = useMemo(() => buildStockRisks(inventory).slice(0, 3), [inventory]);
   const financials = useMemo(() => {
-    const rows = analyticsData?.financial_data || [];
+    const rows = safeArray(analyticsData?.financial_data);
     return {
       sales: rows.reduce((sum, row) => sum + Number(row.Sales || 0), 0),
       collections: rows.reduce((sum, row) => sum + Number(row.Collection || 0), 0),
@@ -188,13 +191,31 @@ export default function DashboardPage() {
 
       {error ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">{error}</div> : null}
 
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <BriefingCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <WeeklyDigestCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <FactoryHealthCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <FactoryHealthHistoryCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <WastageIntelligenceCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <ProfitIntelligenceCard /> : null}
-      {user?.role === "Owner" || user?.role === "Sub-Owner" ? <PerSizeProfitCard /> : null}
+      {(user?.role === "Owner" || user?.role === "Sub-Owner") && (
+        <>
+          <WidgetErrorBoundary name="Morning Briefing">
+            <BriefingCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Weekly Review">
+            <WeeklyDigestCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Factory Health">
+            <FactoryHealthCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Health History">
+            <FactoryHealthHistoryCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Wastage Intelligence">
+            <WastageIntelligenceCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Profit Intelligence">
+            <ProfitIntelligenceCard />
+          </WidgetErrorBoundary>
+          <WidgetErrorBoundary name="Per-Size Profit">
+            <PerSizeProfitCard />
+          </WidgetErrorBoundary>
+        </>
+      )}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <Link className="rounded-xl border-2 border-brand-300 bg-brand-50 p-4 shadow-sm sm:col-span-2 xl:col-span-2" to="/production">
@@ -287,7 +308,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {user?.role === "Owner" && pendingSales.length > 0 ? (
+      {user?.role === "Owner" && safeArray(pendingSales).length > 0 ? (
         <PendingSalesApprovalSection
           message={approvalMessage}
           pendingSales={pendingSales}
@@ -340,18 +361,19 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
   processingOrderId: number | null;
   onAction: (orderId: number, action: "approve" | "reject") => void;
 }) {
+  const list = safeArray(pendingSales);
   return (
     <section className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-bold text-zinc-950">Sales approvals</h2>
-          <p className="text-xs text-zinc-500">{pendingSales.length} orders require owner action.</p>
+          <p className="text-xs text-zinc-500">{list.length} orders require owner action.</p>
         </div>
-        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">{pendingSales.length} pending</span>
+        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">{list.length} pending</span>
       </div>
       {message ? <p className="mt-3 rounded-lg bg-zinc-50 p-2 text-xs font-medium text-zinc-700">{message}</p> : null}
       <div className="mt-3 space-y-2">
-        {pendingSales.slice(0, 3).map((sale) => (
+        {list.slice(0, 3).map((sale) => (
           <div key={sale.order_id} className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-bold text-zinc-900">#{sale.order_id} · {sale.customer_name || "Customer"}</p>
@@ -369,7 +391,7 @@ function PendingSalesApprovalSection({ message, pendingSales, processingOrderId,
 }
 
 function buildStockRisks(rows: LiveStockRow[]): StockRisk[] {
-  return rows
+  return safeArray(rows)
     .filter((row) => ["Blank", "Bottom", "Carton Box", "Polybag"].includes(normalizedType(row)))
     .map((row) => {
       const type = normalizedType(row);
@@ -413,3 +435,4 @@ function sizeFor(row: LiveStockRow, type: string) {
 function formatNumber(value: number) {
   return Number(value || 0).toLocaleString("en-IN");
 }
+

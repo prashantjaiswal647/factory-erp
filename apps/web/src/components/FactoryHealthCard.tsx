@@ -24,12 +24,14 @@ export default function FactoryHealthCard() {
   const trend = health.trend;
   const TrendIcon = trend != null && trend < 0 ? TrendingDown : TrendingUp;
   const components = [
-    ["Production", health.production_score],
-    ["Attendance", health.attendance_score],
-    ["Collections", health.collections_score],
-    ["Inventory", health.inventory_score],
-    ["Cost", health.cost_score],
+    ["Production", health.production_score ?? 0],
+    ["Attendance", health.attendance_score ?? 0],
+    ["Collections", health.collections_score ?? 0],
+    ["Inventory", health.inventory_score ?? 0],
+    ["Cost", health.cost_score ?? 0],
   ] as const;
+
+  const status = health.health_status || "GOOD";
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm" aria-label="Factory health score">
@@ -40,15 +42,15 @@ export default function FactoryHealthCard() {
           </div>
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Factory Health</p>
-            <p className="text-3xl font-black text-zinc-950">{Math.round(health.overall_score)}<span className="text-base text-zinc-500">/100</span></p>
+            <p className="text-3xl font-black text-zinc-950">{Math.round(health.overall_score ?? 0)}<span className="text-base text-zinc-500">/100</span></p>
           </div>
         </div>
         <div className="min-w-[150px]">
-          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusClasses[health.health_status]}`}>
-            {health.health_status}
+          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusClasses[status] || statusClasses.GOOD}`}>
+            {status}
           </span>
           <p className="mt-2 flex items-center gap-1 text-xs text-zinc-600">
-            {trend == null ? "First snapshot" : <><TrendIcon className="h-3.5 w-3.5" />{trend > 0 ? "+" : ""}{trend.toFixed(1)} vs previous</>}
+            {trend == null ? "First snapshot" : <><TrendIcon className="h-3.5 w-3.5" />{trend > 0 ? "+" : ""}{Number(trend).toFixed(1)} vs previous</>}
           </p>
         </div>
         <div className="grid flex-1 grid-cols-5 gap-2">
@@ -60,10 +62,11 @@ export default function FactoryHealthCard() {
           ))}
         </div>
         <div className="min-w-[180px] text-xs">
-          <p><span className="text-zinc-500">Strength:</span> <strong>{health.largest_strength}</strong></p>
-          <p className="mt-1"><span className="text-zinc-500">Risk:</span> <Link className="font-bold text-indigo-700 underline" to={factoryHealthRiskRoute(health.largest_risk)}>{health.largest_risk}</Link></p>
+          <p><span className="text-zinc-500">Strength:</span> <strong>{health.largest_strength || "N/A"}</strong></p>
+          <p className="mt-1"><span className="text-zinc-500">Risk:</span> <Link className="font-bold text-indigo-700 underline" to={factoryHealthRiskRoute(health.largest_risk || "Production")}>{health.largest_risk || "None"}</Link></p>
         </div>
       </div>
     </section>
   );
 }
+
