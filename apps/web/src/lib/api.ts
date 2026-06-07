@@ -1858,7 +1858,22 @@ export type CostVarianceResponse = {
 
 export async function getTodayCostVariance() {
   const response = await api.get<CostVarianceResponse>("/cost/variance/today");
-  return response.data;
+  const data = response.data || {};
+  return {
+    ...data,
+    today: data.today ? {
+      ...data.today,
+      missing_fields: data.today.missing_fields ?? []
+    } : { missing_fields: [] },
+    seven_day: data.seven_day ? {
+      ...data.seven_day,
+      missing_fields: data.seven_day.missing_fields ?? []
+    } : { missing_fields: [] },
+    thirty_day: data.thirty_day ? {
+      ...data.thirty_day,
+      missing_fields: data.thirty_day.missing_fields ?? []
+    } : { missing_fields: [] }
+  } as CostVarianceResponse;
 }
 
 export type WastageResponse = {
