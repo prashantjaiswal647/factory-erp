@@ -1,10 +1,10 @@
 import axios from "axios";
-import { Camera, ChevronDown, Edit3, Loader2, PackagePlus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Camera, ChevronDown, Download, Edit3, FileSpreadsheet, Loader2, PackagePlus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
-import { API_BASE_URL, deleteOnboardingItem, getInventory } from "../lib/api";
+import { API_BASE_URL, deleteOnboardingItem, exportFinishedGoodsSnapshot, getInventory } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
 type InventoryFilter = "all" | "low" | "critical" | "raw" | "finished" | "packaging";
@@ -35,8 +35,7 @@ const filters: Array<{ key: InventoryFilter; label: string }> = [
   { key: "low", label: "Low Stock" },
   { key: "critical", label: "Critical" },
   { key: "raw", label: "Raw Materials" },
-  { key: "finished", label: "Finished" },
-  { key: "packaging", label: "Packaging" }
+  { key: "finished", label: "Finished" }
 ];
 
 const defaultCollapsed: Record<GroupKey, boolean> = {
@@ -64,6 +63,8 @@ export default function InventoryPage() {
   const [error, setError] = useState("");
   const [uploadingId, setUploadingId] = useState<number | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   useEffect(() => {
     void load();
@@ -107,6 +108,39 @@ export default function InventoryPage() {
     }
   }
 
+  async function handleExportSnapshot(format: "xlsx" | "csv" = "xlsx") {
+    setIsExporting(true);
+    setExportError("");
+    try {
+      const response = await exportFinishedGoodsSnapshot(undefined, format);
+      // axios response is wrapped: response.data is the blob
+      const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], {
+            type: format === "csv"
+              ? "text/csv; charset=utf-8"
+              : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const ext = format === "csv" ? "csv" : "xlsx";
+      const dateStr = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.setAttribute("download", `finished_goods_snapshot_${dateStr}.${ext}`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (caught) {
+      const message = axios.isAxiosError(caught)
+        ? caught.response?.data?.detail || caught.message
+        : "Failed to download snapshot";
+      setExportError(String(message));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   async function handleDelete(row: InventoryDisplayRow) {
     if (!canDelete) {
       window.alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
@@ -142,11 +176,11 @@ export default function InventoryPage() {
     }
   }
 
-  const displayRows = useMemo(() => rows.map(toDisplayRow), [rows]);
+  const displayRows = useMemo(() => rows.map(toDisplayRow).filter((row) => bucketFor(row.source) !== "polybags_packing"), [rows]);
   const counts = useMemo(() => ({
     total: displayRows.length,
     raw: displayRows.filter((row) => ["cup_blanks", "bottom_reels", "raw_other"].includes(bucketFor(row.source))).length,
-    packaging: displayRows.filter((row) => bucketFor(row.source) === "polybags_packing").length,
+    packaging: 0,
     boxes: displayRows.filter((row) => bucketFor(row.source) === "boxes").length,
     other: displayRows.filter((row) => bucketFor(row.source) === "needs_mapping_review").length,
     healthy: displayRows.filter((row) => row.status === "In Stock").length,
@@ -187,17 +221,33 @@ export default function InventoryPage() {
           <Link className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700" to="/onboarding">
             <PackagePlus className="h-4 w-4" /> Add Item
           </Link>
+          <div className="relative">
+            <button
+              aria-haspopup="true"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:bg-zinc-100"
+              disabled={isExporting}
+              title="Download Finished Goods Snapshot (Excel)"
+              type="button"
+              onClick={() => handleExportSnapshot("xlsx")}
+            >
+              {isExporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+              Download Snapshot
+            </button>
+          </div>
           <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={load}>
             <RefreshCw className="h-4 w-4" /> Refresh
           </button>
         </div>
       </header>
 
-      <section className="grid grid-cols-3 gap-2 lg:grid-cols-9" aria-label="Inventory summary">
+      {exportError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{exportError}</div>
+      ) : null}
+
+      <section className="grid grid-cols-3 gap-2 lg:grid-cols-8" aria-label="Inventory summary">
         <Kpi label="Total" value={counts.total} />
         <Kpi label="Raw Materials" value={counts.raw} />
         <Kpi label="Finished Goods" value={counts.finished} />
-        <Kpi label="Packaging" value={counts.packaging} />
         <Kpi label="Boxes" value={counts.boxes} />
         <Kpi label="Other" value={counts.other} />
         <Kpi label="Healthy" value={counts.healthy} />
@@ -205,8 +255,8 @@ export default function InventoryPage() {
         <a href="#critical-low-stock"><Kpi label="Critical" value={counts.critical} tone="red" /></a>
       </section>
 
-      <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label="Risk by category">
-        {riskCategories(displayRows).map((risk) => (
+      <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" aria-label="Risk by category">
+        {riskCategories(displayRows).filter((risk) => risk.label !== "Packaging").map((risk) => (
           <div key={risk.label} className="rounded-lg border border-zinc-200 bg-white px-3 py-2">
             <div className="flex items-center justify-between text-xs font-semibold text-zinc-700">
               <span>{risk.label}</span><span>{risk.atRisk}/{risk.total}</span>
