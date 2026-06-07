@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { useAuth } from "../context/AuthContext";
-import { createDailySale, createPendingSaleOrder, getInventory, getNextInvoiceNumber, searchCustomers, getFactoryProfile } from "../lib/api";
+import { createDailySale, createPendingSaleOrder, downloadInvoicePdf, generateInvoiceFromSale, getInventory, getNextInvoiceNumber, searchCustomers, getFactoryProfile } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -143,6 +143,8 @@ function numberToWords(num: number): string {
 export default function SalesEntryPage() {
   const [toast, setToast] = useState("");
   const [lastInvoiceId, setLastInvoiceId] = useState<number | null>(null);
+  const [lastSaleId, setLastSaleId] = useState<number | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSearchResult[]>([]);
@@ -332,6 +334,7 @@ export default function SalesEntryPage() {
       if (user?.role === "Owner") {
         const response = await createDailySale(payload);
         setLastInvoiceId(response.data.invoice_document_id || null);
+        setLastSaleId(response.data.sale_ids[0] || null);
         setToast("Invoice saved. PDF can be downloaded from Invoices.");
       } else {
         await createPendingSaleOrder(payload);
@@ -406,6 +409,7 @@ export default function SalesEntryPage() {
       if (user?.role === "Owner") {
         const response = await createDailySale(payload);
         setLastInvoiceId(response.data.invoice_document_id || null);
+        setLastSaleId(response.data.sale_ids[0] || null);
         setToast("Invoice saved. PDF can be downloaded from Invoices.");
       } else {
         await createPendingSaleOrder(payload);
@@ -453,6 +457,31 @@ export default function SalesEntryPage() {
     setIsCustomerDropdownOpen(false);
   }
 
+  async function generateAndDownloadInvoice() {
+    if (!lastSaleId) return;
+    setIsGeneratingPdf(true);
+    try {
+      const generated = await generateInvoiceFromSale(lastSaleId, {
+        invoice_type: isTaxInvoice ? "tax_invoice" : "bill_of_supply",
+        tax_rate: isTaxInvoice ? 18 : 0,
+        payment_method: "Cash",
+      });
+      setLastInvoiceId(generated.data.invoice_id);
+      const response = await downloadInvoicePdf(generated.data.invoice_id);
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${generated.data.invoice_number.replace(/[\\/]/g, "_")}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setToast("Invoice PDF generated and downloaded.");
+    } catch (error) {
+      setToast(apiErrorMessage(error));
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  }
+
   function patchItem(index: number, patch: Partial<SaleItem>) {
     setForm({ ...form, items: form.items.map((item, itemIndex) => (itemIndex === index ? normalizeItem({ ...item, ...patch }) : item)) });
   }
@@ -470,8 +499,17 @@ export default function SalesEntryPage() {
     <div className="mx-auto max-w-6xl space-y-5">
       {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
       {lastInvoiceId ? (
-        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
-          Invoice saved. <Link className="underline" to="/invoices">Open Invoices to download PDF</Link>.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
+          <span>Sale saved. <Link className="underline" to="/invoices">View all invoices</Link>.</span>
+          <button
+            className="inline-flex items-center gap-2 rounded-md bg-green-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-60"
+            type="button"
+            disabled={!lastSaleId || isGeneratingPdf}
+            onClick={() => void generateAndDownloadInvoice()}
+          >
+            <FileText className="h-4 w-4" />
+            {isGeneratingPdf ? "Generating PDF..." : "Generate Invoice PDF"}
+          </button>
         </div>
       ) : null}
 

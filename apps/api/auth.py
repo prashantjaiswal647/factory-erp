@@ -3,7 +3,7 @@ import logging
 import os
 import random
 import re
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response, status
@@ -234,6 +234,7 @@ class UserProfileUpdateRequest(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=255)
     country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=5, max_length=50)
+    preferred_language: Literal["en", "hi", "hinglish"] = "hinglish"
 
 
 class AuthUserProfile(BaseModel):
@@ -248,6 +249,7 @@ class AuthUserProfile(BaseModel):
     subscription_status: Optional[str] = None
     trial_end_date: Optional[datetime] = None
     trial_days_remaining: int = 0
+    preferred_language: Literal["en", "hi", "hinglish"] = "hinglish"
 
 
 class LoginResponse(BaseModel):
@@ -612,6 +614,7 @@ def build_login_response(user: User, db: Session) -> LoginResponse:
             subscription_status=user.factory.subscription_status if user.factory else None,
             trial_end_date=user.factory.trial_end_date if user.factory else None,
             trial_days_remaining=trial_days_remaining(user.factory),
+            preferred_language=user.preferred_language,
         ),
     )
 
@@ -1105,6 +1108,7 @@ def update_user_profile(
     user.phone_number_normalized = phone_number_normalized
     if payload.full_name is not None:
         user.full_name = payload.full_name.strip() or user.full_name
+    user.preferred_language = payload.preferred_language
     db.commit()
     db.refresh(user)
     return AuthUserProfile(
@@ -1119,6 +1123,7 @@ def update_user_profile(
         subscription_status=current_user.factory.subscription_status if current_user.factory else None,
         trial_end_date=current_user.factory.trial_end_date if current_user.factory else None,
         trial_days_remaining=trial_days_remaining(current_user.factory),
+        preferred_language=user.preferred_language,
     )
 
 

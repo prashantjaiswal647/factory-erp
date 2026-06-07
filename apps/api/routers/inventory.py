@@ -1,13 +1,14 @@
 from decimal import Decimal
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, UploadFile, File
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from PIL import Image
 from io import BytesIO
 import os
+import logging
 
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
@@ -30,6 +31,7 @@ from models import (
 
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 def decimal_or_zero(value) -> Decimal:
@@ -194,6 +196,8 @@ class LiveStockRow(BaseModel):
     cup_size_ml: Optional[int] = None
     image_url: Optional[str] = None
     variant_name: Optional[str] = None
+    bucket: Optional[str] = None
+    quantity_source: Optional[str] = None
 
 
 class FinalStockRow(BaseModel):
@@ -238,12 +242,46 @@ class FinishedGoodsOnboardRequest(BaseModel):
 
 
 @router.get("/")
-def list_live_stock(
+def list_live_stock_endpoint(
+    response: Response,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
+    return list_live_stock(current_user=current_user, db=db, response=response)
+
+
+def list_live_stock(
+    current_user: User,
+    db: Session,
+    response: Optional[Response] = None,
+):
     try:
         processed_inventory = []
+        loop_errors = {
+            "inventory": 0,
+            "blank_stock": 0,
+            "bottom_stock": 0,
+            "box_stock": 0,
+            "plastic_stock": 0,
+            "polybag_stock": 0,
+            "final_product_stock": 0,
+        }
+
+        def record_row_error(loop_name: str, item, exc: Exception) -> None:
+            loop_errors[loop_name] += 1
+            if loop_errors[loop_name] <= 3:
+                log.warning(
+                    "live_stock %s row %s: %s",
+                    loop_name,
+                    getattr(item, "id", "?"),
+                    exc,
+                )
+
+        def set_warning_header() -> None:
+            if response is not None:
+                response.headers["X-Inventory-Warnings"] = ",".join(
+                    f"{name}={count}" for name, count in loop_errors.items()
+                )
         try:
             factory_id = str(current_user.factory_id)
         except Exception:
@@ -254,7 +292,7 @@ def list_live_stock(
             inventory_items = (
                 db.query(Inventory)
                 .filter(Inventory.factory_id == factory_id)
-                .filter(~Inventory.item_name.like("[DELETED]%"))
+                .filter(or_(Inventory.item_name.is_(None), ~Inventory.item_name.like("[DELETED]%")))
                 .order_by(Inventory.item_name.asc().nullslast(), Inventory.id.asc())
                 .all()
             )
@@ -267,7 +305,7 @@ def list_live_stock(
                             "factory_id": item.factory_id,
                             "product_id": getattr(item, "product_id", None),
                             "item_name": item.item_name if item.item_name is not None else "Unknown Item",
-                            "stock_type": item.category if item.category is not None else "Inventory",
+                            "stock_type": "Inventory",
                             "current_quantity": getattr(item, "current_quantity", None) if getattr(item, "current_quantity", None) is not None else float(quantity),
                             "quantity": float(quantity),
                             "unit": item.unit if item.unit is not None else "pieces",
@@ -275,10 +313,19 @@ def list_live_stock(
                             "packaging_size": item.packaging_size if item.packaging_size is not None else "Standard",
                             "pieces_per_packet": item.pieces_per_packet if item.pieces_per_packet is not None else 0,
                             "packets_per_box": item.packets_per_box if item.packets_per_box is not None else 0,
-                            "category": item.category if item.category is not None else "Final Product",
+                            "category": item.category,
+                            "bucket": (
+                                "polybags_packing"
+                                if item.category == "Packaging"
+                                else "raw_other"
+                                if item.category == "Raw"
+                                else "needs_mapping_review"
+                            ),
+                            "quantity_source": None,
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("inventory", item, exc)
                     continue
         except Exception:
             pass
@@ -294,6 +341,15 @@ def list_live_stock(
             for item in blank_items:
                 try:
                     qty = float(item.total_qty_kg or 0)
+                    quantity_source = (
+                        "not_recorded"
+                        if (
+                            qty == 0
+                            and float(getattr(item, "weight_per_bora_kg", 0) or 0) > 0
+                            and float(getattr(item, "total_boras", 0) or 0) == 0
+                        )
+                        else "excel_upload"
+                    )
                     processed_inventory.append(
                         {
                             "id": f"blank-{item.id}",
@@ -309,9 +365,12 @@ def list_live_stock(
                             "category": "Blank",
                             "size_ml": getattr(item, "blank_size_ml", None),
                             "kg_per_sack": float(getattr(item, "weight_per_bora_kg", 0) or 0),
+                            "bucket": "cup_blanks",
+                            "quantity_source": quantity_source,
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("blank_stock", item, exc)
                     continue
         except Exception:
             pass
@@ -343,9 +402,12 @@ def list_live_stock(
                             "size_mm": getattr(item, 'bottom_size_mm', 0),
                             "total_weight_kg": qty,
                             "total_rolls": getattr(item, 'total_rolls', 0) or 0,
+                            "bucket": "bottom_reels",
+                            "quantity_source": "excel_upload",
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("bottom_stock", item, exc)
                     continue
         except Exception:
             pass
@@ -378,9 +440,12 @@ def list_live_stock(
                             "packaging_size_name": box_name,
                             "category": "Carton Box",
                             "box_type": getattr(item, "box_type", None) or box_name,
+                            "bucket": "boxes",
+                            "quantity_source": "excel_upload",
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("box_stock", item, exc)
                     continue
         except Exception:
             pass
@@ -416,9 +481,12 @@ def list_live_stock(
                             "cup_size_ml": getattr(item, "cup_size_ml", None),
                             "total_boras": int(total_boras),
                             "weight_per_bora_kg": float(weight_per_bora_kg),
+                            "bucket": "polybags_packing",
+                            "quantity_source": "excel_upload",
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("plastic_stock", item, exc)
                     continue
         except Exception:
             pass
@@ -447,9 +515,12 @@ def list_live_stock(
                             "price_per_unit": 0.0,
                             "packaging_size": getattr(item, "packaging_size_name", "Standard"),
                             "category": "Polybag",
+                            "bucket": "polybags_packing",
+                            "quantity_source": "excel_upload",
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("polybag_stock", item, exc)
                     continue
         except Exception:
             pass
@@ -490,7 +561,7 @@ def list_live_stock(
                     )
                     
                     item_image_url = fg_stock.image_url if fg_stock else None
-                    item_category = fg_stock.category if fg_stock else "CUP_FINISHED"
+                    item_category = "CUP_FINISHED"
                     item_variant_name = fg_stock.variant_name if fg_stock else f"{getattr(item, 'product_size_ml', 0)}ml_{getattr(item, 'variety', 'Standard')}"
                     
                     packaging_size = getattr(item, "packaging_size_name", None) or "Standard"
@@ -515,14 +586,18 @@ def list_live_stock(
                             "category": item_category,
                             "image_url": item_image_url,
                             "variant_name": item_variant_name,
+                            "bucket": "finished_goods",
+                            "quantity_source": "live_calc",
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    record_row_error("final_product_stock", item, exc)
                     continue
             db.commit()
         except Exception:
             db.rollback()
 
+        set_warning_header()
         return processed_inventory
     except Exception:
         return []

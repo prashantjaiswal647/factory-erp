@@ -19,6 +19,7 @@ Compact, high-signal operating context for AI agents and engineers working on Mu
 | `apps/api/models.py` | SQLAlchemy model definitions |
 | `apps/api/alembic.ini` | Alembic config; migrations live in `apps/api/alembic/versions/` |
 | `apps/api/tests/` | Backend pytest suite |
+| `apps/api/services/cost_engine.py` | Factory-scoped deterministic daily cost totals and weighted CPC |
 | `apps/web/package.json` | Vite app; `npm run dev` on port 5173 |
 | `apps/web/src/App.tsx` | Frontend route map |
 | `apps/web/src/components/Layout.tsx` | Main authenticated layout and sidebar |
@@ -42,6 +43,10 @@ Latest production-readiness estimate:
 
 Interpretation:
 - Munshi AI has a working SaaS foundation, but it is not yet clean production SaaS.
+- A2.1 stores daily cost totals in paise and derives CPC dynamically; `/api/cost/*` must remain factory scoped.
+- A2.2 stores deterministic variance snapshots, compares against prior completed-day weighted windows, and sends at most one cost-spike alert per factory/day.
+- Successful A2.2 cost-spike sends create one structured `COST_SPIKE_DETECTED` ActivityLog and are visible to Super Admin through briefing observability.
+- A2.3 computes one deterministic daily factory health snapshot at 23:58 IST from production, attendance, collections, inventory, and cost-control scores.
 - P0 tasks must be fixed before pilot deployment.
 - Do not add new features before P0 tasks are green unless the new work directly fixes a P0 production incident, tenant-isolation bug, security issue, or data-loss risk.
 
@@ -152,6 +157,13 @@ Before production deploy:
 - Verify CORS origins are explicit and production-safe.
 - Verify backup is created before Alembic migration.
 
+Cashfree payment rules:
+- Owner plan purchases use Cashfree PG orders and hosted checkout.
+- Browser return parameters never activate a subscription.
+- Only a valid signed `PAYMENT_SUCCESS_WEBHOOK` with matching order, amount, currency, and unique Cashfree payment ID may activate a factory.
+- Cashfree webhook endpoint: `/api/v1/payments/webhook/cashfree`.
+- Required production variables: `CASHFREE_APP_ID`, `CASHFREE_SECRET_KEY`, `CASHFREE_ENV`, `CASHFREE_WEBHOOK_SECRET`, and `PUBLIC_API_ORIGIN`.
+
 Security no-go rules:
 - Do not weaken `factory_id` isolation anywhere.
 - Do not add fallback cryptographic secrets.
@@ -206,6 +218,14 @@ Rules:
 - Production deploy must not proceed if pre-migration backup fails.
 - Latest local drill status: passed using `pg_dump -Fc`, disposable PostgreSQL restore, key table count comparison, and API `/api/health` boot check against restored DB.
 - Keep repeating this drill before major production milestones and after backup/deploy script changes.
+
+## 12A. Invoice PDF Rule
+
+- Sales invoices are generated server-side from authenticated, factory-scoped sales data.
+- Canonical endpoints are `POST /api/invoices/from-sale/{sale_id}`, `GET /api/invoices`, and `GET /api/invoices/{invoice_id}/pdf`.
+- Invoice generation is idempotent for a sale and uses the existing factory invoice counters.
+- PDF generation uses local application data and ReportLab; Google Sheets is not required.
+- GST mode, tax rate, payment method, and notes may be supplied when generating from an existing sale.
 
 ## 13. Database and Migration Rules
 
@@ -267,6 +287,33 @@ Follow this sequence unless a P0 incident overrides it.
 - The stack expects `.env` at repo root for `docker compose`.
 - `.env` must never be committed.
 - If a local secret appears in chat logs, screenshots, support tickets, or audit output, rotate it.
+
+## 18. Wastage Intelligence
+
+- `daily_wastage_snapshot` is the canonical daily deterministic wastage summary, unique by factory and date.
+- Wastage calculations must prefer explicit `DailyProduction.wastage_kg`; fallback inference uses only the same factory's prior 30-day material-per-cup baseline.
+- The onboarding fallback expected wastage is 2% until at least three usable historical production days exist.
+- Wastage APIs, history, alerts, scheduler, and leaderboards must remain factory scoped.
+
+## 19. Profit Intelligence
+
+- `daily_profit_snapshot` is the canonical deterministic daily profitability summary, unique by factory and date.
+- Revenue is actual same-day `SalesInvoice.total_amount`; outstanding future collections are never counted as revenue.
+- Cost comes from the A2.1 paise breakdown. Wastage and collection gaps are risk signals only and must not be added again to total cost.
+- No-revenue days return `Data not available` and must not trigger profit alerts.
+
+## 20. Weekly Profit Digest
+
+- Weekly digest reads existing daily snapshots only; it must never recompute cost, health, wastage, or profit.
+- Reporting week is Monday through Sunday, delivered Sunday at 20:00 Asia/Kolkata.
+- Weekly margin is weighted: total gross profit divided by total revenue. Never average daily margins.
+- `weekly_digest_log` is unique by factory and week start and is the duplicate-send guard.
+
+## 21. Factory Health History
+
+- Health history APIs read `daily_factory_health_snapshot` only and remain factory scoped.
+- Trend direction compares the current score with the available 7-day average using deterministic ±3 thresholds.
+- Risk drilldown routes are Production `/production`, Attendance `/attendance`, Collections `/outstanding`, Inventory `/inventory`, and Cost `/cost-intelligence`.
 
 ---
 Referenced by `opencode.jsonc` instructions array.

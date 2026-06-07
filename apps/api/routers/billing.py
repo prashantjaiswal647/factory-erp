@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import logging
 import os
+from uuid import uuid4
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -11,14 +15,10 @@ from sqlalchemy.orm import Session, object_session
 from auth import JWT_ALGORITHM, check_permissions, get_current_active_user, get_effective_subscription, get_jwt_secret_key, get_user_by_subject, is_trial_bypass_enabled, normalize_phone_number, set_no_store_headers
 from db import get_db
 from models import CustomPlanEnquiry, DemoBookingRequest, Factory, SubscriptionPayment, User
-
-try:
-    import razorpay
-except ImportError:  # pragma: no cover - optional SaaS dependency
-    razorpay = None
-
+from payments.cashfree_client import CashfreeAPIError, CashfreeClient
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
+logger = logging.getLogger(__name__)
 optional_bearer = HTTPBearer(auto_error=False)
 
 
@@ -94,12 +94,20 @@ class StartTrialRequest(BaseModel):
 
 
 class CreateOrderResponse(BaseModel):
-    key_id: str
     order_id: str
+    payment_session_id: str
     amount: int
     currency: str
     plan_code: str
     billing_cycle: str
+    cashfree_mode: str
+    return_url: str
+
+
+class CashfreeOrderStatusResponse(BaseModel):
+    order_id: str
+    payment_status: str
+    subscription_active: bool
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -316,14 +324,17 @@ def factory_for_user(db: Session, current_user: User) -> Factory:
     return factory
 
 
-def razorpay_client():
-    if razorpay is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Razorpay SDK is not installed")
-    key_id = os.getenv("RAZORPAY_KEY_ID")
-    key_secret = os.getenv("RAZORPAY_KEY_SECRET")
-    if not key_id or not key_secret:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Razorpay credentials are not configured")
-    return key_id, razorpay.Client(auth=(key_id, key_secret))
+def cashfree_client() -> CashfreeClient:
+    app_id = (os.getenv("CASHFREE_APP_ID") or os.getenv("CASHFREE_CLIENT_ID") or "").strip()
+    secret_key = (os.getenv("CASHFREE_SECRET_KEY") or os.getenv("CASHFREE_CLIENT_SECRET") or "").strip()
+    cashfree_env = os.getenv("CASHFREE_ENV", "sandbox").strip().lower()
+    api_base = os.getenv(
+        "CASHFREE_API_BASE",
+        "https://api.cashfree.com/pg" if cashfree_env == "live" else "https://sandbox.cashfree.com/pg",
+    )
+    if not app_id or not secret_key:
+        raise HTTPException(status_code=503, detail="Cashfree credentials are not configured")
+    return CashfreeClient(app_id, secret_key, api_base, cashfree_env)
 
 
 def status_payload(factory: Factory, current_user: User, res: Optional[dict] = None) -> BillingStatusResponse:
@@ -482,10 +493,10 @@ def billing_status(
     db: Session = Depends(get_db),
 ):
     set_no_store_headers(response)
+    res = get_effective_subscription(db, current_user.factory_id)
     factory = db.query(Factory).filter(Factory.id == current_user.factory_id).populate_existing().first()
     if factory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
-    res = get_effective_subscription(db, current_user.factory_id)
     return status_payload(factory, current_user, res)
 
 
@@ -512,22 +523,87 @@ def create_order(
 ):
     factory = factory_for_user(db, current_user)
     amount = amount_for(payload.plan_code, payload.billing_cycle)
-    key_id, client = razorpay_client()
-    order = client.order.create(
-        {
-            "amount": amount,
-            "currency": SUBSCRIPTION_CURRENCY,
-            "receipt": f"factory_{factory.id}_{payload.plan_code}_{int(datetime.now(timezone.utc).timestamp())}",
-            "notes": {"factory_id": str(factory.id), "plan": payload.plan_code, "billing_cycle": payload.billing_cycle},
-        }
-    )
-    return CreateOrderResponse(
-        key_id=key_id,
-        order_id=order["id"],
-        amount=int(order["amount"]),
-        currency=order["currency"],
+    owner_phone = (current_user.phone_number or "").strip()
+    if not owner_phone:
+        raise HTTPException(status_code=422, detail="Owner phone number is required for payment")
+    order_id = f"munshi_{factory.id}_{uuid4().hex[:20]}"
+    frontend_origin = os.getenv("FRONTEND_ORIGIN", "https://munshiai.co.in").rstrip("/")
+    return_url = f"{frontend_origin}/billing?cashfree=return&order_id={order_id}"
+    notify_url = f"{os.getenv('PUBLIC_API_ORIGIN', frontend_origin).rstrip('/')}/api/v1/payments/webhook/cashfree"
+    client = cashfree_client()
+    try:
+        order = client.create_order(
+            {
+                "order_id": order_id,
+                "order_amount": amount / 100,
+                "order_currency": SUBSCRIPTION_CURRENCY,
+                "customer_details": {
+                    "customer_id": f"factory_{factory.id}",
+                    "customer_name": current_user.full_name or current_user.username,
+                    "customer_email": current_user.email or current_user.username if "@" in current_user.username else None,
+                    "customer_phone": owner_phone[-10:],
+                },
+                "order_meta": {"return_url": return_url, "notify_url": notify_url},
+                "order_note": f"Munshi AI {payload.plan_code} {payload.billing_cycle}",
+                "order_tags": {
+                    "factory_id": str(factory.id),
+                    "plan_code": payload.plan_code,
+                    "billing_cycle": payload.billing_cycle,
+                },
+            }
+        )
+    except CashfreeAPIError as exc:
+        logger.warning("Cashfree order creation failed factory_id=%s code=%s", factory.id, exc.code)
+        raise HTTPException(status_code=502, detail="Cashfree order creation failed") from exc
+    payment_session_id = str(order.get("payment_session_id") or "")
+    if not payment_session_id:
+        raise HTTPException(status_code=502, detail="Cashfree did not return a payment session")
+    now = datetime.now(timezone.utc)
+    db.add(SubscriptionPayment(
+        factory_id=factory.id,
         plan_code=payload.plan_code,
         billing_cycle=payload.billing_cycle,
+        amount_paise=amount,
+        currency=SUBSCRIPTION_CURRENCY,
+        payment_status="pending",
+        provider="cashfree",
+        provider_payment_id=order_id,
+        cf_order_id=order_id,
+        cf_payment_session_id=payment_session_id,
+        subscription_start_date=now,
+        subscription_end_date=now,
+    ))
+    db.commit()
+    cashfree_mode = "production" if os.getenv("CASHFREE_ENV", "sandbox").lower() == "live" else "sandbox"
+    return CreateOrderResponse(
+        order_id=order_id,
+        payment_session_id=payment_session_id,
+        amount=amount,
+        currency=SUBSCRIPTION_CURRENCY,
+        plan_code=payload.plan_code,
+        billing_cycle=payload.billing_cycle,
+        cashfree_mode=cashfree_mode,
+        return_url=return_url,
+    )
+
+
+@router.get("/cashfree/orders/{order_id}", response_model=CashfreeOrderStatusResponse)
+def cashfree_order_status(
+    order_id: str,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    payment = db.query(SubscriptionPayment).filter(
+        SubscriptionPayment.factory_id == current_user.factory_id,
+        SubscriptionPayment.cf_order_id == order_id,
+        SubscriptionPayment.provider == "cashfree",
+    ).first()
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment order not found")
+    return CashfreeOrderStatusResponse(
+        order_id=order_id,
+        payment_status=payment.payment_status,
+        subscription_active=payment.payment_status == "paid",
     )
 
 
@@ -538,17 +614,24 @@ def verify_payment(
     db: Session = Depends(get_db),
 ):
     factory = factory_for_user(db, current_user)
-    _, client = razorpay_client()
-    try:
-        client.utility.verify_payment_signature(
-            {
-                "razorpay_order_id": payload.razorpay_order_id,
-                "razorpay_payment_id": payload.razorpay_payment_id,
-                "razorpay_signature": payload.razorpay_signature,
-            }
+    key_secret = os.getenv("RAZORPAY_KEY_SECRET")
+    if not key_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Razorpay credentials are not configured",
         )
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Razorpay payment verification failed") from exc
+
+    signed_payload = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+    expected_signature = hmac.new(
+        key_secret.encode("utf-8"),
+        signed_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Razorpay payment verification failed",
+        )
 
     activate_factory_subscription(db, factory, payload.plan_code, payload.billing_cycle, payload.razorpay_payment_id)
     db.commit()

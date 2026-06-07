@@ -51,6 +51,148 @@ services:
     networks:
       - ai-erp-network
 
+  briefing-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-briefing-scheduler
+    restart: always
+    command: python -m services.briefing_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - MORNING_BRIEFING_MAX_RETRIES=${MORNING_BRIEFING_MAX_RETRIES:-3}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  cost-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-cost-scheduler
+    restart: always
+    command: python -m services.cost_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  factory-health-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-factory-health-scheduler
+    restart: always
+    command: python -m services.factory_health_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cost-scheduler:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  wastage-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-wastage-scheduler
+    restart: always
+    command: python -m services.wastage_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      factory-health-scheduler:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  profit-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-profit-scheduler
+    restart: always
+    command: python -m services.profit_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      wastage-scheduler:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  weekly-digest-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-weekly-digest-scheduler
+    restart: always
+    command: python -m services.weekly_digest_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      profit-scheduler:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
+  telegram-session-cleaner:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ai-erp-telegram-session-cleaner
+    restart: always
+    command: python -m services.telegram_session_cleaner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ai_erp_db}
+      - TZ=Asia/Kolkata
+    networks:
+      - ai-erp-network
+
   # 4. Web Frontend
   web:
     build:

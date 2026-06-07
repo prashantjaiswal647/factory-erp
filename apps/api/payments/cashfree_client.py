@@ -65,6 +65,12 @@ class CashfreeClient:
         payload.setdefault("customer_id", customer_id)
         return payload
 
+    def create_order(self, body: dict[str, Any]) -> dict:
+        return self._request("POST", "/orders", body)
+
+    def get_order(self, order_id: str) -> dict:
+        return self._request("GET", f"/orders/{order_id}")
+
     def create_subscription(
         self,
         customer_id: str,

@@ -148,3 +148,88 @@ Alternatives considered
 
 Consequences
   `apps/web npm run build` is the deploy gate. `Caddyfile` and `apps/api/main.py` are the two files that must be touched together when adding a new `/api/*` route. The deploy must rebuild `api`, `web`, and `caddy` in that order so the new bundle is live before any request hits the new Caddy config. The actual production Caddy container name is `factory-erp-caddy-1` (Docker Compose project-name prefix); see `AGENTS.md` §14.
+
+---
+
+## 8. Universal AI Supervisor Strategy (4-Phase Path)
+
+Date: 2026-06-06
+NOTE: The original prompt for this decision called it "Entry #7" but `DECISIONS.md` already contained a 7th decision (the VITE_API_URL / Caddyfile routing fix from 2026-06-05). The new decision is therefore filed as Entry #8 to preserve the existing numbering.
+
+Decision
+  Munshi AI will evolve from a Paper Cup / Glass Factory ERP + AI Factory Supervisor into a Universal AI Supervisor across 4 sequential phases:
+
+    PHASE A  Munshi Factory Supervisor                 (now → 6 months)
+    PHASE B  Munshi Core extraction                   (6 → 18 months)
+    PHASE C  One second industry template (Kirana)     (18 → 24 months)
+    PHASE D  Munshi Studio (AI-driven template builder)  (24+ months)
+
+  The phases are SEQUENTIAL, not parallel. We will not start Phase B before Phase A is producing revenue. We will not start Phase C before Phase B's Core extraction has shipped. We will not start Phase D before Phase C has at least one paying second-vertical customer.
+
+Reason
+  Three reasons drive the sequencing:
+
+  R1  The Universal AI Supervisor vision is correct, but the engineering cost of doing all 4 phases in parallel is unaffordable at the current team size (1 founder + 1-2 collaborators). Each phase requires a distinct team composition, a distinct customer, and a distinct risk profile. Confusing them costs velocity.
+
+  R2  The Core Engine as described in the Universal vision (Universal Business Ontology + AI Requirement Analyzer + Dynamic Schema Generator + Workflow Generator + Dashboard Generator + Agent Generator) does not yet exist. It must be EXTRACTED from the Factory app, not built greenfield. Extraction is a refactor-under-load exercise that requires the Factory app to be stable and well-instrumented. Phase A's job is to deliver that stability.
+
+  R3  Templates are a SECOND product. Building a Kirana template before the Factory Supervisor is proven at scale produces a Kirana template that is not yet good. The cost of a bad second template (lost credibility, lost focus) is higher than the cost of a delayed second template. One template beyond paper-cup is the right ambition for Year 1 of Phase C, not 10.
+
+Alternatives considered
+  (a) Build all 6 layers of the Universal AI Supervisor in parallel with the Factory Supervisor. Rejected: spreads team too thin; the Universal work would be done by a team that does not yet understand the Factory domain; the result is a Universal system that is bad at Factory and bad at everything else.
+
+  (b) Start with the AI Requirement Analyzer (Layer 2) and Dynamic Schema Generator (Layer 3) first, before the Factory Supervisor is finished. Rejected: the AI Requirement Analyzer is only as good as the templates it knows. With one template (Factory) in production, it can only generate Factory apps. It is not Universal yet. Building Layer 2 before Layer 1 (Ontology) and Layer 6 (Agent) is premature.
+
+  (c) Build 5 industry templates in Year 1 (Kirana, Medical, Restaurant, Gym, Warehouse). Rejected: the team is too small; the templates will be thin; the customer value will be poor. 1 well-executed template (Kirana) is worth 5 mediocre ones.
+
+  (d) Outsource the Universal work to an external team. Rejected: the moat IS the vertical knowledge + the customer data. An external team does not have either. They would build a generic system that competes with every horizontal SaaS in the world.
+
+  (e) Acquire a second vertical (buy a Kirana POS company). Rejected: capital, integration, and cultural risk. We can build a Kirana template in 6 months for 1/10th the cost of an acquisition.
+
+  (f) Skip Phase C and go directly from Core extraction (B) to Studio (D). Rejected: Phase C is the empirical test of whether the Core actually supports being templated. Skipping it means we discover Core limitations in production, not in development. The cost of discovering in production is much higher.
+
+Consequences
+  C1  Universal AI Supervisor timeline is 24+ months, not 6-12. Any investor pitch or team commitment must reflect this.
+
+  C2  Phase A work (BUILD-1 through BUILD-7 + the 6-month roadmap in `MUNSHI_6_MONTH_ROADMAP.md`) is the only funded runway for the next 6 months. Phase B planning begins in Month 4 (whiteboard) and execution begins in Month 7 at earliest.
+
+  C3  The team composition changes at each phase. Phase A = founder + 1-2 senior engineers. Phase B = founder + 1 senior engineer + 1 platform engineer. Phase C = founder + 1 senior + 1 platform + 1 industry specialist. Phase D = founder + 1 senior + 1 platform + 1 industry + 1 AI/ML engineer. Hire ahead of the phase, not during it.
+
+  C4  The "10 industry templates" claim in any marketing or pitch deck must be downgraded. The accurate claim is "1 industry in production, 1 industry in design, 1 industry in roadmap, Universal OS in concept".
+
+  C5  Phase D (Munshi Studio) is a separate product with separate pricing. It is not a feature of Munshi Factory. Do not conflate.
+
+  C6  The Core Engine extraction (Phase B) is the highest-risk engineering work in the entire roadmap. It is a refactor under live load. Budget a 3-month feature freeze for the Factory app during the heart of the extraction.
+
+  C7  The Moat capabilities identified in `AI_SUPERVISOR_V1.md` (Cost Intelligence, Production Intelligence, Morning Briefing) must remain the top priority through Phase A. They are the only way Phase A graduates to Phase B with credibility.
+
+  C8  The team must resist the temptation to "skip ahead" to the Universal vision when a customer asks for it. The honest answer is "yes, we are building toward that, and the fastest path is to nail the Factory Supervisor first".
+
+  C9  `AI_SUPERVISOR_V1.md` is the authoritative spec for the 10 capabilities. `AREAS.md` is the authoritative map for the 22 areas. `MUNSHI_6_MONTH_ROADMAP.md` is the authoritative 6-month plan. These three documents together with this decision form the durable Phase A specification.
+
+Risks
+  R1  Phase A drags on (no paying customers by Month 6) and the team runs out of money before Phase B. Mitigation: 3 paying pilots by Month 6 is a non-negotiable gate. If not hit, raise or reduce scope.
+
+  R2  The Core extraction in Phase B reveals more coupling than expected, and the refactor takes 12+ months instead of 6. Mitigation: identify the coupling in Month 5 (whiteboard), not Month 7. If the coupling is too deep, extend Phase A or pivot to a different second template.
+
+  R3  The chosen second template (Kirana) is not a good second choice. The data model may not transfer cleanly. Mitigation: validate the Kirana fit in Month 5 (architecture review) before committing to Phase C.
+
+  R4  The AI Studio (Phase D) requires ML and AI capabilities we have not yet built (RAG, prompt versioning, eval suite, multilingual). These must be built in Phase A as part of the AI Brain area. If they are not, Phase D is blocked.
+
+  R5  A competitor launches a Universal AI Supervisor for Indian SMBs before we get to Phase D. Mitigation: the competitor has to have built the vertical moat first. We will have it. The race is not "who is first to claim Universal" but "who has the vertical credibility to make Universal real". We are 6-12 months ahead on Factory vertical credibility.
+
+  R6  Founder (Prashant) is the bottleneck. He is the architect, the lead engineer, the sales lead, and the customer success lead. Phase A tolerates this. Phase B does not. Hire #2 (senior engineer) must be done by Month 2.
+
+Execution Order
+  1.  Phase A: months 1-6 (see `MUNSHI_6_MONTH_ROADMAP.md`).
+  2.  Phase B planning: months 4-6 (whiteboard, no code).
+  3.  Phase B execution: months 7-18.
+  4.  Phase C planning: months 16-18 (architecture review).
+  5.  Phase C execution: months 19-24.
+  6.  Phase D planning: months 22-24.
+  7.  Phase D execution: months 25+.
+
+  Kill criteria for advancing a phase:
+    - Phase A → B: 3 paying pilots, NRR > 100%, 7 of 10 AI capabilities in production.
+    - Phase B → C: Core extraction green for 30 days in production, "How to add a template" doc validated by 1 second engineer, second-vertical data model fits in Core abstractions.
+    - Phase C → D: 1 paying second-vertical customer, second-vertical monthly retention > 80%, Universal Business Ontology expressed in code.

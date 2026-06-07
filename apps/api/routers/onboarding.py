@@ -88,8 +88,9 @@ logger = logging.getLogger(__name__)
 BULK_TEMPLATE_COLUMNS = {
     "company_profile": ["row_type", "factory_name", "gstin", "factory_address", "invoice_prefix", "advance_upi_discount", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
     "worker": ["row_type", "name", "mobile_number", "daily_wages", "duty_hours", "previous_attendance_details"],
+    "customer": ["row_type", "name", "firm_name", "contact_number", "phone_number", "place", "address", "gst_number", "previous_due"],
     "machine": ["row_type", "machine_name", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
-    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack"],
+    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_boras_sacks"],
     "bottom_reel": ["row_type", "bottom_size_mm", "total_individual_rolls", "total_weight_kg"],
     "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"],
     "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs"],
@@ -99,6 +100,7 @@ BULK_TEMPLATE_COLUMNS = {
 BULK_MASTER_SHEETS = {
     "Company Profile": "company_profile",
     "Workers": "worker",
+    "Customers": "customer",
     "Machines": "machine",
     "Raw Materials": "raw_materials",
     "Finished Goods": "finished_goods",
@@ -120,6 +122,12 @@ TEXT_BULK_COLUMNS = {
     "invoice_prefix",
     "name",
     "mobile_number",
+    "firm_name",
+    "contact_number",
+    "phone_number",
+    "place",
+    "address",
+    "gst_number",
     "machine_name",
     "material_name",
     "box_type",
@@ -129,6 +137,8 @@ TEXT_BULK_COLUMNS = {
 }
 
 HEADER_ALIASES = {
+    "customer_name": "name",
+    "phone": "phone_number",
     "total_weight": "total_weight_automatic_calculation",
     "total_weight_kg_automatic_calculation": "total_weight_kg",
     "total_weight_kg=": "total_weight_kg",
@@ -140,14 +150,29 @@ HEADER_ALIASES = {
     "total_plastic_kg=": "total_plastic_kg_automatic_calculation",
 }
 
+OPTIONAL_BULK_HEADERS = {
+    "customer": {
+        "firm_name",
+        "contact_number",
+        "place",
+        "gst_number",
+        "previous_due",
+    },
+    "blank_stock": {"total_boras_sacks"},
+}
+
 BULK_NUMERIC_DEFAULTS = {
     "worker": {
         "daily_wages": Decimal("0"),
         "duty_hours": Decimal("8"),
         "previous_attendance_details": Decimal("0"),
     },
+    "customer": {
+        "previous_due": Decimal("0"),
+    },
     "blank_stock": {
         "kg_per_sack": Decimal("0"),
+        "total_boras_sacks": Decimal("0"),
     },
     "bottom_reel": {
         "total_individual_rolls": 0,
@@ -172,8 +197,9 @@ BULK_NUMERIC_DEFAULTS = {
 SAMPLE_BULK_ROWS = {
     "company_profile": ["SAMPLE", "Munshi Demo Factory", "07ABCDE1234F1Z5", "Wazirpur Industrial Area, Delhi", "INV-", 2, 1, 1, 1],
     "worker": ["SAMPLE", "Akash Kumar", "82858117277", 400, 8, 0],
+    "customer": ["SAMPLE", "Rajesh Kumar", "Rajesh Traders", "9876543210", "9876543210", "Delhi", "Wazirpur Industrial Area, Delhi", "07ABCDE1234F1Z5", 1500],
     "machine": ["SAMPLE", "Hi-Speed Cup Machine X", 120, 55000, 210, 68],
-    "blank_stock": ["SAMPLE", "Cup Blank", 210, 20],
+    "blank_stock": ["SAMPLE", "Cup Blank", 210, 20, 25],
     "bottom_reel": ["SAMPLE", 68, 1200, 180],
     "box_stock": ["SAMPLE", "210ml Box", 500, 18],
     "plastic_stock": ["SAMPLE", "PP 210ml Sleeve", 210, 25, 20, 145],
@@ -202,6 +228,18 @@ class WorkerBulkRow(BaseModel):
     previous_attendance_details: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class CustomerBulkRow(BaseModel):
+    row_type: str = Field(..., max_length=20)
+    name: str = Field(..., min_length=1, max_length=255)
+    firm_name: Optional[str] = Field(default=None, max_length=255)
+    contact_number: Optional[str] = Field(default=None, max_length=50)
+    phone_number: Optional[str] = Field(default=None, max_length=50)
+    place: Optional[str] = Field(default=None, max_length=255)
+    address: Optional[str] = Field(default=None, max_length=500)
+    gst_number: Optional[str] = Field(default=None, max_length=50)
+    previous_due: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class MachineBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
     machine_name: str = Field(..., min_length=1, max_length=255)
@@ -216,6 +254,7 @@ class BlankStockBulkRow(BaseModel):
     material_name: str = Field(..., min_length=1, max_length=255)
     size_ml: int = Field(..., gt=0)
     kg_per_sack: Decimal = Field(default=Decimal("0"), ge=0)
+    total_boras_sacks: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class BottomReelBulkRow(BaseModel):
@@ -254,6 +293,7 @@ class FinishedGoodsBulkRow(BaseModel):
 BULK_ROW_MODELS = {
     "company_profile": CompanyProfileBulkRow,
     "worker": WorkerBulkRow,
+    "customer": CustomerBulkRow,
     "machine": MachineBulkRow,
     "blank_stock": BlankStockBulkRow,
     "bottom_reel": BottomReelBulkRow,
@@ -394,7 +434,8 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
     frame = canonicalize_bulk_frame(frame)
     headers = [str(column).strip() for column in frame.columns.tolist()]
-    missing_headers = [column for column in expected if column not in headers]
+    optional_headers = OPTIONAL_BULK_HEADERS.get(sub_tab_type, set())
+    missing_headers = [column for column in expected if column not in headers and column not in optional_headers]
     if missing_headers:
         return [], [{
             "sheet": sheet_name or sub_tab_type,
@@ -420,6 +461,8 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
         try:
             for row_variant in expand_bulk_row_variants(sub_tab_type, row):
                 validated_row = model.model_validate(row_variant).model_dump()
+                if sub_tab_type == "blank_stock" and "total_boras_sacks" not in headers:
+                    validated_row.pop("total_boras_sacks", None)
                 validated_row["_row_number"] = int(index) + 1
                 valid_rows.append(validated_row)
         except Exception as exc:
@@ -431,6 +474,8 @@ def bulk_unique_key(sub_tab_type: str, row: dict) -> tuple:
     if sub_tab_type == "company_profile":
         return ("company_profile",)
     if sub_tab_type == "worker":
+        return (bulk_str(row.get("name")).lower(),)
+    if sub_tab_type == "customer":
         return (bulk_str(row.get("name")).lower(),)
     if sub_tab_type == "machine":
         return (bulk_str(row.get("machine_name")).lower(),)
@@ -793,6 +838,54 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             opening_attendance.notes = "Opening attendance imported by bulk upload"
         return len(worker_rows)
 
+    if sub_tab_type == "customer":
+        customer_names = [row["name"].strip().lower() for row in valid_rows if row.get("name") and row["name"].strip()]
+        existing_customers = {
+            customer.name.strip().lower(): customer
+            for customer in db.query(Customer)
+            .filter(
+                Customer.factory_id == factory_id,
+                sql_func.lower(Customer.name).in_(customer_names),
+            )
+            .with_for_update()
+            .all()
+        }
+        saved_count = 0
+        for row in valid_rows:
+            customer_name = row["name"].strip()
+            if not customer_name:
+                increment_bulk_stat(stats, "skipped")
+                continue
+            customer_key = customer_name.lower()
+            customer = existing_customers.get(customer_key)
+            if customer is None:
+                customer = Customer(factory_id=factory_id, name=customer_name)
+                db.add(customer)
+                existing_customers[customer_key] = customer
+                increment_bulk_stat(stats, "inserted")
+            else:
+                increment_bulk_stat(stats, "updated")
+
+            contact_number = (row.get("contact_number") or "").strip() or None
+            phone_number = (row.get("phone_number") or "").strip() or None
+            previous_due = row.get("previous_due") or Decimal("0")
+            customer.name = customer_name
+            customer.firm_name = (row.get("firm_name") or "").strip() or None
+            customer.contact_number = contact_number
+            customer.phone_number = phone_number
+            customer.phone = phone_number or contact_number
+            customer.place = (row.get("place") or "").strip() or None
+            customer.address = (row.get("address") or "").strip() or None
+            customer.gst_number = (row.get("gst_number") or "").strip() or None
+            customer.previous_due = previous_due
+            customer.total_due = previous_due
+            customer.pending_dues = float(previous_due)
+            customer.pending_balance = previous_due
+            customer.balance_amount = previous_due
+            saved_count += 1
+        db.flush()
+        return saved_count
+
     if sub_tab_type == "machine":
         saved_count = 0
         for row in valid_rows:
@@ -832,6 +925,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return saved_count
 
     if sub_tab_type == "blank_stock":
+        # total_boras_sacks is optional so existing customer workbooks remain
+        # valid. Missing values preserve the legacy zero-quantity behavior.
         saved_count = 0
         for row in valid_rows:
             blank_size_ml = int(row["size_ml"])
@@ -854,8 +949,13 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 increment_bulk_stat(stats, "updated")
             stock.linked_bottom_size_mm = blank_size_ml
             stock.weight_per_bora_kg = row["kg_per_sack"]
-            stock.total_boras = stock.total_boras or 0
-            stock.total_qty_kg = stock.total_qty_kg or 0
+            if "total_boras_sacks" in row:
+                total_boras = row.get("total_boras_sacks") or Decimal("0")
+                stock.total_boras = total_boras
+                stock.total_qty_kg = total_boras * row["kg_per_sack"]
+            else:
+                stock.total_boras = stock.total_boras or 0
+                stock.total_qty_kg = stock.total_qty_kg or 0
             saved_count += 1
         db.flush()
         return saved_count

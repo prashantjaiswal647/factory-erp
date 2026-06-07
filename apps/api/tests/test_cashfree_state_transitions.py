@@ -57,3 +57,52 @@ def test_failed_cancelled_and_orphan_events():
     assert db.get(Factory, 1).subscription_status == "cancelled"
     result = process_cashfree_event(db, "SUBSCRIPTION_PAYMENT_SUCCESS", {"data": {"subscription_id": "missing"}})
     assert result["factory_id"] is None
+
+
+def test_payment_gateway_success_activates_pending_order_once():
+    db = make_db()
+    now = datetime.now(timezone.utc)
+    pending = SubscriptionPayment(
+        factory_id=1,
+        plan_code="growth",
+        billing_cycle="yearly",
+        amount_paise=1999900,
+        currency="INR",
+        payment_status="pending",
+        provider="cashfree",
+        provider_payment_id="order_1",
+        cf_order_id="order_1",
+        cf_payment_session_id="session_1",
+        subscription_start_date=now,
+        subscription_end_date=now,
+    )
+    db.add(pending)
+    db.commit()
+    payload = {
+        "type": "PAYMENT_SUCCESS_WEBHOOK",
+        "data": {
+            "order": {"order_id": "order_1", "order_amount": 19999, "order_currency": "INR"},
+            "payment": {
+                "cf_payment_id": "pay_order_1",
+                "payment_status": "SUCCESS",
+                "payment_amount": 19999,
+                "payment_currency": "INR",
+                "payment_time": now.isoformat(),
+            },
+        },
+    }
+
+    first = process_cashfree_event(db, "PAYMENT_SUCCESS_WEBHOOK", payload)
+    second = process_cashfree_event(db, "PAYMENT_SUCCESS_WEBHOOK", payload)
+    db.commit()
+
+    factory = db.get(Factory, 1)
+    payment = db.query(SubscriptionPayment).filter(SubscriptionPayment.cf_order_id == "order_1").one()
+    assert first["subscription_payment_id"] == payment.id
+    assert second["subscription_payment_id"] == payment.id
+    assert payment.payment_status == "paid"
+    assert payment.cf_payment_id == "pay_order_1"
+    assert factory.subscription_status == "active"
+    assert factory.active_plan == "growth"
+    assert factory.billing_cycle == "yearly"
+    assert factory.subscription_end_date > factory.subscription_start_date

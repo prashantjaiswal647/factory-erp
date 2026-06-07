@@ -90,6 +90,7 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     factory_gst = ""
     factory_address = ""
     factory_place = ""
+    signature_url = ""
     
     if factory_id:
         db = SessionLocal()
@@ -100,6 +101,7 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
                 factory_gst = factory.gst_number or ""
                 factory_address = factory.address or ""
                 factory_place = factory.address_place or ""
+                signature_url = factory.digital_signature_url or ""
         except Exception:
             logger.warning("Error fetching factory details in PDF build", exc_info=True)
         finally:
@@ -251,11 +253,19 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     story.extend([table, Spacer(1, 15)])
 
     # Summary table + Words calculation
-    total_val_num = float(invoice.get("bill_total") or payload.get("bill_total") or total_taxable_amount)
+    taxable_value = Decimal(str(payload.get("total_taxable_value") or total_taxable_amount))
+    total_cgst = Decimal(str(payload.get("total_cgst") or 0))
+    total_sgst = Decimal(str(payload.get("total_sgst") or 0))
+    total_igst = Decimal(str(payload.get("total_igst") or 0))
+    total_val_num = float(invoice.get("bill_total") or payload.get("bill_total") or (taxable_value + total_cgst + total_sgst + total_igst))
     amount_in_words = number_to_words_in_words(total_val_num)
 
     summary_rows = [
-        ["Total Taxable Amount", _money(total_val_num)],
+        ["Subtotal / Taxable Value", _money(taxable_value)],
+        ["CGST", _money(total_cgst)],
+        ["SGST", _money(total_sgst)],
+        ["IGST", _money(total_igst)],
+        ["Total Amount", _money(total_val_num)],
         ["Amount Paid / Advance", _money(invoice.get("amount_paid") or payload.get("amount_paid") or 0)],
         ["Balance Due Amount", _money(invoice.get("customer_total_due") or payload.get("customer_total_due") or 0)],
     ]
@@ -322,6 +332,14 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
 
     story.extend([bottom_table, Spacer(1, 15)])
 
+    notes = str(payload.get("notes") or "").strip()
+    if notes:
+        story.extend([
+            Paragraph("<b>Notes</b>", company_title_style),
+            Paragraph(notes, company_text_style),
+            Spacer(1, 12),
+        ])
+
     if payments_history:
         history_header = ParagraphStyle(
             "HistoryHeader",
@@ -366,7 +384,8 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     )
     sig_block = [
         Paragraph(f"For <b>{factory_name}</b>", sig_style),
-        Spacer(1, 40),
+        Paragraph("Digitally authorized" if signature_url else "", sig_style),
+        Spacer(1, 30),
         Paragraph("Authorized Signatory", sig_style),
     ]
     sig_table = Table([["", sig_block]], colWidths=[320, 200])

@@ -132,7 +132,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm font-semibold text-zinc-900">Master Onboarding Bulk Upload</p>
-          <p className="mt-1 text-xs text-zinc-500">One workbook covers Factory Profile, Workers, Machines, Raw Materials, and Packaging Materials.</p>
+          <p className="mt-1 text-xs text-zinc-500">One workbook covers Factory Profile, Workers, Customers, Machines, Raw Materials, and Packaging Materials.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button

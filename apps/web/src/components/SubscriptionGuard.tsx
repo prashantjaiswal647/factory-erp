@@ -24,10 +24,10 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
           subscription_status: response.data.subscription_status,
           trial_end_date: response.data.trial_end_date,
           trial_days_remaining: response.data.trial_days_remaining,
-          active_plan: response.data.active_plan,
+          active_plan: response.data.effective_plan || response.data.active_plan || response.data.plan_name,
           billing_cycle: response.data.billing_cycle,
           subscription_start_date: response.data.subscription_start_date,
-          subscription_end_date: response.data.subscription_end_date,
+          subscription_end_date: response.data.effective_expires_at || response.data.subscription_end_date,
           payment_status: response.data.payment_status
         });
       } finally {

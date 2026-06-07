@@ -8,6 +8,7 @@ import AiChatPage from "./pages/AiChatPage";
 import AttendancePage from "./pages/AttendancePage";
 import BillingPage from "./pages/BillingPage";
 import CalculatorPage from "./pages/CalculatorPage";
+import CostIntelligencePage from "./pages/CostIntelligencePage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import FactoryExpensesPage from "./pages/FactoryExpensesPage";
@@ -32,6 +33,7 @@ import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
 import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
 import {
   SuperAdminAuditLogsPage,
+  SuperAdminBriefingsPage,
   SuperAdminDashboardPage,
   SuperAdminFactoriesPage,
   SuperAdminFactoryDetailPage,
@@ -79,6 +81,7 @@ export default function App() {
         <Route path="factories/:factoryId" element={<SuperAdminFactoryDetailPage />} />
         <Route path="subscriptions" element={<SuperAdminSubscriptionsPage />} />
         <Route path="payments" element={<SuperAdminPaymentsPage />} />
+        <Route path="briefings" element={<SuperAdminBriefingsPage />} />
         <Route path="usage" element={<SuperAdminUsagePage />} />
         <Route path="audit-logs" element={<SuperAdminAuditLogsPage />} />
       </Route>
@@ -237,6 +240,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <CalculatorPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="cost-intelligence"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <CostIntelligencePage />
             </PrivateRoute>
           }
         />

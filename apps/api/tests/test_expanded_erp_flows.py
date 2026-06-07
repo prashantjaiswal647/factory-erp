@@ -766,3 +766,65 @@ def test_invoice_pdf_smoke_and_isolation():
 
     for dep in [get_current_user, get_current_active_user, require_owner]:
         main_app.dependency_overrides.pop(dep, None)
+
+
+def test_generate_invoice_from_sale_is_idempotent_and_tenant_scoped():
+    user_f1 = get_mock_owner_user(1)
+    user_f2 = get_mock_owner_user(2)
+    current_active_user = user_f1
+
+    def local_get_active_user():
+        return current_active_user
+
+    main_app.dependency_overrides[get_current_user] = local_get_active_user
+    main_app.dependency_overrides[get_current_active_user] = local_get_active_user
+    main_app.dependency_overrides[require_owner] = local_get_active_user
+    ensure_testclient_compatibility()
+    client = TestClient(main_app)
+
+    db = TestingSessionLocal()
+    try:
+        db.add(Factory(id=1, name="Invoice Factory 1", subscription_status="active", active_plan="growth"))
+        db.add(Factory(id=2, name="Invoice Factory 2", subscription_status="active", active_plan="growth"))
+        db.add(User(id=user_f1.id, factory_id=1, username=user_f1.username, email=user_f1.email, role="Owner", full_name=user_f1.full_name, password_hash="hash", is_verified=True))
+        db.add(User(id=user_f2.id, factory_id=2, username=user_f2.username, email=user_f2.email, role="Owner", full_name=user_f2.full_name, password_hash="hash", is_verified=True))
+        db.add(Customer(id=601, factory_id=1, name="PDF Customer", phone_number="9876500001", place="Delhi"))
+        db.add(DailySale(
+            id=701,
+            factory_id=1,
+            date=date.today(),
+            customer_id=601,
+            customer_phone="9876500001",
+            product_size_ml=250,
+            variety="Plain White",
+            packaging_size_name="1000 pcs",
+            boxes_sold=10,
+            loose_packets_sold=0,
+            rate_per_box=Decimal("100.00"),
+            rate_per_packet=Decimal("0.00"),
+            total_amount=Decimal("1000.00"),
+            total_bill=Decimal("1000.00"),
+            amount_paid=Decimal("200.00"),
+            initial_payment=Decimal("200.00"),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    first = client.post("/api/invoices/from-sale/701", json={"invoice_type": "tax_invoice", "tax_rate": 18})
+    second = client.post("/api/invoices/from-sale/701", json={"invoice_type": "tax_invoice", "tax_rate": 18})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["invoice_id"] == second.json()["invoice_id"]
+    assert first.json()["pdf_url"].endswith(f"/{first.json()['invoice_id']}/pdf")
+
+    pdf = client.get(first.json()["pdf_url"])
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+
+    current_active_user = user_f2
+    denied = client.post("/api/invoices/from-sale/701", json={})
+    assert denied.status_code == 404
+
+    for dep in [get_current_user, get_current_active_user, require_owner]:
+        main_app.dependency_overrides.pop(dep, None)

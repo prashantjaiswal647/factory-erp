@@ -41,6 +41,115 @@ services:
     ports:
       - "${VALIDATE_API_PORT:-18000}:8000"
 
+  briefing-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.briefing_scheduler
+    container_name: ai-erp-briefing-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      MORNING_BRIEFING_MAX_RETRIES: "1"
+      TZ: Asia/Kolkata
+
+  cost-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.cost_scheduler
+    container_name: ai-erp-cost-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      TZ: Asia/Kolkata
+
+  factory-health-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.factory_health_scheduler
+    container_name: ai-erp-factory-health-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cost-scheduler:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      TZ: Asia/Kolkata
+
+  wastage-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.wastage_scheduler
+    container_name: ai-erp-wastage-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      factory-health-scheduler:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      TZ: Asia/Kolkata
+
+  profit-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.profit_scheduler
+    container_name: ai-erp-profit-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      wastage-scheduler:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      TZ: Asia/Kolkata
+
+  weekly-digest-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.weekly_digest_scheduler
+    container_name: ai-erp-weekly-digest-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      profit-scheduler:
+        condition: service_started
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      TZ: Asia/Kolkata
+
   web:
     build:
       context: ./apps/web

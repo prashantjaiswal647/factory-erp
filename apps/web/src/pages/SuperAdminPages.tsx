@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Activity, AlertTriangle, Building2, CreditCard, Database, FileClock, LayoutDashboard, Plus, Search, Shield, UsersRound } from "lucide-react";
+import { Activity, AlertTriangle, Building2, CreditCard, Database, FileClock, LayoutDashboard, MessageSquareText, Plus, Search, Shield, UsersRound } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Outlet, useNavigate, useParams } from "react-router-dom";
 
@@ -125,6 +125,122 @@ type AuditLog = {
   created_at: string;
 };
 
+type BriefingEvent = {
+  factory_id: number;
+  factory_name: string;
+  briefing_date: string;
+  at: string;
+};
+
+type BriefingOverview = {
+  total_factories: number;
+  telegram_connected_factories: number;
+  active_briefing_factories: number;
+  delivery_success_rate: number;
+  delivery_failure_rate: number;
+  last_successful_delivery: BriefingEvent | null;
+  last_failed_delivery: BriefingEvent | null;
+  metrics: {
+    today_sent: number;
+    today_failed: number;
+    seven_day_sent: number;
+    seven_day_failed: number;
+    thirty_day_sent: number;
+    thirty_day_failed: number;
+    delivery_success_rate: number;
+  };
+};
+
+type BriefingLog = {
+  id: number;
+  factory_id: number;
+  factory_name: string;
+  briefing_date: string;
+  generated_at: string;
+  sent_at?: string | null;
+  status: "generated" | "sent" | "failed" | "skipped";
+  channel: string;
+  error_message?: string | null;
+  retry_count: number;
+};
+
+type WeeklyDigestLog = {
+  id: number;
+  factory_id: number;
+  factory_name: string;
+  week_start: string;
+  week_end: string;
+  message_sent: boolean;
+  status: "sent" | "failed";
+  sent_at?: string | null;
+  created_at: string;
+  error_message?: string | null;
+};
+
+type BriefingFactoryHealth = {
+  factory_id: number;
+  factory_name: string;
+  telegram_connected: boolean;
+  last_briefing_sent?: string | null;
+  last_briefing_failed?: string | null;
+  delivery_percent: number;
+  seven_day_success_percent: number;
+  thirty_day_success_percent: number;
+};
+
+type CostSpikeEvent = {
+  id: number;
+  factory_id: number;
+  factory_name: string;
+  snapshot_date: string;
+  variance_percent?: number | null;
+  primary_driver?: string | null;
+  status: "generated" | "sent" | "failed" | "skipped";
+  channel: string;
+  sent_at?: string | null;
+};
+
+type PageResult<T> = {
+  items: T[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
+
+type FactoryHealthRank = {
+  factory_id: number;
+  factory_name: string;
+  snapshot_date: string;
+  overall_score: number;
+  health_status: "CRITICAL" | "WARNING" | "GOOD" | "EXCELLENT";
+  largest_strength: string;
+  largest_risk: string;
+};
+
+type FactoryHealthLeaderboard = {
+  snapshot_date: string;
+  average_health: number;
+  top_factories: FactoryHealthRank[];
+  lowest_factories: FactoryHealthRank[];
+};
+
+type ProfitRank = {
+  factory_id: number;
+  factory_name: string;
+  profit_margin_percent: number;
+  gross_profit_paise: number;
+  profit_status: string;
+  largest_profit_risk: string;
+};
+
+type ProfitLeaderboard = {
+  snapshot_date: string;
+  average_margin: number;
+  top_factories: ProfitRank[];
+  lowest_factories: ProfitRank[];
+};
+
 function useAdminToken() {
   const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_KEY));
   function save(nextToken: string) {
@@ -245,6 +361,7 @@ function SuperAdminShell() {
     ["/munshi-control-room/factories", "Factories", Building2],
     ["/munshi-control-room/subscriptions", "Subscriptions", CreditCard],
     ["/munshi-control-room/payments", "Payments", Database],
+    ["/munshi-control-room/briefings", "Briefing Delivery", MessageSquareText],
     ["/munshi-control-room/usage", "Usage", Activity],
     ["/munshi-control-room/audit-logs", "Audit Logs", FileClock],
   ] as const;
@@ -349,6 +466,18 @@ export function SuperAdminDashboardPage() {
     recent_payments: [],
   });
   const sheetOverview = useAdminData<FactorySheetOverview[]>("/api/admin/overview", []);
+  const healthLeaderboard = useAdminData<FactoryHealthLeaderboard>("/api/admin/factory-health/leaderboard?limit=5", {
+    snapshot_date: "",
+    average_health: 0,
+    top_factories: [],
+    lowest_factories: [],
+  });
+  const profitLeaderboard = useAdminData<ProfitLeaderboard>("/api/admin/profit-leaderboard?limit=5", {
+    snapshot_date: "",
+    average_margin: 0,
+    top_factories: [],
+    lowest_factories: [],
+  });
   const [selectedFactoryId, setSelectedFactoryId] = useState("");
   const activeSheetFactories = useMemo(
     () => sheetOverview.data.filter((factory) => Boolean(factory.google_spreadsheet_id)),
@@ -389,6 +518,30 @@ export function SuperAdminDashboardPage() {
       <Panel title="Recent Signups">
         <OwnerTable owners={data.recent_signups || []} />
       </Panel>
+      <Panel title="Factory Health Leaderboard">
+        <ErrorNote message={healthLeaderboard.error} />
+        {healthLeaderboard.isLoading ? <p>Loading health scores...</p> : (
+          <div className="space-y-4">
+            <Metric label="Average Health" value={`${healthLeaderboard.data.average_health.toFixed(1)}/100`} />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <HealthRankTable title="Top Factories" rows={healthLeaderboard.data.top_factories} />
+              <HealthRankTable title="Lowest Factories" rows={healthLeaderboard.data.lowest_factories} />
+            </div>
+          </div>
+        )}
+      </Panel>
+      <Panel title="Profit Intelligence Leaderboard">
+        <ErrorNote message={profitLeaderboard.error} />
+        {profitLeaderboard.isLoading ? <p>Loading profit margins...</p> : (
+          <div className="space-y-4">
+            <Metric label="Average Margin" value={`${profitLeaderboard.data.average_margin.toFixed(1)}%`} />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ProfitRankTable title="Top Profitable Factories" rows={profitLeaderboard.data.top_factories} />
+              <ProfitRankTable title="Lowest Profit Factories" rows={profitLeaderboard.data.lowest_factories} />
+            </div>
+          </div>
+        )}
+      </Panel>
       <Panel
         title="Live Spreadsheet Audit Room"
         action={
@@ -425,6 +578,46 @@ export function SuperAdminDashboardPage() {
           </div>
         )}
       </Panel>
+    </div>
+  );
+}
+
+function HealthRankTable({ title, rows }: { title: string; rows: FactoryHealthRank[] }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 p-3">
+      <h3 className="text-sm font-black">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {rows.map((row) => (
+          <div key={row.factory_id} className="flex items-center justify-between rounded-md bg-zinc-50 px-3 py-2 text-sm">
+            <div className="min-w-0">
+              <p className="truncate font-semibold">{row.factory_name}</p>
+              <p className="text-xs text-zinc-500">{row.health_status} · Risk: {row.largest_risk}</p>
+            </div>
+            <strong>{row.overall_score.toFixed(1)}</strong>
+          </div>
+        ))}
+        {rows.length === 0 ? <p className="text-sm text-zinc-500">No health snapshots available.</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function ProfitRankTable({ title, rows }: { title: string; rows: ProfitRank[] }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 p-3">
+      <h3 className="text-sm font-black">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {rows.map((row) => (
+          <div key={row.factory_id} className="flex items-center justify-between rounded-md bg-zinc-50 px-3 py-2 text-sm">
+            <div className="min-w-0">
+              <p className="truncate font-semibold">{row.factory_name}</p>
+              <p className="text-xs text-zinc-500">{row.profit_status} · Risk: {row.largest_profit_risk}</p>
+            </div>
+            <strong>{row.profit_margin_percent.toFixed(1)}%</strong>
+          </div>
+        ))}
+        {rows.length === 0 ? <p className="text-sm text-zinc-500">No profit snapshots available.</p> : null}
+      </div>
     </div>
   );
 }
@@ -1120,6 +1313,224 @@ export function SuperAdminAuditLogsPage() {
       <ErrorNote message={error} />
       {isLoading ? <p>Loading audit logs...</p> : <SimpleTable rows={data as unknown as Array<Record<string, unknown>>} />}
     </Panel>
+  );
+}
+
+function formatAdminDate(value?: string | null) {
+  if (!value) return "Not available";
+  return new Date(value).toLocaleString("en-IN");
+}
+
+function BriefingStatus({ status }: { status: BriefingLog["status"] }) {
+  const classes = {
+    generated: "bg-blue-100 text-blue-800",
+    sent: "bg-emerald-100 text-emerald-800",
+    failed: "bg-red-100 text-red-800",
+    skipped: "bg-amber-100 text-amber-800",
+  };
+  return <span className={`rounded-full px-2 py-1 text-xs font-bold capitalize ${classes[status]}`}>{status}</span>;
+}
+
+export function SuperAdminBriefingsPage() {
+  const overview = useAdminData<BriefingOverview>("/api/admin/briefings/overview", {
+    total_factories: 0,
+    telegram_connected_factories: 0,
+    active_briefing_factories: 0,
+    delivery_success_rate: 0,
+    delivery_failure_rate: 0,
+    last_successful_delivery: null,
+    last_failed_delivery: null,
+    metrics: {
+      today_sent: 0,
+      today_failed: 0,
+      seven_day_sent: 0,
+      seven_day_failed: 0,
+      thirty_day_sent: 0,
+      thirty_day_failed: 0,
+      delivery_success_rate: 0,
+    },
+  });
+  const [factoryId, setFactoryId] = useState("");
+  const [briefingDate, setBriefingDate] = useState("");
+  const [status, setStatus] = useState("");
+  const [logPage, setLogPage] = useState(1);
+  const [healthPage, setHealthPage] = useState(1);
+  const [spikePage, setSpikePage] = useState(1);
+  const [digestPage, setDigestPage] = useState(1);
+  const logQuery = new URLSearchParams({
+    page: String(logPage),
+    page_size: "25",
+    ...(factoryId ? { factory_id: factoryId } : {}),
+    ...(briefingDate ? { briefing_date: briefingDate } : {}),
+    ...(status ? { status } : {}),
+  });
+  const logs = useAdminData<PageResult<BriefingLog>>(`/api/admin/briefings/logs?${logQuery}`, {
+    items: [], page: 1, page_size: 25, total: 0, pages: 0,
+  });
+  const health = useAdminData<PageResult<BriefingFactoryHealth>>(
+    `/api/admin/briefings/factory-health?page=${healthPage}&page_size=25`,
+    { items: [], page: 1, page_size: 25, total: 0, pages: 0 },
+  );
+  const spikes = useAdminData<PageResult<CostSpikeEvent>>(
+    `/api/admin/briefings/cost-spikes?page=${spikePage}&page_size=25`,
+    { items: [], page: 1, page_size: 25, total: 0, pages: 0 },
+  );
+  const digests = useAdminData<PageResult<WeeklyDigestLog>>(
+    `/api/admin/weekly-digest?page=${digestPage}&page_size=25`,
+    { items: [], page: 1, page_size: 25, total: 0, pages: 0 },
+  );
+  const cards = [
+    ["Total Factories", overview.data.total_factories],
+    ["Telegram Connected", overview.data.telegram_connected_factories],
+    ["Active Briefing Factories", overview.data.active_briefing_factories],
+    ["Success Rate", `${overview.data.delivery_success_rate}%`],
+    ["Failure Rate", `${overview.data.delivery_failure_rate}%`],
+    ["Today Sent / Failed", `${overview.data.metrics.today_sent} / ${overview.data.metrics.today_failed}`],
+    ["7 Day Sent / Failed", `${overview.data.metrics.seven_day_sent} / ${overview.data.metrics.seven_day_failed}`],
+    ["30 Day Sent / Failed", `${overview.data.metrics.thirty_day_sent} / ${overview.data.metrics.thirty_day_failed}`],
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-2xl font-black">Briefing Delivery Observability</h2>
+        <p className="text-sm text-zinc-600">Cross-factory delivery health and failure investigation.</p>
+      </div>
+      <ErrorNote message={overview.error || logs.error || health.error || spikes.error || digests.error} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">{label}</p>
+            <p className="mt-2 text-2xl font-black">{value}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Last Successful Delivery">
+          <p className="font-bold">{overview.data.last_successful_delivery?.factory_name || "Not available"}</p>
+          <p className="text-sm text-zinc-600">{formatAdminDate(overview.data.last_successful_delivery?.at)}</p>
+        </Panel>
+        <Panel title="Last Failed Delivery">
+          <p className="font-bold">{overview.data.last_failed_delivery?.factory_name || "Not available"}</p>
+          <p className="text-sm text-zinc-600">{formatAdminDate(overview.data.last_failed_delivery?.at)}</p>
+        </Panel>
+      </div>
+      <Panel title="Briefing Delivery Logs">
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <select className="h-10 rounded-md border border-zinc-300 px-3 text-sm" value={factoryId} onChange={(event) => { setFactoryId(event.target.value); setLogPage(1); }}>
+            <option value="">All factories</option>
+            {health.data.items.map((factory) => <option key={factory.factory_id} value={factory.factory_id}>{factory.factory_name}</option>)}
+          </select>
+          <input className="h-10 rounded-md border border-zinc-300 px-3 text-sm" type="date" value={briefingDate} onChange={(event) => { setBriefingDate(event.target.value); setLogPage(1); }} />
+          <select className="h-10 rounded-md border border-zinc-300 px-3 text-sm" value={status} onChange={(event) => { setStatus(event.target.value); setLogPage(1); }}>
+            <option value="">All statuses</option>
+            <option value="generated">Generated</option>
+            <option value="sent">Sent</option>
+            <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
+          </select>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500"><tr>
+              {["Factory", "Briefing Date", "Generated At", "Sent At", "Status", "Channel", "Error Message", "Retries"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}
+            </tr></thead>
+            <tbody>{logs.data.items.map((log) => <tr key={log.id} className="border-b border-zinc-100 align-top">
+              <td className="px-3 py-3 font-semibold">{log.factory_name}</td>
+              <td className="px-3 py-3">{log.briefing_date}</td>
+              <td className="px-3 py-3 whitespace-nowrap">{formatAdminDate(log.generated_at)}</td>
+              <td className="px-3 py-3 whitespace-nowrap">{formatAdminDate(log.sent_at)}</td>
+              <td className="px-3 py-3"><BriefingStatus status={log.status} /></td>
+              <td className="px-3 py-3 capitalize">{log.channel}</td>
+              <td className="max-w-xs px-3 py-3 text-red-700">{log.error_message || "-"}</td>
+              <td className="px-3 py-3">{log.retry_count}</td>
+            </tr>)}</tbody>
+          </table>
+          {!logs.isLoading && logs.data.items.length === 0 ? <EmptyState>No briefing logs match these filters.</EmptyState> : null}
+        </div>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span>{logs.data.total} records</span>
+          <div className="flex gap-2">
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={logPage <= 1} onClick={() => setLogPage((page) => page - 1)}>Previous</button>
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={logPage >= logs.data.pages} onClick={() => setLogPage((page) => page + 1)}>Next</button>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Factory Briefing Health">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500"><tr>
+              {["Factory", "Telegram", "Last Sent", "Last Failed", "Delivery %", "7 Day %", "30 Day %"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}
+            </tr></thead>
+            <tbody>{health.data.items.map((factory) => <tr key={factory.factory_id} className="border-b border-zinc-100">
+              <td className="px-3 py-3 font-semibold">{factory.factory_name}</td>
+              <td className="px-3 py-3 font-bold">{factory.telegram_connected ? "YES" : "NO"}</td>
+              <td className="px-3 py-3 whitespace-nowrap">{formatAdminDate(factory.last_briefing_sent)}</td>
+              <td className="px-3 py-3 whitespace-nowrap">{formatAdminDate(factory.last_briefing_failed)}</td>
+              <td className="px-3 py-3">{factory.delivery_percent}%</td>
+              <td className="px-3 py-3">{factory.seven_day_success_percent}%</td>
+              <td className="px-3 py-3">{factory.thirty_day_success_percent}%</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span>{health.data.total} factories</span>
+          <div className="flex gap-2">
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={healthPage <= 1} onClick={() => setHealthPage((page) => page - 1)}>Previous</button>
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={healthPage >= health.data.pages} onClick={() => setHealthPage((page) => page + 1)}>Next</button>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Cost Spike Events">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500"><tr>
+              {["Factory", "Date", "Variance", "Primary Driver", "Status"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}
+            </tr></thead>
+            <tbody>{spikes.data.items.map((event) => <tr key={event.id} className="border-b border-zinc-100">
+              <td className="px-3 py-3 font-semibold">{event.factory_name}</td>
+              <td className="px-3 py-3">{event.snapshot_date}</td>
+              <td className="px-3 py-3 font-semibold">{event.variance_percent == null ? "Not available" : `${event.variance_percent > 0 ? "+" : ""}${event.variance_percent.toFixed(1)}%`}</td>
+              <td className="px-3 py-3">{event.primary_driver || "Not available"}</td>
+              <td className="px-3 py-3"><BriefingStatus status={event.status} /></td>
+            </tr>)}</tbody>
+          </table>
+          {!spikes.isLoading && spikes.data.items.length === 0 ? <EmptyState>No cost spike events recorded.</EmptyState> : null}
+        </div>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span>{spikes.data.total} events</span>
+          <div className="flex gap-2">
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={spikePage <= 1} onClick={() => setSpikePage((page) => page - 1)}>Previous</button>
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={spikePage >= spikes.data.pages} onClick={() => setSpikePage((page) => page + 1)}>Next</button>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Weekly Digest Log">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-zinc-200 text-xs uppercase text-zinc-500"><tr>
+              {["Factory", "Week", "Status", "Sent Time", "Message Sent", "Error"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}
+            </tr></thead>
+            <tbody>{digests.data.items.map((log) => <tr key={log.id} className="border-b border-zinc-100">
+              <td className="px-3 py-3 font-semibold">{log.factory_name}</td>
+              <td className="px-3 py-3">{log.week_start} to {log.week_end}</td>
+              <td className="px-3 py-3 font-semibold uppercase">{log.status}</td>
+              <td className="px-3 py-3 whitespace-nowrap">{formatAdminDate(log.sent_at)}</td>
+              <td className="px-3 py-3">{log.message_sent ? "YES" : "NO"}</td>
+              <td className="max-w-xs px-3 py-3 text-red-700">{log.error_message || "-"}</td>
+            </tr>)}</tbody>
+          </table>
+          {!digests.isLoading && digests.data.items.length === 0 ? <EmptyState>No weekly digest logs recorded.</EmptyState> : null}
+        </div>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span>{digests.data.total} records</span>
+          <div className="flex gap-2">
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={digestPage <= 1} onClick={() => setDigestPage((page) => page - 1)}>Previous</button>
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={digestPage >= digests.data.pages} onClick={() => setDigestPage((page) => page + 1)}>Next</button>
+          </div>
+        </div>
+      </Panel>
+    </div>
   );
 }
 

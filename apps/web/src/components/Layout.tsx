@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, X } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, IndianRupee, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -24,6 +24,7 @@ const navigation: NavigationItem[] = [
   { label: "Onboarding", href: "/onboarding", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
   { label: "Machine Setup", href: "/machine-onboarding", icon: Settings2, roles: ["Owner", "Sub-Owner"] },
   { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner", "Sub-Owner"] },
+  { label: "Cost Intelligence", href: "/cost-intelligence", icon: IndianRupee, roles: ["Owner", "Sub-Owner"] },
   { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
   { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["Owner", "Sub-Owner", "Supervisor"] },
   { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
@@ -171,13 +172,6 @@ export default function Layout() {
   const trialEndLabel = subData?.raw_trial_end_date ? new Date(subData.raw_trial_end_date).toLocaleDateString("en-IN") : "";
   const subscriptionEndDate = planExpiresAt ? new Date(planExpiresAt) : null;
   const layoutSubscriptionEndDate = layoutStatus?.subscription_end ? new Date(layoutStatus.subscription_end) : subscriptionEndDate;
-  const expiresSoon = Boolean(
-    subscriptionStatus === "active" &&
-      subscriptionEndDate &&
-      subscriptionEndDate.getTime() - Date.now() <= 7 * 24 * 60 * 60 * 1000 &&
-      subscriptionEndDate.getTime() >= Date.now()
-  );
-
   function handleSignOut() {
     sessionStorage.removeItem("dismiss_banner");
     logout();
@@ -299,14 +293,16 @@ export default function Layout() {
               <Menu className="h-4 w-4" />
             </button>
 
-            <div className="relative min-w-0 flex-1 md:max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4B5563]" />
-              <input
-                className="h-10 w-full rounded-md border border-[#E5E7EB] bg-[#FFF7ED] pl-9 pr-3 text-sm text-[#111827] outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:bg-white focus:ring-2 focus:ring-[#F3E8FF]"
-                placeholder="Search materials, orders, suppliers"
-                type="search"
-              />
-            </div>
+            {!["/dashboard", "/inventory"].includes(location.pathname) ? (
+              <div className="relative min-w-0 flex-1 md:max-w-md">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4B5563]" />
+                <input
+                  className="h-10 w-full rounded-md border border-[#E5E7EB] bg-[#FFF7ED] pl-9 pr-3 text-sm text-[#111827] outline-none transition placeholder:text-[#4B5563] focus:border-[#6D28D9] focus:bg-white focus:ring-2 focus:ring-[#F3E8FF]"
+                  placeholder="Search materials, orders, suppliers"
+                  type="search"
+                />
+              </div>
+            ) : null}
           </div>
 
           <div className="z-20 flex w-full items-center justify-between gap-3 md:w-auto md:shrink-0 md:justify-end">

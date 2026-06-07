@@ -1,84 +1,78 @@
-import { Camera, ChevronDown, Edit3, Filter, Loader2, Package, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
-import { API_BASE_URL } from "../lib/api";
 import axios from "axios";
-import type { ReactNode } from "react";
+import { Camera, ChevronDown, Edit3, Loader2, PackagePlus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
-import { getInventory, deleteOnboardingItem } from "../lib/api";
+import { API_BASE_URL, deleteOnboardingItem, getInventory } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
-type InventoryFilter = "all" | "raw" | "wip" | "finished" | "packing" | "low";
+type InventoryFilter = "all" | "low" | "critical" | "raw" | "finished" | "packaging";
 type StockStatus = "In Stock" | "Low Stock" | "Out of Stock";
-
-type InventoryCategory = {
-  key: string;
-  title: string;
-  tone: string;
-  rows: InventoryDisplayRow[];
-};
+type InventoryBucket = NonNullable<LiveStockRow["bucket"]>;
+type GroupKey = "critical_low" | InventoryBucket;
+type SortKey = "item" | "size" | "stock" | "status";
+type SortState = { key: SortKey; direction: "asc" | "desc" } | null;
 
 type InventoryDisplayRow = {
   key: string;
-  variant: string;
+  item: string;
   size: string;
   quantity: number;
-  quantityLabel: string;
-  unitType: string;
-  perBox: string;
-  totalPieces: string;
-  location: string;
+  unit: string;
   status: StockStatus;
   source: LiveStockRow;
-  image_url?: string | null;
-  variant_name?: string | null;
+};
+
+type InventoryGroup = {
+  key: GroupKey;
+  title: string;
+  rows: InventoryDisplayRow[];
 };
 
 const filters: Array<{ key: InventoryFilter; label: string }> = [
-  { key: "all", label: "All Items" },
+  { key: "all", label: "All" },
+  { key: "low", label: "Low Stock" },
+  { key: "critical", label: "Critical" },
   { key: "raw", label: "Raw Materials" },
-  { key: "wip", label: "Work In Progress" },
-  { key: "finished", label: "Finished Goods" },
-  { key: "packing", label: "Packing Materials" },
-  { key: "low", label: "Low Stock" }
+  { key: "finished", label: "Finished" },
+  { key: "packaging", label: "Packaging" }
 ];
+
+const defaultCollapsed: Record<GroupKey, boolean> = {
+  critical_low: false,
+  cup_blanks: false,
+  finished_goods: false,
+  bottom_reels: true,
+  boxes: true,
+  polybags_packing: true,
+  raw_other: true,
+  needs_mapping_review: false
+};
 
 export default function InventoryPage() {
   const { user } = useAuth();
   const canDelete = user?.role === "Owner";
   const [rows, setRows] = useState<LiveStockRow[]>([]);
   const [activeFilter, setActiveFilter] = useState<InventoryFilter>("all");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [collapsed, setCollapsed] = useState<Record<GroupKey, boolean>>(defaultCollapsed);
+  const [sortByGroup, setSortByGroup] = useState<Partial<Record<GroupKey, SortState>>>({});
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [expandedMobile, setExpandedMobile] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [uploadingId, setUploadingId] = useState<number | null>(null);
-
-  async function handleImageUpload(productId: number, file: File) {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    setUploadingId(productId);
-    try {
-      const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
-      await axios.post(`${API_BASE_URL}/api/inventory/final-stock/${productId}/image`, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`
-        }
-      });
-      await load();
-    } catch (caught: any) {
-      const message = caught.response?.data?.detail || caught.message || "Failed to upload image";
-      alert(message);
-    } finally {
-      setUploadingId(null);
-    }
-  }
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(searchInput.trim().toLowerCase()), 150);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   async function load() {
     setIsLoading(true);
@@ -86,499 +80,359 @@ export default function InventoryPage() {
     try {
       const response = await getInventory();
       setRows(Array.isArray(response.data) ? response.data : []);
+      setLastRefreshed(new Date());
     } catch (caught) {
       const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Inventory load failed";
-      setError(message);
+      setError(String(message));
     } finally {
       setIsLoading(false);
     }
   }
 
+  async function handleImageUpload(productId: number, file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+    setUploadingId(productId);
+    try {
+      const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
+      await axios.post(`${API_BASE_URL}/api/inventory/final-stock/${productId}/image`, formData, {
+        headers: { "Content-Type": "multipart/form-data", Authorization: `Bearer ${token}` }
+      });
+      await load();
+    } catch (caught) {
+      const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to upload image";
+      window.alert(String(message));
+    } finally {
+      setUploadingId(null);
+    }
+  }
+
   async function handleDelete(row: InventoryDisplayRow) {
     if (!canDelete) {
-      alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
+      window.alert("Access Denied: Only the Factory Owner is authorized to delete entries.");
       return;
     }
-    if (!window.confirm("Are you sure you want to remove this entry?")) {
-      return;
-    }
+    if (!window.confirm("Are you sure you want to remove this entry?")) return;
     try {
-      const entryId = row.source.id;
-      const type = row.source.stock_type;
-      
-      let actualId = entryId;
-      let actualType: string = type;
-
-      if (typeof entryId === "string") {
-        if (entryId.startsWith("blank-")) {
-          actualId = entryId.replace("blank-", "");
-          actualType = "blankstock";
-        } else if (entryId.startsWith("bottom-")) {
-          actualId = entryId.replace("bottom-", "");
-          actualType = "bottomstock";
-        } else if (entryId.startsWith("box-")) {
-          actualId = entryId.replace("box-", "");
-          actualType = "boxstock";
-        } else if (entryId.startsWith("plastic-")) {
-          actualId = entryId.replace("plastic-", "");
-          actualType = "plasticstock";
-        } else if (entryId.startsWith("polybag-")) {
-          actualId = entryId.replace("polybag-", "");
-          actualType = "polybagstock";
-        } else if (entryId.startsWith("final-")) {
-          actualId = entryId.replace("final-", "");
-          actualType = "final";
+      const { id, stock_type: stockType } = row.source;
+      let actualId: number | string = id;
+      let actualType = String(stockType);
+      if (typeof id === "string") {
+        const mappings = [
+          ["blank-", "blankstock"],
+          ["bottom-", "bottomstock"],
+          ["box-", "boxstock"],
+          ["plastic-", "plasticstock"],
+          ["polybag-", "polybagstock"],
+          ["final-", "final"]
+        ] as const;
+        const mapping = mappings.find(([prefix]) => id.startsWith(prefix));
+        if (mapping) {
+          actualId = id.replace(mapping[0], "");
+          actualType = mapping[1];
         }
-      } else {
-        if (String(type) === "Carton Box" || String(type) === "Packaging") {
-          actualType = "boxstock";
-        }
+      } else if (stockType === "Carton Box" || stockType === "Box") {
+        actualType = "boxstock";
       }
-
       await deleteOnboardingItem(Number(actualId), actualType);
       await load();
     } catch (caught) {
       const message = axios.isAxiosError(caught) ? caught.response?.data?.detail || caught.message : "Failed to delete entry";
-      alert(message);
+      window.alert(String(message));
     }
   }
 
+  const displayRows = useMemo(() => rows.map(toDisplayRow), [rows]);
+  const counts = useMemo(() => ({
+    total: displayRows.length,
+    raw: displayRows.filter((row) => ["cup_blanks", "bottom_reels", "raw_other"].includes(bucketFor(row.source))).length,
+    packaging: displayRows.filter((row) => bucketFor(row.source) === "polybags_packing").length,
+    boxes: displayRows.filter((row) => bucketFor(row.source) === "boxes").length,
+    other: displayRows.filter((row) => bucketFor(row.source) === "needs_mapping_review").length,
+    healthy: displayRows.filter((row) => row.status === "In Stock").length,
+    low: displayRows.filter((row) => row.status === "Low Stock").length,
+    critical: displayRows.filter((row) => row.status === "Out of Stock").length,
+    blanks: displayRows.filter((row) => bucketFor(row.source) === "cup_blanks").length,
+    bottoms: displayRows.filter((row) => bucketFor(row.source) === "bottom_reels").length,
+    finished: displayRows.filter((row) => bucketFor(row.source) === "finished_goods").length
+  }), [displayRows]);
+  const groups = useMemo(
+    () => buildGroups(displayRows, activeFilter, searchQuery, sortByGroup),
+    [displayRows, activeFilter, searchQuery, sortByGroup]
+  );
+  const visibleCount = groups.reduce((sum, group) => sum + group.rows.length, 0);
 
-  const categories = useMemo(() => buildInventoryCategories(rows, activeFilter), [rows, activeFilter]);
-  const totalVariants = categories.reduce((sum, category) => sum + category.rows.length, 0);
-  const lowStockCount = categories.flatMap((category) => category.rows).filter((row) => row.status !== "In Stock").length;
+  function toggleSort(group: GroupKey, key: SortKey) {
+    setSortByGroup((current) => {
+      const existing = current[group];
+      if (!existing || existing.key !== key) return { ...current, [group]: { key, direction: "asc" } };
+      if (existing.direction === "asc") return { ...current, [group]: { key, direction: "desc" } };
+      const next = { ...current };
+      delete next[group];
+      return next;
+    });
+  }
 
   return (
-    <div className="min-w-0 space-y-5 overflow-x-hidden">
-      <header className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+    <div className="min-w-0 space-y-4 overflow-x-hidden">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-950">Inventory</h1>
-          <p className="mt-1 text-sm text-zinc-500">Manage raw materials, work in progress, packing stock, and finished goods.</p>
-          <p className="mt-2 text-xs font-medium text-zinc-500">{totalVariants} variants tracked · {lowStockCount} attention items</p>
+          <h1 className="text-2xl font-semibold text-zinc-950">Live Inventory</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            {displayRows.length} items · {counts.critical} critical · {counts.low} low
+            {lastRefreshed ? ` · refreshed ${relativeTime(lastRefreshed)}` : ""}
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button">
-            <Filter className="h-4 w-4" />
-            Filters
-          </button>
-          <Link className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700" to="/onboarding">
-            <PackagePlus className="h-4 w-4" />
-            Add Item
+        <div className="flex gap-2">
+          <Link className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700" to="/onboarding">
+            <PackagePlus className="h-4 w-4" /> Add Item
           </Link>
-          <button className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-brand-50" type="button" onClick={load}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
+          <button className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={load}>
+            <RefreshCw className="h-4 w-4" /> Refresh
           </button>
         </div>
       </header>
 
-      <nav className="flex gap-2 overflow-x-auto border-b border-zinc-200 pb-1">
-        {filters.map((filter) => (
-          <button
-            key={filter.key}
-            className={`shrink-0 border-b-2 px-3 py-3 text-sm font-semibold transition ${
-              activeFilter === filter.key ? "border-brand-600 text-brand-700" : "border-transparent text-zinc-500 hover:text-zinc-900"
-            }`}
-            type="button"
-            onClick={() => setActiveFilter(filter.key)}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </nav>
+      <section className="grid grid-cols-3 gap-2 lg:grid-cols-9" aria-label="Inventory summary">
+        <Kpi label="Total" value={counts.total} />
+        <Kpi label="Raw Materials" value={counts.raw} />
+        <Kpi label="Finished Goods" value={counts.finished} />
+        <Kpi label="Packaging" value={counts.packaging} />
+        <Kpi label="Boxes" value={counts.boxes} />
+        <Kpi label="Other" value={counts.other} />
+        <Kpi label="Healthy" value={counts.healthy} />
+        <Kpi label="Low" value={counts.low} tone="amber" />
+        <a href="#critical-low-stock"><Kpi label="Critical" value={counts.critical} tone="red" /></a>
+      </section>
 
-      {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div> : null}
+      <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label="Risk by category">
+        {riskCategories(displayRows).map((risk) => (
+          <div key={risk.label} className="rounded-lg border border-zinc-200 bg-white px-3 py-2">
+            <div className="flex items-center justify-between text-xs font-semibold text-zinc-700">
+              <span>{risk.label}</span><span>{risk.atRisk}/{risk.total}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-100">
+              <div className={`h-full ${risk.atRisk ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${risk.total ? Math.max(8, (risk.atRisk / risk.total) * 100) : 0}%` }} />
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section className="sticky top-[65px] z-[5] rounded-xl border border-zinc-200 bg-white/95 p-3 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Search inventory</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <input
+              className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              placeholder="Search item, size, code, or packaging"
+              type="search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+            />
+          </label>
+          <div className="flex gap-2 overflow-x-auto">
+            {filters.map((filter) => (
+              <button
+                key={filter.key}
+                className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${
+                  activeFilter === filter.key ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+                }`}
+                type="button"
+                onClick={() => setActiveFilter(filter.key)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</div> : null}
 
       {isLoading ? (
-        <div className="rounded-xl border border-zinc-200 bg-white p-8 text-sm text-zinc-500">Loading categorized inventory...</div>
-      ) : categories.every((category) => category.rows.length === 0) ? (
-        <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
-          No inventory rows found for this filter.
-        </div>
+        <div className="rounded-lg bg-zinc-50 px-4 py-5 text-sm text-zinc-500">Loading inventory...</div>
+      ) : visibleCount === 0 ? (
+        <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-500">No inventory results.</div>
       ) : (
-        <section className="space-y-5">
-          {categories.map((category) => (
-            <CategoryCard
-              key={category.key}
-              category={category}
-              isCollapsed={Boolean(collapsed[category.key])}
-              onToggle={() => setCollapsed((current) => ({ ...current, [category.key]: !current[category.key] }))}
-              onDelete={handleDelete}
-              canDelete={canDelete}
-              onImageUpload={handleImageUpload}
+        <section className="space-y-3">
+          {groups.map((group) => (
+            <InventoryGroupSection
+              key={group.key}
+              group={group}
+              collapsed={collapsed[group.key]}
+              sort={sortByGroup[group.key] || null}
               uploadingId={uploadingId}
+              canDelete={canDelete}
+              expandedMobile={expandedMobile}
+              onToggle={() => setCollapsed((current) => ({ ...current, [group.key]: !current[group.key] }))}
+              onToggleMobile={(key) => setExpandedMobile((current) => ({ ...current, [key]: !current[key] }))}
+              onSort={(key) => toggleSort(group.key, key)}
+              onDelete={handleDelete}
+              onImageUpload={handleImageUpload}
             />
           ))}
         </section>
       )}
-
-      <footer className="flex items-center gap-2 border-t border-zinc-200 pt-4 text-xs text-zinc-500">
-        <span className="grid h-5 w-5 place-items-center rounded-full bg-brand-50 text-brand-700">i</span>
-        Stock data is updated from the live PostgreSQL inventory API. Last refreshed from this browser session.
-      </footer>
     </div>
   );
 }
 
-function getFallbackGradient(key: string) {
-  const gradients = [
-    "linear-gradient(135deg, #4f46e5, #06b6d4)", // indigo to cyan
-    "linear-gradient(135deg, #f59e0b, #e11d48)", // amber to rose
-    "linear-gradient(135deg, #10b981, #3b82f6)", // emerald to blue
-    "linear-gradient(135deg, #8b5cf6, #ec4899)", // violet to pink
-    "linear-gradient(135deg, #64748b, #475569)"  // slate
-  ];
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = key.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return gradients[Math.abs(hash) % gradients.length];
+function Kpi({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "amber" | "red" }) {
+  const background = tone === "red" ? "bg-red-50" : tone === "amber" ? "bg-amber-50" : "bg-zinc-50";
+  return (
+    <div className={`rounded-lg px-3 py-3 ${background}`}>
+      <p className="text-[11px] font-semibold text-zinc-500">{label}</p>
+      <p className="mt-1 text-xl font-bold text-zinc-950">{value}</p>
+    </div>
+  );
 }
 
-function CategoryCard({
-  category,
-  isCollapsed,
-  onToggle,
-  onDelete,
-  canDelete,
-  onImageUpload,
-  uploadingId
-}: {
-  category: InventoryCategory;
-  isCollapsed: boolean;
-  onToggle: () => void;
-  onDelete: (row: InventoryDisplayRow) => void;
-  canDelete: boolean;
-  onImageUpload: (productId: number, file: File) => Promise<void>;
+function InventoryGroupSection(props: {
+  group: InventoryGroup;
+  collapsed: boolean;
+  sort: SortState;
   uploadingId: number | null;
+  canDelete: boolean;
+  expandedMobile: Record<string, boolean>;
+  onToggle: () => void;
+  onToggleMobile: (key: string) => void;
+  onSort: (key: SortKey) => void;
+  onDelete: (row: InventoryDisplayRow) => void;
+  onImageUpload: (productId: number, file: File) => Promise<void>;
 }) {
+  const { group } = props;
   return (
-    <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
-      <header className="flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <h2 className="truncate text-base font-semibold text-zinc-950 sm:text-lg">{category.title}</h2>
-          <span className="shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
-            {category.rows.length} {category.rows.length === 1 ? "Variant" : "Variants"}
-          </span>
-        </div>
-        <button className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-zinc-200 text-brand-700 hover:bg-brand-50" type="button" onClick={onToggle}>
-          <ChevronDown className={`h-4 w-4 transition ${isCollapsed ? "-rotate-90" : ""}`} />
-        </button>
-      </header>
- 
-      {isCollapsed ? null : category.rows.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-500">
-          No {category.title.toLowerCase()} rows found.
-        </div>
+    <section id={group.key === "critical_low" ? "critical-low-stock" : undefined} className="scroll-mt-24 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+      <button className="flex w-full items-center justify-between px-4 py-3 text-left" type="button" onClick={props.onToggle}>
+        <span className={`flex items-center gap-2 text-sm font-semibold ${group.key === "critical_low" ? "text-red-700" : "text-zinc-950"}`}>
+          {group.key === "critical_low" ? "!" : null} {group.title}
+          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700">{group.rows.length}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 text-zinc-500 transition ${props.collapsed ? "-rotate-90" : ""}`} />
+      </button>
+      {props.collapsed ? null : group.rows.length === 0 ? (
+        <div className="border-t border-zinc-100 bg-zinc-50 px-4 py-4 text-sm text-zinc-500">No items in this group.</div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-          {category.rows.map((row) => {
-            const isFinalProduct = row.source.stock_type === "Final Product" || row.source.product_id != null;
-            const productId = row.source.product_id;
-            const fileInputId = `image-upload-${productId}`;
-
-            return (
-              <div
+        <>
+          <div className="hidden overflow-x-auto border-t border-zinc-100 md:block">
+            <InventoryTable {...props} />
+          </div>
+          <div className="divide-y divide-zinc-100 border-t border-zinc-100 md:hidden">
+          {group.rows.map((row) => (
+              <MobileInventoryRow
                 key={row.key}
-                className="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-0 shadow-sm transition-all duration-300 hover:shadow-md hover:border-zinc-300 flex flex-col"
-              >
-                {/* Image layout window box profile element */}
-                <div className="relative h-44 w-full overflow-hidden bg-zinc-100 border-b border-zinc-100 flex-shrink-0">
-                  {row.image_url ? (
-                    <img
-                      src={row.image_url.startsWith("http") ? row.image_url : `${API_BASE_URL}${row.image_url}`}
-                      alt={row.variant}
-                      className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                        const sibling = (e.target as HTMLElement).nextElementSibling;
-                        if (sibling) (sibling as HTMLElement).style.display = 'flex';
-                      }}
-                    />
-                  ) : null}
-                  
-                  {/* Fallback placeholder layout configurations */}
-                  <div
-                    className="absolute inset-0 flex flex-col items-center justify-center p-4 text-white text-center gap-2 select-none"
-                    style={{
-                      display: row.image_url ? 'none' : 'flex',
-                      background: getFallbackGradient(row.key)
-                    }}
-                  >
-                    <span className="rounded-full bg-white/20 p-2.5 backdrop-blur-md">
-                      <Package className="h-6 w-6 text-white" />
-                    </span>
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wider opacity-90">{row.source.stock_type || "Stock"}</p>
-                      <p className="text-[10px] opacity-75 mt-0.5">{row.size}</p>
-                    </div>
-                  </div>
-
-                  {/* Status badge floating on the image */}
-                  <div className="absolute top-3 right-3 z-10">
-                    <StatusBadge status={row.status} />
-                  </div>
-
-                  {/* Hover overlays for actions */}
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-2.5 z-20">
-                    {isFinalProduct && productId ? (
-                      <>
-                        <button
-                          type="button"
-                          disabled={uploadingId === productId}
-                          onClick={() => document.getElementById(fileInputId)?.click()}
-                          className="grid h-10 w-10 place-items-center rounded-xl bg-white text-zinc-800 shadow-md hover:bg-zinc-50 hover:scale-105 active:scale-95 transition-all"
-                          title="Upload stock image"
-                        >
-                          {uploadingId === productId ? (
-                            <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
-                          ) : (
-                            <Camera className="h-5 w-5 text-brand-600" />
-                          )}
-                        </button>
-                        <input
-                          id={fileInputId}
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              void onImageUpload(productId, file);
-                            }
-                          }}
-                        />
-                      </>
-                    ) : null}
-                    
-                    <ActionButtons row={row} onDelete={onDelete} canDelete={canDelete} />
-                  </div>
-                </div>
-
-                {/* Content Area */}
-                <div className="p-4 flex flex-col flex-grow justify-between gap-3">
-                  <div className="space-y-1 text-left">
-                    <h3 className="font-bold text-zinc-900 group-hover:text-brand-700 transition-colors text-sm line-clamp-1">
-                      {row.variant}
-                    </h3>
-                    
-                    {row.source.variant_name ? (
-                      <span className="inline-block rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-600">
-                        Code: {row.source.variant_name}
-                      </span>
-                    ) : null}
-                    
-                    <p className="text-xs text-zinc-500 line-clamp-1">
-                      Size: {row.size} · Location: {row.location}
-                    </p>
-                  </div>
-
-                  {/* Metric info grid */}
-                  <div className="grid grid-cols-2 gap-3 border-t border-zinc-100 pt-3 text-left">
-                    <div>
-                      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">Available Stock</p>
-                      <p className="mt-0.5 text-xs font-bold text-zinc-800">{row.quantityLabel}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">Unit / Capacity</p>
-                      <p className="mt-0.5 text-xs font-semibold text-zinc-700">{row.perBox}</p>
-                    </div>
-                  </div>
-
-                  {inventoryDetails(row).length > 0 ? (
-                    <div className="grid grid-cols-2 gap-2 border-t border-zinc-100 pt-3 text-left">
-                      {inventoryDetails(row).map((detail) => (
-                        <div key={`${row.key}-${detail.label}`} className="rounded-lg bg-zinc-50 px-2.5 py-2">
-                          <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">{detail.label}</p>
-                          <p className="mt-0.5 truncate text-xs font-semibold text-zinc-800">{detail.value}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                row={row}
+                expanded={Boolean(props.expandedMobile[row.key])}
+                uploadingId={props.uploadingId}
+                canDelete={props.canDelete}
+                onToggle={() => props.onToggleMobile(row.key)}
+                onDelete={props.onDelete}
+                onImageUpload={props.onImageUpload}
+              />
+            ))}
+          </div>
+        </>
       )}
     </section>
   );
 }
 
-function buildInventoryCategories(rows: LiveStockRow[], activeFilter: InventoryFilter): InventoryCategory[] {
-  const base: InventoryCategory[] = [
-    { key: "finished", title: "Finished Paper Cups", tone: "brand", rows: [] },
-    { key: "bottom", title: "Cup Bottom", tone: "blue", rows: [] },
-    { key: "blank", title: "Cup Blank", tone: "amber", rows: [] },
-    { key: "boxes", title: "Corrugated Boxes", tone: "green", rows: [] },
-    { key: "raw", title: "Raw Materials", tone: "zinc", rows: [] },
-    { key: "packing", title: "Packing Materials", tone: "purple", rows: [] },
-    { key: "other", title: "Other Consumables", tone: "zinc", rows: [] }
-  ];
-
-  const categoryMap = new Map(base.map((category) => [category.key, category]));
-  rows.forEach((row) => {
-    const displayRow = toDisplayRow(row);
-    categoryMap.get(categoryKeyFor(row))?.rows.push(displayRow);
-  });
-
-  return base
-    .map((category) => ({ ...category, rows: filterRows(category.key, category.rows, activeFilter) }))
-    .filter((category) => activeFilter === "all" || category.rows.length > 0 || ["finished", "bottom", "blank", "boxes"].includes(category.key));
-}
-
-function filterRows(categoryKey: string, rows: InventoryDisplayRow[], activeFilter: InventoryFilter) {
-  if (activeFilter === "all") return rows;
-  if (activeFilter === "low") return rows.filter((row) => row.status !== "In Stock");
-  if (activeFilter === "finished") return categoryKey === "finished" ? rows : [];
-  if (activeFilter === "packing") return ["boxes", "packing"].includes(categoryKey) ? rows : [];
-  if (activeFilter === "raw") return ["blank", "bottom", "raw"].includes(categoryKey) ? rows : [];
-  if (activeFilter === "wip") return ["blank", "bottom"].includes(categoryKey) ? rows : [];
-  return rows;
-}
-
-function toDisplayRow(row: LiveStockRow): InventoryDisplayRow {
-  const type = normalizedType(row);
-  const quantity = Number(row.quantity || row.current_quantity || 0);
-  const piecesPerPacket = Number(row.pieces_per_packet || 0);
-  const packetsPerBox = Number(row.packets_per_box_limit || row.packets_per_box || 0);
-  const piecesPerBox = type === "Final Product" ? piecesPerPacket * packetsPerBox : 0;
-  return {
-    key: `${row.stock_type}-${row.id}`,
-    variant: variantName(row, type),
-    size: sizeLabel(row, type),
-    quantity,
-    quantityLabel: `${formatNumber(quantity)} ${unitLabel(row.unit)}`,
-    unitType: unitLabel(row.unit),
-    perBox: piecesPerBox > 0 ? `${formatNumber(piecesPerBox)} pcs` : perBundleLabel(row, type),
-    totalPieces: piecesPerBox > 0 ? `${formatNumber(quantity * piecesPerBox)} pcs` : totalPiecesFallback(row, type),
-    location: locationFor(type),
-    status: statusFor(quantity, type),
-    source: row,
-    image_url: row.image_url,
-    variant_name: row.variant_name
-  };
-}
-
-function inventoryDetails(row: InventoryDisplayRow) {
-  const source = row.source;
-  const type = normalizedType(source);
-  const details: Array<{ label: string; value: string }> = [];
-  const push = (label: string, value: unknown, suffix = "") => {
-    if (value === null || value === undefined || value === "") return;
-    const normalized = typeof value === "number" ? formatNumber(value) : String(value);
-    details.push({ label, value: `${normalized}${suffix}` });
-  };
-
-  if (type === "Final Product") {
-    push("Product Size", source.product_size_ml, "ml");
-    push("Variety", source.variety);
-    push("Packaging", source.packaging_size_name || source.packaging_size);
-    push("Pcs / Packet", source.pieces_per_packet);
-    push("Packets / Box", source.packets_per_box_limit || source.packets_per_box);
-    push("Boxes", source.current_quantity ?? source.quantity);
-  } else if (type === "Blank") {
-    push("Material", source.item_name);
-    push("Size", source.size_ml || row.size);
-    push("Kg / Sack", source.kg_per_sack);
-    push("Total Weight", source.quantity, " kg");
-  } else if (type === "Bottom") {
-    push("Bottom Size", source.size_mm, "mm");
-    push("Total Rolls", source.total_rolls);
-    push("Total Weight", source.total_weight_kg ?? source.quantity, " kg");
-  } else if (type === "Carton Box") {
-    push("Box Type", source.box_type || source.packaging_size_name || source.packaging_size);
-    push("Quantity", source.quantity, " pcs");
-    push("Price / Box", source.price_per_box ?? source.price_per_unit, " Rs");
-  } else if (type === "Polybag") {
-    push("Plastic Type", source.packaging_size);
-    push("Cup Size", source.cup_size_ml, "ml");
-    push("Total Boras", source.total_boras);
-    push("Weight / Bora", source.weight_per_bora_kg, " kg");
-    push("Price / Kg", source.price_per_kg ?? source.price_per_unit, " Rs");
-  }
-
-  return details.slice(0, 8);
-}
-
-function categoryKeyFor(row: LiveStockRow) {
-  const type = normalizedType(row);
-  if (type === "Final Product") return "finished";
-  if (type === "Bottom") return "bottom";
-  if (type === "Blank") return "blank";
-  if (type === "Carton Box") return "boxes";
-  if (type === "Polybag") return "packing";
-  if (type === "Inventory") return "raw";
-  return "other";
-}
-
-function normalizedType(row: LiveStockRow): string {
-  const raw = `${row.stock_type || ""} ${row.category || ""} ${row.item_name || ""}`.toLowerCase();
-  if (raw.includes("final")) return "Final Product";
-  if (raw.includes("bottom")) return "Bottom";
-  if (raw.includes("blank")) return "Blank";
-  if (raw.includes("carton") || raw.includes("box")) return "Carton Box";
-  if (raw.includes("poly") || raw.includes("plastic") || raw.includes("packing")) return "Polybag";
-  if (raw.includes("inventory") || raw.includes("raw")) return "Inventory";
-  return "Other";
-}
-
-function variantName(row: LiveStockRow, type: string) {
-  if (type === "Final Product") return `${row.variety || "Plain White"} Cup`;
-  if (type === "Bottom") return row.item_name || "Bottom";
-  if (type === "Blank") return row.item_name || "Blank";
-  if (type === "Carton Box") return row.packaging_size_name || row.packaging_size || "Box";
-  return row.item_name || "Inventory Item";
-}
-
-function sizeLabel(row: LiveStockRow, type: string) {
-  if (type === "Final Product") return row.product_size_ml ? `${row.product_size_ml}ml` : "-";
-  if (type === "Bottom") return row.size_mm ? `${row.size_mm}mm` : "All Sizes";
-  if (type === "Blank") {
-    const match = String(row.item_name || "").match(/(\d+)\s*ml/i);
-    return match ? `${match[1]}ml` : "All Sizes";
-  }
-  return row.packaging_size_name || row.packaging_size || "Standard";
-}
-
-function perBundleLabel(row: LiveStockRow, type: string) {
-  if (type === "Bottom" && row.total_rolls) return `${formatNumber(row.total_rolls)} rolls`;
-  if (type === "Blank") return "kg stock";
-  if (type === "Carton Box") return "1 pc";
-  return "-";
-}
-
-function totalPiecesFallback(row: LiveStockRow, type: string) {
-  if (type === "Bottom" && row.total_rolls) return `${formatNumber(row.total_rolls)} rolls`;
-  if (type === "Carton Box") return `${formatNumber(Number(row.quantity || 0))} pcs`;
-  return "-";
-}
-
-function statusFor(quantity: number, type: string): StockStatus {
-  if (quantity <= 0) return "Out of Stock";
-  const lowThreshold = type === "Final Product" || type === "Carton Box" ? 10 : 25;
-  return quantity <= lowThreshold ? "Low Stock" : "In Stock";
-}
-
-function locationFor(type: string) {
-  if (type === "Carton Box" || type === "Polybag") return "Store Room";
-  if (type === "Inventory" || type === "Other") return "Raw Store";
-  return "Main Warehouse";
-}
-
-function ActionButtons({ row, onDelete, canDelete }: { row: InventoryDisplayRow; onDelete: (row: InventoryDisplayRow) => void; canDelete: boolean }) {
+function InventoryTable(props: Parameters<typeof InventoryGroupSection>[0]) {
+  const { group } = props;
   return (
-    <div className="flex items-center gap-1.5">
-      <Link className="grid h-8 w-8 place-items-center rounded-lg text-brand-700 hover:bg-brand-50" title="Edit item" to="/onboarding">
-        <Edit3 className="h-4 w-4" />
-      </Link>
-      {canDelete ? (
-        <button
-          className="grid h-8 w-8 place-items-center rounded-lg text-red-600 hover:bg-red-50"
-          title="Delete item"
-          type="button"
-          onClick={() => onDelete(row)}
-        >
+    <table className="min-w-full text-xs">
+      <thead className="bg-zinc-50 text-[11px] uppercase tracking-wider text-zinc-500">
+        <tr>
+          <SortableTh label="Item" sortKey="item" sort={props.sort} onSort={props.onSort} />
+          <Th>Category</Th>
+          <SortableTh label="Size" sortKey="size" sort={props.sort} onSort={props.onSort} />
+          <SortableTh label="Stock" sortKey="stock" sort={props.sort} onSort={props.onSort} />
+          <Th>Suggested Reorder</Th>
+          <Th>Details</Th>
+          <SortableTh label="Status" sortKey="status" sort={props.sort} onSort={props.onSort} />
+          <Th><span className="sr-only">Actions</span></Th>
+        </tr>
+      </thead>
+      <tbody>
+        {group.rows.map((row) => (
+          <tr key={row.key} className="border-t border-zinc-100">
+            <td className={`border-l-[3px] px-3 py-2 font-semibold text-zinc-950 ${statusBar(row.status)}`}>{row.item}</td>
+            <td className="whitespace-nowrap px-3 py-2 text-zinc-600">{groupLabel(row.source)}</td>
+            <td className="whitespace-nowrap px-3 py-2 text-zinc-700">{row.size}</td>
+            <td className="whitespace-nowrap px-3 py-2 font-semibold text-zinc-950">{formatNumber(row.quantity)} {row.unit}</td>
+            <td className={`whitespace-nowrap px-3 py-2 font-bold ${reorderTone(row.status)}`} title="Estimated from the current low-stock threshold.">
+              {row.status === "In Stock" ? "-" : formatNumber(computeReorder(row.quantity, row.source.stock_type))}
+            </td>
+            <td className="whitespace-nowrap px-3 py-2 text-zinc-600">{detailSummary(row)}</td>
+            <td className="whitespace-nowrap px-3 py-2"><StatusBadge status={row.status} /></td>
+            <td className="px-3 py-2"><RowActions {...props} row={row} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function MobileInventoryRow(props: {
+  row: InventoryDisplayRow;
+  expanded: boolean;
+  uploadingId: number | null;
+  canDelete: boolean;
+  onToggle: () => void;
+  onDelete: (row: InventoryDisplayRow) => void;
+  onImageUpload: (productId: number, file: File) => Promise<void>;
+}) {
+  return (
+    <div className={`border-l-[3px] ${statusBar(props.row.status)}`}>
+      <button className="w-full px-3 py-3 text-left" type="button" onClick={props.onToggle}>
+        <span className="flex items-start justify-between gap-2">
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-zinc-950">{props.row.item}</span>
+            <span className="mt-1 block text-xs text-zinc-500">
+              {formatNumber(props.row.quantity)} {props.row.unit}
+              {props.row.status === "In Stock" ? "" : ` · suggested reorder ${computeReorder(props.row.quantity, props.row.source.stock_type)}`}
+            </span>
+          </span>
+          <StatusBadge status={props.row.status} />
+        </span>
+      </button>
+      {props.expanded ? (
+        <div className="bg-zinc-50 px-3 pb-3 pt-2">
+          <dl className="grid grid-cols-2 gap-2 text-xs">
+            <Detail label="Category" value={groupLabel(props.row.source)} />
+            <Detail label="Size" value={props.row.size} />
+            <Detail label="Details" value={detailSummary(props.row)} />
+            <Detail label="Unit" value={props.row.unit} />
+          </dl>
+          <div className="mt-3 flex gap-2">
+            <Link className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700" to="/onboarding">
+              <Edit3 className="h-4 w-4" /> Manage
+            </Link>
+            {bucketFor(props.row.source) === "finished_goods" && props.row.source.product_id ? (
+              <ImageUploadButton row={props.row} uploadingId={props.uploadingId} onImageUpload={props.onImageUpload} />
+            ) : null}
+            {props.canDelete ? (
+              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700" type="button" onClick={() => props.onDelete(props.row)}>
+                <Trash2 className="h-4 w-4" /> Delete
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RowActions(props: Parameters<typeof InventoryGroupSection>[0] & { row: InventoryDisplayRow }) {
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Link className="grid h-8 w-8 place-items-center rounded-md text-zinc-600 hover:bg-zinc-100" title="Manage item" to="/onboarding"><Edit3 className="h-4 w-4" /></Link>
+      {bucketFor(props.row.source) === "finished_goods" && props.row.source.product_id ? (
+        <ImageUploadButton row={props.row} uploadingId={props.uploadingId} onImageUpload={props.onImageUpload} iconOnly />
+      ) : null}
+      {props.canDelete ? (
+        <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" title="Delete item" type="button" onClick={() => props.onDelete(props.row)}>
           <Trash2 className="h-4 w-4" />
         </button>
       ) : null}
@@ -586,30 +440,254 @@ function ActionButtons({ row, onDelete, canDelete }: { row: InventoryDisplayRow;
   );
 }
 
+function ImageUploadButton(props: {
+  row: InventoryDisplayRow;
+  uploadingId: number | null;
+  onImageUpload: (productId: number, file: File) => Promise<void>;
+  iconOnly?: boolean;
+}) {
+  const productId = Number(props.row.source.product_id);
+  const inputId = `inventory-image-${props.row.key.replace(/[^a-zA-Z0-9-]/g, "-")}`;
+  return (
+    <>
+      <button
+        className={props.iconOnly ? "grid h-8 w-8 place-items-center rounded-md text-brand-700 hover:bg-brand-50" : "inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-brand-700"}
+        disabled={props.uploadingId === productId}
+        title="Upload image"
+        type="button"
+        onClick={() => document.getElementById(inputId)?.click()}
+      >
+        {props.uploadingId === productId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+        {props.iconOnly ? null : "Image"}
+      </button>
+      <input
+        id={inputId}
+        className="hidden"
+        accept="image/*"
+        type="file"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void props.onImageUpload(productId, file);
+          event.target.value = "";
+        }}
+      />
+    </>
+  );
+}
+
+function buildGroups(
+  rows: InventoryDisplayRow[],
+  filter: InventoryFilter,
+  search: string,
+  sorts: Partial<Record<GroupKey, SortState>>
+): InventoryGroup[] {
+  const searched = rows.filter((row) => matchesSearch(row.source, search));
+  const filtered = searched.filter((row) => matchesFilter(row, filter));
+  const sourceGroups: InventoryGroup[] = [
+    { key: "cup_blanks", title: "Raw Materials / Cup Blanks", rows: [] },
+    { key: "bottom_reels", title: "Raw Materials / Bottom Reels", rows: [] },
+    { key: "finished_goods", title: "Finished Goods", rows: [] },
+    { key: "polybags_packing", title: "Packaging", rows: [] },
+    { key: "boxes", title: "Boxes", rows: [] },
+    { key: "raw_other", title: "Other Inventory", rows: [] },
+    { key: "needs_mapping_review", title: "Needs Mapping Review", rows: [] }
+  ];
+  const groupMap = new Map(sourceGroups.map((group) => [group.key, group]));
+  filtered.forEach((row) => groupMap.get(bucketFor(row.source))?.rows.push(row));
+
+  const urgentRows = filtered
+    .filter((row) => row.status !== "In Stock")
+    .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.quantity - b.quantity);
+  const groups: InventoryGroup[] = [
+    ...sourceGroups,
+    { key: "critical_low", title: "Critical & Low Stock", rows: urgentRows }
+  ];
+  return groups
+    .map((group) => ({ ...group, rows: sortRows(group.rows, sorts[group.key] || null) }))
+    .filter((group) => group.key === "critical_low" || group.key === "needs_mapping_review" || group.rows.length > 0);
+}
+
+function toDisplayRow(source: LiveStockRow): InventoryDisplayRow {
+  const bucket = bucketFor(source);
+  const quantity = Number(source.quantity || source.current_quantity || 0);
+  return {
+    key: `${source.stock_type}-${source.id}`,
+    item: variantName(source, bucket),
+    size: sizeLabel(source, bucket),
+    quantity,
+    unit: unitLabel(source.unit),
+    status: statusFor(quantity, bucket),
+    source
+  };
+}
+
+function matchesSearch(row: LiveStockRow, query: string) {
+  if (!query) return true;
+  return [
+    row.item_name,
+    row.variety,
+    row.product_size_ml,
+    row.size_ml,
+    row.size_mm,
+    row.variant_name,
+    row.packaging_size_name,
+    row.packaging_size
+  ].some((value) => String(value ?? "").toLowerCase().includes(query));
+}
+
+function matchesFilter(row: InventoryDisplayRow, filter: InventoryFilter) {
+  if (filter === "all") return true;
+  if (filter === "low") return row.status === "Low Stock";
+  if (filter === "critical") return row.status === "Out of Stock";
+  if (filter === "raw") return ["cup_blanks", "bottom_reels", "raw_other"].includes(bucketFor(row.source));
+  if (filter === "finished") return bucketFor(row.source) === "finished_goods";
+  return bucketFor(row.source) === "polybags_packing";
+}
+
+function riskCategories(rows: InventoryDisplayRow[]) {
+  const groups: Array<{ label: string; buckets: InventoryBucket[] }> = [
+    { label: "Raw", buckets: ["cup_blanks", "bottom_reels", "raw_other"] },
+    { label: "Finished", buckets: ["finished_goods"] },
+    { label: "Packaging", buckets: ["polybags_packing"] },
+    { label: "Boxes", buckets: ["boxes"] },
+    { label: "Other", buckets: ["needs_mapping_review"] },
+    { label: "All", buckets: ["cup_blanks", "bottom_reels", "raw_other", "finished_goods", "polybags_packing", "boxes", "needs_mapping_review"] }
+  ];
+  return groups.map(({ label, buckets }) => {
+    const categoryRows = rows.filter((row) => buckets.includes(bucketFor(row.source)));
+    return {
+      label,
+      total: categoryRows.length,
+      atRisk: categoryRows.filter((row) => row.status !== "In Stock").length
+    };
+  });
+}
+
+function sortRows(rows: InventoryDisplayRow[], sort: SortState) {
+  if (!sort) return rows;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    if (sort.key === "stock") return (a.quantity - b.quantity) * direction;
+    if (sort.key === "status") return (statusRank(a.status) - statusRank(b.status)) * direction;
+    const left = sort.key === "size" ? a.size : a.item;
+    const right = sort.key === "size" ? b.size : b.item;
+    return left.localeCompare(right, undefined, { numeric: true }) * direction;
+  });
+}
+
+function SortableTh(props: { label: string; sortKey: SortKey; sort: SortState; onSort: (key: SortKey) => void }) {
+  const active = props.sort?.key === props.sortKey;
+  return (
+    <th className="whitespace-nowrap px-3 py-2 text-left font-semibold">
+      <button className="inline-flex items-center gap-1 hover:text-zinc-900" type="button" onClick={() => props.onSort(props.sortKey)}>
+        {props.label} {active ? (props.sort?.direction === "asc" ? "▲" : "▼") : null}
+      </button>
+    </th>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return <th className="whitespace-nowrap px-3 py-2 text-left font-semibold">{children}</th>;
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return <div><dt className="text-zinc-500">{label}</dt><dd className="mt-0.5 font-semibold text-zinc-900">{value}</dd></div>;
+}
+
 function StatusBadge({ status }: { status: StockStatus }) {
   const classes = {
-    "In Stock": "bg-emerald-100 text-emerald-700",
+    "In Stock": "bg-zinc-100 text-zinc-700",
     "Low Stock": "bg-amber-100 text-amber-800",
     "Out of Stock": "bg-red-100 text-red-700"
   };
-  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${classes[status]}`}>{status}</span>;
+  return <span className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${classes[status]}`}>{status}</span>;
 }
 
-function Th({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <th className={`px-3 py-3 text-left font-semibold ${className}`}>{children}</th>;
+function bucketFor(row: LiveStockRow): InventoryBucket {
+  const allowed: InventoryBucket[] = [
+    "cup_blanks",
+    "bottom_reels",
+    "boxes",
+    "polybags_packing",
+    "finished_goods",
+    "raw_other",
+    "needs_mapping_review"
+  ];
+  return row.bucket && allowed.includes(row.bucket) ? row.bucket : "needs_mapping_review";
 }
 
-function Td({ children, strong = false }: { children: ReactNode; strong?: boolean }) {
-  return <td className={`truncate px-3 py-3 ${strong ? "font-semibold text-zinc-950" : "text-zinc-700"}`}>{children}</td>;
+function groupLabel(row: LiveStockRow) {
+  const labels: Record<InventoryBucket, string> = {
+    finished_goods: "Finished",
+    cup_blanks: "Blank",
+    bottom_reels: "Bottom",
+    boxes: "Box",
+    polybags_packing: "Packing",
+    raw_other: "Other",
+    needs_mapping_review: "Review"
+  };
+  return labels[bucketFor(row)];
 }
 
-function MobileMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs text-zinc-500">{label}</p>
-      <p className="mt-1 font-semibold text-zinc-900">{value}</p>
-    </div>
-  );
+function variantName(row: LiveStockRow, bucket: InventoryBucket) {
+  if (bucket === "finished_goods") return `${row.variety || "Plain White"} Cup`;
+  if (bucket === "bottom_reels") return row.item_name || "Cup Bottom";
+  if (bucket === "cup_blanks") return row.item_name || "Cup Blank";
+  if (bucket === "boxes") return row.box_type || row.packaging_size_name || row.packaging_size || "Box";
+  return row.item_name || row.packaging_size || "Inventory Item";
+}
+
+function sizeLabel(row: LiveStockRow, bucket: InventoryBucket) {
+  if (bucket === "finished_goods") return row.product_size_ml ? `${row.product_size_ml}ml` : "-";
+  if (bucket === "bottom_reels") return row.size_mm ? `${row.size_mm}mm` : "-";
+  if (bucket === "cup_blanks") return row.size_ml ? `${row.size_ml}ml` : "-";
+  return row.cup_size_ml ? `${row.cup_size_ml}ml` : row.packaging_size_name || row.packaging_size || "-";
+}
+
+function detailSummary(row: InventoryDisplayRow) {
+  const source = row.source;
+  const bucket = bucketFor(source);
+  if (bucket === "finished_goods") return `${source.pieces_per_packet || "-"} pcs/pkt · ${source.packets_per_box_limit || source.packets_per_box || "-"} pkt/box`;
+  if (bucket === "cup_blanks") return source.kg_per_sack ? `${source.kg_per_sack} kg/sack` : "-";
+  if (bucket === "bottom_reels") return `${source.total_rolls || 0} rolls · ${source.total_weight_kg || row.quantity} kg`;
+  if (bucket === "boxes") return source.price_per_box || source.price_per_unit ? `Rs ${source.price_per_box || source.price_per_unit}/box` : "-";
+  if (bucket === "polybags_packing") return `${source.total_boras || 0} boras · ${source.weight_per_bora_kg || 0} kg/bora`;
+  return source.variant_name || "-";
+}
+
+function statusFor(quantity: number, bucket: InventoryBucket): StockStatus {
+  if (quantity <= 0) return "Out of Stock";
+  const threshold = bucket === "finished_goods" || bucket === "boxes" ? 10 : 25;
+  return quantity <= threshold ? "Low Stock" : "In Stock";
+}
+
+function statusRank(status: StockStatus) {
+  return status === "Out of Stock" ? 0 : status === "Low Stock" ? 1 : 2;
+}
+
+function computeReorder(quantity: number, stockType: LiveStockRow["stock_type"]) {
+  const threshold = ["Final Product", "Carton Box", "Box"].includes(stockType) ? 10 : 25;
+  const target = Math.max(threshold * 2, Math.ceil(quantity * 1.5));
+  return Math.max(target - quantity, 0);
+}
+
+function statusBar(status: StockStatus) {
+  if (status === "Out of Stock") return "border-l-red-600";
+  if (status === "Low Stock") return "border-l-amber-500";
+  return "border-l-transparent";
+}
+
+function reorderTone(status: StockStatus) {
+  if (status === "Out of Stock") return "text-red-700";
+  if (status === "Low Stock") return "text-amber-700";
+  return "text-zinc-400";
+}
+
+function relativeTime(date: Date) {
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} min ago`;
 }
 
 function formatNumber(value: number) {
@@ -617,8 +695,8 @@ function formatNumber(value: number) {
 }
 
 function unitLabel(unit: string) {
-  if (unit === "boxes") return "Boxes";
-  if (unit === "pcs") return "Pcs";
-  if (unit === "kg") return "Kg";
-  return unit || "Units";
+  if (unit === "boxes") return "boxes";
+  if (unit === "pcs") return "pcs";
+  if (unit === "kg") return "kg";
+  return unit || "units";
 }

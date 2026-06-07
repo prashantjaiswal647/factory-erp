@@ -1,0 +1,194 @@
+from decimal import Decimal
+from types import SimpleNamespace
+
+from fastapi import Response
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from db import Base
+from models import BlankStock, Factory, Inventory
+from routers.inventory import list_live_stock
+from routers.onboarding import apply_bulk_rows, validate_bulk_frame
+
+
+def make_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+    return engine, SessionLocal()
+
+
+def test_cup_blank_quantity_source_telemetry_and_factory_isolation():
+    engine, db = make_session()
+    try:
+        factory_a = Factory(name="Blank Quantity Factory A")
+        factory_b = Factory(name="Blank Quantity Factory B")
+        db.add_all([factory_a, factory_b])
+        db.flush()
+
+        db.add_all(
+            [
+                BlankStock(
+                    factory_id=factory_a.id,
+                    blank_size_ml=100,
+                    linked_bottom_size_mm=100,
+                    variety="White",
+                    weight_per_bora_kg=Decimal("50"),
+                    total_boras=Decimal("0"),
+                    total_qty_kg=Decimal("0"),
+                ),
+                BlankStock(
+                    factory_id=factory_a.id,
+                    blank_size_ml=200,
+                    linked_bottom_size_mm=200,
+                    variety="White",
+                    weight_per_bora_kg=Decimal("50"),
+                    total_boras=Decimal("20"),
+                    total_qty_kg=Decimal("1000"),
+                ),
+                BlankStock(
+                    factory_id=factory_b.id,
+                    blank_size_ml=300,
+                    linked_bottom_size_mm=300,
+                    variety="White",
+                    weight_per_bora_kg=Decimal("50"),
+                    total_boras=Decimal("10"),
+                    total_qty_kg=Decimal("500"),
+                ),
+                Inventory(
+                    factory_id=factory_a.id,
+                    item_name="Legacy Unknown Inventory",
+                    category=None,
+                    unit="pieces",
+                    quantity=Decimal("3"),
+                ),
+            ]
+        )
+        db.commit()
+
+        response = Response()
+        rows = list_live_stock(
+            current_user=SimpleNamespace(factory_id=factory_a.id),
+            db=db,
+            response=response,
+        )
+        blank_rows = [row for row in rows if row["bucket"] == "cup_blanks"]
+        by_size = {row["size_ml"]: row for row in blank_rows}
+
+        assert len(blank_rows) == 2
+        assert by_size[100]["quantity"] == 0
+        assert by_size[100]["quantity_source"] == "not_recorded"
+        assert by_size[200]["quantity"] == 1000
+        assert by_size[200]["quantity_source"] == "excel_upload"
+        assert all(row["factory_id"] == factory_a.id for row in rows)
+
+        unknown = next(row for row in rows if row["stock_type"] == "Inventory")
+        assert unknown["item_name"] == "Legacy Unknown Inventory"
+        assert unknown["bucket"] == "needs_mapping_review"
+        assert unknown["quantity_source"] is None
+
+        warning_header = response.headers["X-Inventory-Warnings"]
+        assert warning_header
+        assert all(part.endswith("=0") for part in warning_header.split(","))
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_blank_stock_bulk_row_without_total_boras_is_accepted():
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [
+            {
+                "row_type": "ACTUAL",
+                "material_name": "Plain White",
+                "size_ml": 250,
+                "kg_per_sack": 20,
+            }
+        ]
+    )
+
+    valid_rows, failed_rows = validate_bulk_frame(frame, "blank_stock")
+
+    assert failed_rows == []
+    assert len(valid_rows) == 1
+    assert "total_boras" not in valid_rows[0]
+
+    engine, db = make_session()
+    try:
+        factory = Factory(name="Blank Parser Factory")
+        db.add(factory)
+        db.flush()
+
+        saved = apply_bulk_rows(
+            db,
+            SimpleNamespace(factory_id=factory.id),
+            "blank_stock",
+            valid_rows,
+        )
+        db.commit()
+
+        stock = db.query(BlankStock).filter(BlankStock.factory_id == factory.id).one()
+        assert saved == 1
+        assert stock.weight_per_bora_kg == Decimal("20")
+        assert stock.total_boras == Decimal("0")
+        assert stock.total_qty_kg == Decimal("0")
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_blank_stock_bulk_quantity_is_calculated_and_visible_in_inventory():
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [
+            {
+                "row_type": "ACTUAL",
+                "material_name": "Plain White",
+                "size_ml": 250,
+                "kg_per_sack": 20,
+                "total_boras_sacks": 12,
+            }
+        ]
+    )
+    valid_rows, failed_rows = validate_bulk_frame(frame, "blank_stock")
+
+    assert failed_rows == []
+    assert valid_rows[0]["total_boras_sacks"] == Decimal("12")
+
+    engine, db = make_session()
+    try:
+        factory_a = Factory(name="New Blank Format Factory A")
+        factory_b = Factory(name="New Blank Format Factory B")
+        db.add_all([factory_a, factory_b])
+        db.flush()
+
+        apply_bulk_rows(db, SimpleNamespace(factory_id=factory_a.id), "blank_stock", valid_rows)
+        apply_bulk_rows(db, SimpleNamespace(factory_id=factory_b.id), "blank_stock", valid_rows)
+        db.commit()
+
+        stock_a = db.query(BlankStock).filter(BlankStock.factory_id == factory_a.id).one()
+        stock_b = db.query(BlankStock).filter(BlankStock.factory_id == factory_b.id).one()
+        assert stock_a.total_boras == Decimal("12")
+        assert stock_a.total_qty_kg == Decimal("240")
+        assert stock_b.id != stock_a.id
+
+        rows = list_live_stock(current_user=SimpleNamespace(factory_id=factory_a.id), db=db)
+        blank_rows = [row for row in rows if row["bucket"] == "cup_blanks"]
+        assert len(blank_rows) == 1
+        assert blank_rows[0]["factory_id"] == factory_a.id
+        assert blank_rows[0]["quantity"] == 240
+        assert blank_rows[0]["quantity_source"] == "excel_upload"
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { api } from "../lib/api";
+import { api, getBillingStatus } from "../lib/api";
 
 export type UserRole = "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
 export type SubscriptionStatus = "trial_active" | "trial_expired" | "active" | "expired" | "cancelled" | "payment_pending" | "trial";
@@ -27,6 +27,10 @@ type AuthUser = {
   machines_used?: number;
   machine_limit?: number;
   machine_plan?: string;
+  telegram_chat_id?: string | null;
+  telegram_id?: string | null;
+  telegram_bot_username?: string | null;
+  preferred_language?: "en" | "hi" | "hinglish";
 };
 
 type AuthContextValue = {
@@ -50,6 +54,7 @@ type TokenResponse = {
     username: string;
     phone_number?: string | null;
     full_name?: string | null;
+    preferred_language?: "en" | "hi" | "hinglish";
     role: string;
     subscription_status?: SubscriptionStatus | null;
     trial_end_date?: string | null;
@@ -142,7 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       full_name: data.user.full_name,
       role,
       factory_id: data.user.factory_id,
-      factory_name: data.user.factory_name
+      factory_name: data.user.factory_name,
+      preferred_language: data.user.preferred_language,
     };
 
     localStorage.setItem(tokenKey, data.access_token);
@@ -161,6 +167,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return nextUser;
     });
   }, []);
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem(tokenKey);
+    if (!savedToken || !user?.factory_id) return;
+
+    let active = true;
+    async function refreshSubscription() {
+      try {
+        const response = await getBillingStatus(Date.now());
+        if (!active) return;
+        const status = response.data;
+        updateUser({
+          subscription_status: status.subscription_status,
+          trial_end_date: status.trial_end_date,
+          trial_days_remaining: status.trial_days_remaining,
+          active_plan: status.effective_plan || status.active_plan || status.plan_name,
+          billing_cycle: status.billing_cycle,
+          subscription_start_date: status.subscription_start_date,
+          subscription_end_date: status.effective_expires_at || status.subscription_end_date,
+          payment_status: status.payment_status
+        });
+      } catch {
+        // Route guards handle unavailable or expired subscription responses.
+      }
+    }
+    void refreshSubscription();
+    return () => {
+      active = false;
+    };
+  }, [updateUser, user?.factory_id, user?.id]);
 
   function logout() {
     localStorage.removeItem("subscription");

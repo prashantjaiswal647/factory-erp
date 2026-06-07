@@ -167,8 +167,9 @@ class SubscriptionPayment(Base):
     payment_status = Column(String(50), nullable=False, default="paid", server_default="paid", index=True)
     provider = Column(String(50), nullable=True)
     provider_payment_id = Column(String(255), nullable=True, index=True)
-    cf_order_id = Column(String(64), nullable=True)
-    cf_payment_id = Column(String(64), nullable=True)
+    cf_order_id = Column(String(64), nullable=True, index=True)
+    cf_payment_id = Column(String(64), nullable=True, index=True)
+    cf_payment_session_id = Column(String(255), nullable=True)
     cf_invoice_id = Column(String(64), nullable=True)
     cf_event_id = Column(
         String(128),
@@ -265,6 +266,15 @@ class User(Base):
     is_verified = Column(Boolean, nullable=False, default=False, server_default="false")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
     telegram_id = Column(String(100), nullable=True, unique=True, index=True)
+    telegram_chat_id = Column(String(255), nullable=True)
+    telegram_binding_code = Column(String(50), nullable=True, index=True)
+    telegram_binding_expiry = Column(DateTime(timezone=True), nullable=True)
+    preferred_language = Column(
+        String(20),
+        nullable=False,
+        default="hinglish",
+        server_default="hinglish",
+    )
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     factory = relationship("Factory", back_populates="users", foreign_keys=[factory_id])
@@ -272,6 +282,10 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("role IN ('Owner', 'Sub-Owner', 'Supervisor', 'Operator')", name="ck_users_role"),
+        CheckConstraint(
+            "preferred_language IN ('en', 'hi', 'hinglish')",
+            name="ck_users_preferred_language",
+        ),
     )
 
 
@@ -1376,6 +1390,7 @@ class ActivityLog(TenantMixin, Base):
     entity_id = Column(Integer, nullable=True, index=True)
     short_statement = Column(Text, nullable=True)
     committed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
 
 
 class BillPayment(TenantMixin, Base):
@@ -1565,3 +1580,370 @@ def sync_machine_columns(mapper, connection, target):
         target.cup_size_ml = target.mould_size_ml
         target.current_mould_size = str(target.mould_size_ml)
         target.default_mould_size = str(target.mould_size_ml)
+
+
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+import uuid
+
+class TelegramCallbackDedupe(Base):
+    __tablename__ = "telegram_callback_dedupe"
+
+    callback_id = Column(String(64), primary_key=True)
+    factory_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class TelegramActionSession(Base):
+    __tablename__ = "telegram_action_session"
+
+    session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    factory_id = Column(Integer, nullable=False, index=True)
+    chat_id = Column(String(64), nullable=False, index=True)
+    action = Column(String(32), nullable=False)
+    step = Column(String(32), nullable=False)
+    payload_json = Column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        server_default="{}",
+    )
+    callback_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    status = Column(String(16), nullable=False, server_default="pending")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'cancelled', 'committed', 'expired')",
+            name="ck_telegram_action_session_status"
+        ),
+        Index("idx_tas_factory_chat", "factory_id", "chat_id", "status"),
+        Index("idx_tas_expires", "expires_at", postgresql_where=text("status = 'pending'")),
+    )
+
+
+class MorningBriefingLog(TenantMixin, Base):
+    __tablename__ = "morning_briefing_log"
+
+    id = Column(Integer, primary_key=True)
+    briefing_date = Column(Date, nullable=False, index=True)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    message_text = Column(Text, nullable=False)
+    status = Column(String(30), nullable=False, default="generated", server_default="generated")
+    channel = Column(String(30), nullable=False, default="telegram", server_default="telegram")
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "briefing_date",
+            "channel",
+            name="uq_morning_briefing_factory_date_channel",
+        ),
+        CheckConstraint(
+            "status IN ('generated', 'sent', 'failed', 'skipped')",
+            name="ck_morning_briefing_status",
+        ),
+        CheckConstraint("retry_count >= 0", name="ck_morning_briefing_retry_count"),
+    )
+
+
+class CostPerCupDaily(TenantMixin, Base):
+    __tablename__ = "cost_per_cup_daily"
+
+    id = Column(Integer, primary_key=True)
+    production_date = Column(Date, nullable=False, index=True)
+    size_ml = Column(Integer, nullable=True, index=True)
+    cups_produced_total = Column(Integer, nullable=False, default=0, server_default="0")
+    total_material_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    total_labour_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    total_electricity_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    total_overhead_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    total_production_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    computed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    source_quality = Column(String(20), nullable=False, default="partial", server_default="partial", index=True)
+    missing_fields_json = Column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+
+    __table_args__ = (
+        CheckConstraint("cups_produced_total >= 0", name="ck_cost_daily_cups_non_negative"),
+        CheckConstraint("total_material_cost_paise >= 0", name="ck_cost_daily_material_non_negative"),
+        CheckConstraint("total_labour_cost_paise >= 0", name="ck_cost_daily_labour_non_negative"),
+        CheckConstraint("total_electricity_cost_paise >= 0", name="ck_cost_daily_electricity_non_negative"),
+        CheckConstraint("total_overhead_cost_paise >= 0", name="ck_cost_daily_overhead_non_negative"),
+        CheckConstraint("total_production_cost_paise >= 0", name="ck_cost_daily_production_non_negative"),
+        CheckConstraint("source_quality IN ('complete', 'partial')", name="ck_cost_daily_source_quality"),
+        Index(
+            "uq_cost_daily_factory_date_size",
+            "factory_id",
+            "production_date",
+            func.coalesce(size_ml, -1),
+            unique=True,
+        ),
+    )
+
+
+class DailyVarianceSnapshot(TenantMixin, Base):
+    __tablename__ = "daily_variance_snapshot"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    today_cost = Column(Numeric(14, 6), nullable=True)
+    seven_day_cost = Column(Numeric(14, 6), nullable=True)
+    thirty_day_cost = Column(Numeric(14, 6), nullable=True)
+    variance_percent = Column(Numeric(10, 4), nullable=True)
+    variance_level = Column(String(20), nullable=False, default="NORMAL", server_default="NORMAL", index=True)
+    primary_driver = Column(String(50), nullable=True)
+    material_change_percent = Column(Numeric(10, 4), nullable=True)
+    labour_change_percent = Column(Numeric(10, 4), nullable=True)
+    electricity_change_percent = Column(Numeric(10, 4), nullable=True)
+    overhead_change_percent = Column(Numeric(10, 4), nullable=True)
+    computed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_variance_factory_date"),
+        CheckConstraint(
+            "variance_level IN ('NORMAL', 'WARNING', 'CRITICAL')",
+            name="ck_daily_variance_level",
+        ),
+    )
+
+
+class CostVarianceAlertLog(TenantMixin, Base):
+    __tablename__ = "cost_variance_alert_log"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    channel = Column(String(30), nullable=False, default="telegram", server_default="telegram")
+    status = Column(String(20), nullable=False, default="generated", server_default="generated", index=True)
+    message_text = Column(Text, nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "snapshot_date",
+            "channel",
+            name="uq_cost_variance_alert_factory_date_channel",
+        ),
+        CheckConstraint(
+            "status IN ('generated', 'sent', 'failed', 'skipped')",
+            name="ck_cost_variance_alert_status",
+        ),
+        CheckConstraint("retry_count >= 0", name="ck_cost_variance_alert_retry_count"),
+    )
+
+
+class DailyFactoryHealthSnapshot(TenantMixin, Base):
+    __tablename__ = "daily_factory_health_snapshot"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    production_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    attendance_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    collections_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    inventory_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    cost_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    overall_score = Column(Numeric(5, 2), nullable=False, default=0, server_default="0", index=True)
+    health_status = Column(String(20), nullable=False, index=True)
+    largest_strength = Column(String(30), nullable=False)
+    largest_risk = Column(String(30), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_factory_health_factory_date"),
+        CheckConstraint(
+            "health_status IN ('CRITICAL', 'WARNING', 'GOOD', 'EXCELLENT')",
+            name="ck_factory_health_status",
+        ),
+        CheckConstraint(
+            "overall_score >= 0 AND overall_score <= 100",
+            name="ck_factory_health_overall_range",
+        ),
+    )
+
+
+class DailyWastageSnapshot(TenantMixin, Base):
+    __tablename__ = "daily_wastage_snapshot"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    cups_produced = Column(Integer, nullable=False, default=0, server_default="0")
+    blank_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    bottom_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    actual_wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    expected_wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    wastage_percentage = Column(Numeric(10, 4), nullable=False, default=0, server_default="0")
+    estimated_loss_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    wastage_status = Column(String(20), nullable=False, default="NORMAL", server_default="NORMAL", index=True)
+    primary_wastage_source = Column(String(20), nullable=False, default="Mixed", server_default="Mixed")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_wastage_factory_date"),
+        CheckConstraint("cups_produced >= 0", name="ck_daily_wastage_cups_non_negative"),
+        CheckConstraint("actual_wastage_kg >= 0", name="ck_daily_wastage_actual_non_negative"),
+        CheckConstraint("expected_wastage_kg >= 0", name="ck_daily_wastage_expected_non_negative"),
+        CheckConstraint("estimated_loss_paise >= 0", name="ck_daily_wastage_loss_non_negative"),
+        CheckConstraint(
+            "wastage_status IN ('NORMAL', 'WARNING', 'CRITICAL')",
+            name="ck_daily_wastage_status",
+        ),
+        CheckConstraint(
+            "primary_wastage_source IN ('Blank', 'Bottom', 'Mixed')",
+            name="ck_daily_wastage_source",
+        ),
+    )
+
+
+class WastageAlertLog(TenantMixin, Base):
+    __tablename__ = "wastage_alert_log"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)
+    message_sent = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_wastage_alert_factory_date"),
+        CheckConstraint(
+            "status IN ('NORMAL', 'WARNING', 'CRITICAL')",
+            name="ck_wastage_alert_status",
+        ),
+    )
+
+
+class DailyProfitSnapshot(TenantMixin, Base):
+    __tablename__ = "daily_profit_snapshot"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    revenue_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    material_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    labour_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    electricity_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    overhead_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    total_cost_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    gross_profit_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    profit_margin_percent = Column(Numeric(10, 4), nullable=True)
+    profit_status = Column(String(30), nullable=False, index=True)
+    largest_profit_risk = Column(String(30), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_profit_factory_date"),
+        CheckConstraint("revenue_paise >= 0", name="ck_daily_profit_revenue_non_negative"),
+        CheckConstraint("total_cost_paise >= 0", name="ck_daily_profit_cost_non_negative"),
+        CheckConstraint(
+            "profit_status IN ('EXCELLENT', 'GOOD', 'WARNING', 'CRITICAL', 'DATA_NOT_AVAILABLE')",
+            name="ck_daily_profit_status",
+        ),
+    )
+
+
+class ProfitAlertLog(TenantMixin, Base):
+    __tablename__ = "profit_alert_log"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)
+    message_sent = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "snapshot_date", name="uq_profit_alert_factory_date"),
+        CheckConstraint("status IN ('WARNING', 'CRITICAL')", name="ck_profit_alert_status"),
+    )
+
+
+class WeeklyDigestLog(TenantMixin, Base):
+    __tablename__ = "weekly_digest_log"
+
+    id = Column(Integer, primary_key=True)
+    week_start = Column(Date, nullable=False, index=True)
+    week_end = Column(Date, nullable=False, index=True)
+    message_sent = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "week_start", name="uq_weekly_digest_factory_week"),
+        CheckConstraint("week_start <= week_end", name="ck_weekly_digest_dates"),
+    )
+
+
+class PerSizeDaily(TenantMixin, Base):
+    __tablename__ = "per_size_daily"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    size_ml = Column(Integer, nullable=False, index=True)
+    revenue_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    cost_paise = Column(Integer, nullable=True)
+    gross_profit_paise = Column(Integer, nullable=True)
+    margin_percent = Column(Numeric(10, 4), nullable=True)
+    units_sold = Column(Integer, nullable=False, default=0, server_default="0")
+    units_produced = Column(Integer, nullable=False, default=0, server_default="0")
+    status = Column(String(30), nullable=False, index=True)
+    cost_source = Column(String(30), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "snapshot_date",
+            "size_ml",
+            name="uq_per_size_daily_factory_date_size",
+        ),
+        CheckConstraint("size_ml > 0", name="ck_per_size_daily_size_positive"),
+        CheckConstraint("revenue_paise >= 0", name="ck_per_size_daily_revenue_non_negative"),
+        CheckConstraint("cost_paise IS NULL OR cost_paise >= 0", name="ck_per_size_daily_cost_non_negative"),
+        CheckConstraint("units_sold >= 0", name="ck_per_size_daily_units_sold_non_negative"),
+        CheckConstraint("units_produced >= 0", name="ck_per_size_daily_units_produced_non_negative"),
+        CheckConstraint(
+            "status IN ('EXCELLENT', 'GOOD', 'WARNING', 'CRITICAL', 'DATA_NOT_AVAILABLE')",
+            name="ck_per_size_daily_status",
+        ),
+    )
+
+
+class ExplanationCache(TenantMixin, Base):
+    __tablename__ = "explanation_cache"
+
+    id = Column(Integer, primary_key=True)
+    snapshot_hash = Column(String(64), nullable=False, index=True)
+    briefing_date = Column(Date, nullable=False, index=True)
+    language = Column(String(20), nullable=False, default="hinglish", server_default="hinglish")
+    explanation_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=False)
+    model_name = Column(String(100), nullable=False)
+    token_usage = Column(Integer, nullable=False, default=0, server_default="0")
+    hit_count = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "snapshot_hash",
+            "language",
+            name="uq_explanation_cache_factory_hash_language",
+        ),
+        Index("ix_explanation_cache_factory_hash", "factory_id", "snapshot_hash"),
+        Index("ix_explanation_cache_factory_date", "factory_id", "briefing_date"),
+        CheckConstraint(
+            "token_usage >= 0",
+            name="ck_explanation_cache_token_usage_non_negative",
+        ),
+        CheckConstraint("hit_count >= 0", name="ck_explanation_cache_hit_count_non_negative"),
+    )

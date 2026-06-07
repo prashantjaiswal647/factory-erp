@@ -9,6 +9,7 @@ from db import Base
 from models import Factory
 from auth import resolve_factory_subscription, ensure_factory_trial
 from routers.billing import activate_factory_subscription
+from routers.super_admin import apply_factory_subscription_update
 from routers.staff import StaffCreateRequest, create_staff
 
 engine = create_engine(
@@ -181,6 +182,52 @@ def test_adminer_manual_premium_active_plan_wins_over_trial():
         assert res["effective_status"] == "active"
         assert res["effective_expires_at"] == future_sub_end
         assert res["days_left"] == 365
+    finally:
+        db.close()
+
+
+def test_super_admin_partial_update_synchronizes_canonical_subscription_fields():
+    db = init_db()
+    try:
+        now = datetime.now(timezone.utc)
+        old_expiry = now + timedelta(hours=1)
+        new_expiry = now + timedelta(days=30)
+        factory = Factory(
+            id=51,
+            name="Admin Sync Factory",
+            active_plan="basic",
+            plan_name="basic",
+            subscription_status="active",
+            payment_status="paid",
+            subscription_end_date=old_expiry,
+            subscription_end=old_expiry,
+            plan_expires_at=old_expiry,
+        )
+        db.add(factory)
+        db.commit()
+
+        apply_factory_subscription_update(
+            factory,
+            {
+                "plan_name": "premium",
+                "billing_cycle": "monthly",
+                "subscription_end_date": new_expiry,
+            },
+        )
+        db.commit()
+        db.refresh(factory)
+
+        assert factory.active_plan == "premium"
+        assert factory.plan_name == "premium"
+        assert factory.subscription_end_date.replace(tzinfo=timezone.utc) == new_expiry
+        assert factory.subscription_end.replace(tzinfo=timezone.utc) == new_expiry
+        assert factory.plan_expires_at.replace(tzinfo=timezone.utc) == new_expiry
+
+        resolved = resolve_factory_subscription(factory)
+        assert resolved["effective_plan"] == "premium"
+        assert resolved["effective_status"] == "active"
+        assert resolved["effective_expires_at"] == new_expiry
+        assert resolved["days_left"] == 30
     finally:
         db.close()
 
