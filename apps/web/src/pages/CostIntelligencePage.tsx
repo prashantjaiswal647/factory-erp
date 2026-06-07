@@ -44,9 +44,9 @@ export default function CostIntelligencePage() {
 
   const warnings = Array.from(
     new Set([
-      ...(variance?.today.missing_fields ?? []),
-      ...(variance?.seven_day.missing_fields ?? []),
-      ...(variance?.thirty_day.missing_fields ?? []),
+      ...(variance?.today?.missing_fields ?? []),
+      ...(variance?.seven_day?.missing_fields ?? []),
+      ...(variance?.thirty_day?.missing_fields ?? []),
     ]),
   );
 
