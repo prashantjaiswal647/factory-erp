@@ -533,3 +533,54 @@ def test_worker_bulk_upload_updates_existing_opening_attendance():
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
+
+
+def test_finished_goods_bulk_upload_creates_final_product_stock():
+    from models import FinishedGoodsStock, FinalProductStock, PackagingProfile
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        row_count = apply_bulk_rows(
+            db,
+            current_user,
+            "finished_goods",
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "product_size_ml": 250,
+                    "variety_design": "Spiderman Design",
+                    "packaging_size_name": "250ML Spiderman Carton",
+                    "pcs_per_packet": 100,
+                    "packets_per_box": 10,
+                    "initial_stock_boxes": 5,
+                }
+            ],
+        )
+        db.commit()
+
+        # Check FinishedGoodsStock
+        fg_stocks = db.query(FinishedGoodsStock).filter(FinishedGoodsStock.factory_id == 2).all()
+        assert len(fg_stocks) == 1
+        assert fg_stocks[0].boxes_available == 5
+        assert fg_stocks[0].cup_size_ml == 250
+
+        # Check FinalProductStock
+        final_stocks = db.query(FinalProductStock).filter(FinalProductStock.factory_id == 2).all()
+        assert len(final_stocks) == 1
+        assert final_stocks[0].total_boxes == 5
+        assert final_stocks[0].product_size_ml == 250
+        assert final_stocks[0].variety == "Spiderman Design"
+        assert final_stocks[0].packaging_size_name == "250ML Spiderman Carton"
+        assert final_stocks[0].pieces_per_packet == 100
+        assert final_stocks[0].packets_per_box_limit == 10
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+

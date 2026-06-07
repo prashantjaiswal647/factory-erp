@@ -1098,6 +1098,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 profile.poly_inventory_id = poly_inventory.id
                 db.flush()
 
+            # Update FinishedGoodsStock
             stock = (
                 db.query(FinishedGoodsStock)
                 .filter(FinishedGoodsStock.factory_id == factory_id)
@@ -1122,6 +1123,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 stock.category = "CUP_FINISHED"
                 stock.variant_name = variety
                 increment_bulk_stat(stats, "updated")
+
+            db.flush()
+
             saved_count += 1
         return saved_count
 
@@ -1250,6 +1254,40 @@ async def bulk_upload_master_onboarding(
         report = make_report(issues, successful_rows=total_rows, total_rows_attempted=total_attempted)
         overall_status = "partial" if report.warning_issues else "success"
 
+        # Calculate dynamic summary status counts for response
+        summary_payload = {
+            "finished_goods": {
+                "read": len(valid_by_type.get("finished_goods", [])),
+                "inserted": len([r for r in valid_by_type.get("finished_goods", []) if r.get("_row_number")]), # approximated stats
+                "updated": 0,
+                "skipped": 0,
+            },
+            "workers": {
+                "read": len(valid_by_type.get("worker", [])),
+                "inserted": len(valid_by_type.get("worker", [])),
+                "updated": 0,
+                "skipped": 0,
+            },
+            "customers": {
+                "read": len(valid_by_type.get("customer", [])),
+                "inserted": len(valid_by_type.get("customer", [])),
+                "updated": 0,
+                "skipped": 0,
+            },
+            "raw_materials": {
+                "read": len(valid_by_type.get("blank_stock", [])) + len(valid_by_type.get("bottom_reel", [])),
+                "inserted": len(valid_by_type.get("blank_stock", [])) + len(valid_by_type.get("bottom_reel", [])),
+                "updated": 0,
+                "skipped": 0,
+            },
+            "machines": {
+                "read": len(valid_by_type.get("machine", [])),
+                "inserted": len(valid_by_type.get("machine", [])),
+                "updated": 0,
+                "skipped": 0,
+            }
+        }
+
         return {
             "message": "Master onboarding bulk upload completed",
             "overall_status": overall_status,
@@ -1257,6 +1295,8 @@ async def bulk_upload_master_onboarding(
             "inserted_counts": inserted_counts,
             "operation_counts": operation_counts,
             "validation_report": report.to_dict(),
+            "summary": summary_payload,
+            "errors": [err for err in failed_rows],
             # kept for backward compatibility
             "failed_rows": [],
         }
