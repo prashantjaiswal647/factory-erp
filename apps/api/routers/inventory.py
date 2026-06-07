@@ -1,9 +1,12 @@
 from decimal import Decimal
+from datetime import date as date_cls, datetime
+from io import BytesIO
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, UploadFile, File
-from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, UploadFile, File, status
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import String, func, or_
+from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 from PIL import Image
 from io import BytesIO
@@ -17,16 +20,18 @@ from models import (
     BlankStock,
     BottomStock,
     BoxStock,
-    FinalProductStock,
-    Inventory,
-    User,
     DailyProduction,
     DailySale,
+    Factory,
+    FinalProductStock,
     FinishedGoodsStock,
+    Inventory,
+    Machine,
     PackagingProfile,
+    PackagingMetrics,
     PlasticStock,
     PolybagStock,
-    PackagingMetrics,
+    User,
 )
 
 
@@ -603,6 +608,392 @@ def list_live_stock(
         return []
 
 
+class FinishedGoodVariantCreate(BaseModel):
+    """Schema for creating a new finished-good variant from the production form.
+    Distinct from FinalStockCreate (which is used by the inventory page for opening
+    stock + image upload) — this one is dedicated to variant creation and enforces
+    duplicate prevention at the API layer.
+    """
+    product_size_ml: int = Field(..., gt=0)
+    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
+    packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    pieces_per_packet: int = Field(..., gt=0)
+    packets_per_box_limit: int = Field(..., gt=0)
+    opening_stock_boxes: int = Field(default=0, ge=0)
+    opening_stock_loose_packets: int = Field(default=0, ge=0)
+
+
+class FinishedGoodVariantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    factory_id: int
+    product_size_ml: int
+    variety: str
+    packaging_size_name: str
+    pieces_per_packet: int
+    packets_per_box_limit: int
+    current_quantity: int
+    total_boxes: int
+    loose_packets: int
+    created_existing: bool = False
+
+
+def _build_final_stock_row_response(
+    db: Session, factory_id: int, stock: FinalProductStock
+) -> FinalStockRow:
+    """Helper: serialise a FinalProductStock row into FinalStockRow, including
+    the FinishedGoodsStock metadata join (image_url, category, variant_name).
+    """
+    fg_stock = (
+        db.query(FinishedGoodsStock)
+        .join(PackagingProfile, FinishedGoodsStock.packaging_profile_id == PackagingProfile.id)
+        .filter(
+            FinishedGoodsStock.factory_id == str(factory_id),
+            PackagingProfile.cup_size_ml == stock.product_size_ml,
+            func.lower(PackagingProfile.profile_name) == stock.packaging_size_name.strip().lower()
+        )
+        .first()
+    )
+    return FinalStockRow(
+        id=stock.id,
+        product_size_ml=stock.product_size_ml,
+        variety=stock.variety or "Standard/White",
+        packaging_size=stock.packaging_size_name,
+        packaging_size_name=stock.packaging_size_name,
+        pieces_per_packet=stock.pieces_per_packet,
+        packets_per_box=stock.packets_per_box_limit,
+        current_quantity=stock.current_quantity or 0,
+        total_boxes=stock.total_boxes or 0,
+        loose_packets=stock.loose_packets or 0,
+        packets_per_box_limit=stock.packets_per_box_limit,
+        image_url=fg_stock.image_url if fg_stock else None,
+        category=fg_stock.category if fg_stock else "CUP_FINISHED",
+        variant_name=fg_stock.variant_name if fg_stock else f"{stock.product_size_ml}ml_{stock.variety}",
+    )
+
+
+@router.post("/finished-goods/variants", response_model=FinishedGoodVariantResponse)
+def create_finished_good_variant(
+    payload: FinishedGoodVariantCreate,
+    current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Create a new finished-good variant (canonical model: FinalProductStock).
+    Duplicate prevention: a variant is uniquely identified by
+    (factory_id, product_size_ml, variety, packaging_size_name,
+     pieces_per_packet, packets_per_box_limit). If a duplicate exists,
+    return 409 with the existing product_id so the frontend can offer
+    "select existing" instead of creating a duplicate.
+    """
+    try:
+        factory_id = str(current_user.factory_id)
+        variety = (payload.variety or "Standard/White").strip() or "Standard/White"
+        packaging_size_name = payload.packaging_size_name.strip()
+
+        existing = (
+            db.query(FinalProductStock)
+            .filter(FinalProductStock.factory_id == factory_id)
+            .filter(FinalProductStock.product_size_ml == payload.product_size_ml)
+            .filter(sql_func.lower(FinalProductStock.variety) == variety.lower())
+            .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
+            .filter(FinalProductStock.pieces_per_packet == payload.pieces_per_packet)
+            .filter(FinalProductStock.packets_per_box_limit == payload.packets_per_box_limit)
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "A finished good variant with these specifications already exists.",
+                    "existing_product_id": existing.id,
+                    "existing": {
+                        "id": existing.id,
+                        "product_size_ml": existing.product_size_ml,
+                        "variety": existing.variety,
+                        "packaging_size_name": existing.packaging_size_name,
+                        "pieces_per_packet": existing.pieces_per_packet,
+                        "packets_per_box_limit": existing.packets_per_box_limit,
+                        "current_quantity": existing.current_quantity or 0,
+                    },
+                },
+            )
+
+        stock = FinalProductStock(
+            factory_id=factory_id,
+            product_size_ml=payload.product_size_ml,
+            variety=variety,
+            packaging_size_name=packaging_size_name,
+            pieces_per_packet=payload.pieces_per_packet,
+            packets_per_box_limit=payload.packets_per_box_limit,
+            total_boxes=payload.opening_stock_boxes,
+            loose_packets=payload.opening_stock_loose_packets,
+            current_quantity=payload.opening_stock_boxes,
+        )
+        db.add(stock)
+        db.flush()
+
+        from services.activity_logger import log_activity
+        log_activity(
+            db=db,
+            factory_id=current_user.factory_id,
+            user_id=current_user.id,
+            user_name=current_user.username,
+            user_role=current_user.role,
+            action_type="FINISHED_GOODS_VARIANT_CREATED",
+            action_summary=(
+                f"Finished good variant created from production: "
+                f"{stock.product_size_ml}ml {stock.variety} "
+                f"{stock.packaging_size_name} "
+                f"({stock.pieces_per_packet}pcs/pkt, "
+                f"{stock.packets_per_box_limit}pkts/box, "
+                f"opening={payload.opening_stock_boxes} boxes)"
+            ),
+            entity_type="finished_goods_stock",
+            entity_id=stock.id,
+            metadata=None,
+        )
+        db.commit()
+        db.refresh(stock)
+        return FinishedGoodVariantResponse(
+            id=stock.id,
+            factory_id=int(stock.factory_id),
+            product_size_ml=stock.product_size_ml,
+            variety=stock.variety or "Standard/White",
+            packaging_size_name=stock.packaging_size_name,
+            pieces_per_packet=stock.pieces_per_packet,
+            packets_per_box_limit=stock.packets_per_box_limit,
+            current_quantity=stock.current_quantity or 0,
+            total_boxes=stock.total_boxes or 0,
+            loose_packets=stock.loose_packets or 0,
+            created_existing=False,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.exception("create_finished_good_variant failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/finished-goods/export")
+def export_finished_goods_snapshot(
+    date: Optional[date_cls] = Query(None, description="Snapshot date (defaults to today, IST)"),
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Download a per-factory finished-goods snapshot.
+    Returns one row per (factory × FinalProductStock variant), with:
+        - opening stock (onboarding + earliest date TotalBoxes/LoosePackets)
+        - produced till date (sum DailyProduction.total_boxes_made +
+          loose_packets_made up to snapshot_date)
+        - sold till date (sum DailySale.boxes_sold + loose_packets_sold
+          up to snapshot_date)
+        - current boxes = max(0, opening + produced - sold) as full boxes
+        - loose packets = current remainder after full-box conversion
+        - total pieces = (current_boxes * packets_per_box_limit) + loose_packets
+        - last_updated timestamp
+    Factory-scoped (P0 gate). Excel preferred; CSV fallback.
+    """
+    try:
+        from services.timezone_utils import get_kolkata_now
+
+        snapshot_date = date or get_kolkata_now().date()
+        factory_id = str(current_user.factory_id)
+
+        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        factory_name = factory.name if factory else f"Factory {current_user.factory_id}"
+
+        stocks = (
+            db.query(FinalProductStock)
+            .filter(FinalProductStock.factory_id == factory_id)
+            .order_by(
+                FinalProductStock.product_size_ml.asc(),
+                FinalProductStock.variety.asc(),
+                FinalProductStock.packaging_size_name.asc(),
+            )
+            .all()
+        )
+
+        # Headers per the spec
+        headers = [
+            "Snapshot Date",
+            "Factory Name",
+            "Product Size (ml)",
+            "Variety / Design",
+            "Packaging Size Name",
+            "Pieces per Packet",
+            "Packets per Box",
+            "Opening Boxes",
+            "Opening Loose Packets",
+            "Produced (Boxes) Till Date",
+            "Produced (Loose Packets) Till Date",
+            "Sold (Boxes) Till Date",
+            "Sold (Loose Packets) Till Date",
+            "Current Boxes",
+            "Loose Packets",
+            "Total Pieces",
+            "Last Updated",
+        ]
+
+        rows_data: List[list] = []
+        for stock in stocks:
+            limit = stock.packets_per_box_limit or 1
+            # Opening: from the row itself (this is the onboarding data
+            # imported via Excel or saved via the inventory page).
+            opening_boxes = int(stock.total_boxes or 0)
+            opening_loose = int(stock.loose_packets or 0)
+
+            # Produced till date (exclude future production beyond snapshot_date)
+            prod_boxes = (
+                db.query(func.coalesce(func.sum(DailyProduction.total_boxes_made), 0))
+                .filter(DailyProduction.factory_id == factory_id)
+                .filter(DailyProduction.product_size_ml == stock.product_size_ml)
+                .filter(sql_func.lower(DailyProduction.variety) == (stock.variety or "").strip().lower())
+                .filter(sql_func.lower(DailyProduction.packaging_size_name) == stock.packaging_size_name.strip().lower())
+                .filter(DailyProduction.date <= snapshot_date)
+                .scalar()
+                or 0
+            )
+            prod_loose = (
+                db.query(func.coalesce(func.sum(DailyProduction.loose_packets_made), 0))
+                .filter(DailyProduction.factory_id == factory_id)
+                .filter(DailyProduction.product_size_ml == stock.product_size_ml)
+                .filter(sql_func.lower(DailyProduction.variety) == (stock.variety or "").strip().lower())
+                .filter(sql_func.lower(DailyProduction.packaging_size_name) == stock.packaging_size_name.strip().lower())
+                .filter(DailyProduction.date <= snapshot_date)
+                .scalar()
+                or 0
+            )
+
+            # Sold till date
+            sold_boxes = (
+                db.query(func.coalesce(func.sum(DailySale.boxes_sold), 0))
+                .filter(DailySale.factory_id == factory_id)
+                .filter(DailySale.product_size_ml == stock.product_size_ml)
+                .filter(sql_func.lower(DailySale.variety) == (stock.variety or "").strip().lower())
+                .filter(sql_func.lower(DailySale.packaging_size_name) == stock.packaging_size_name.strip().lower())
+                .filter(DailySale.date <= snapshot_date)
+                .scalar()
+                or 0
+            )
+            sold_loose = (
+                db.query(func.coalesce(func.sum(DailySale.loose_packets_sold), 0))
+                .filter(DailySale.factory_id == factory_id)
+                .filter(DailySale.product_size_ml == stock.product_size_ml)
+                .filter(sql_func.lower(DailySale.variety) == (stock.variety or "").strip().lower())
+                .filter(sql_func.lower(DailySale.packaging_size_name) == stock.packaging_size_name.strip().lower())
+                .filter(DailySale.date <= snapshot_date)
+                .scalar()
+                or 0
+            )
+
+            # Compute current = (opening + produced) - sold (in packets)
+            opening_packets = opening_boxes * limit + opening_loose
+            produced_packets = int(prod_boxes) * limit + int(prod_loose)
+            sold_packets = int(sold_boxes) * limit + int(sold_loose)
+            current_packets = opening_packets + produced_packets - sold_packets
+            if current_packets < 0:
+                current_packets = 0
+            current_boxes = current_packets // limit
+            current_loose = current_packets % limit
+            total_pieces = (current_boxes * stock.pieces_per_packet) + (
+                current_loose * stock.pieces_per_packet // limit if limit else 0
+            )
+            # safer formula: total_pieces = current_packets * pieces_per_packet
+            total_pieces = current_packets * (stock.pieces_per_packet or 1)
+
+            last_updated = (
+                stock.updated_at.isoformat()
+                if stock.updated_at is not None
+                else ""
+            )
+
+            rows_data.append([
+                snapshot_date.isoformat(),
+                factory_name,
+                stock.product_size_ml,
+                stock.variety or "Standard/White",
+                stock.packaging_size_name,
+                stock.pieces_per_packet,
+                limit,
+                opening_boxes,
+                opening_loose,
+                int(prod_boxes),
+                int(prod_loose),
+                int(sold_boxes),
+                int(sold_loose),
+                int(current_boxes),
+                int(current_loose),
+                int(total_pieces),
+                last_updated,
+            ])
+
+        if format == "csv":
+            import csv
+            output = BytesIO()
+            # open with utf-8 BOM for Excel-friendliness
+            text_buf = BytesIO()
+            text_wrapper = __import__("io").TextIOWrapper(text_buf, encoding="utf-8-sig", newline="")
+            writer = csv.writer(text_wrapper)
+            writer.writerow(headers)
+            for row in rows_data:
+                writer.writerow(row)
+            text_wrapper.flush()
+            text_buf.seek(0)
+            output.write(text_buf.getvalue())
+            output.seek(0)
+            return Response(
+                content=output.read(),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": (
+                        f"attachment; filename="
+                        f"finished_goods_snapshot_{factory_name}_"
+                        f"{snapshot_date.isoformat()}.csv"
+                    )
+                },
+            )
+
+        # Default: xlsx
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Finished Goods"
+        ws.append(headers)
+        for row in rows_data:
+            ws.append(row)
+        # Bold header
+        from openpyxl.styles import Font
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+        # Auto column widths
+        for col_idx, _ in enumerate(headers, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = 22
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return Response(
+            content=output.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename="
+                    f"finished_goods_snapshot_{factory_name}_"
+                    f"{snapshot_date.isoformat()}.xlsx"
+                )
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("export_finished_goods_snapshot failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/final-stock", response_model=FinalStockRow)
 def save_final_stock(
     payload: FinalStockCreate,
@@ -719,16 +1110,41 @@ def save_final_stock(
 
 @router.get("/final-stock", response_model=List[FinalStockRow])
 def list_final_stock(
+    search: Optional[str] = None,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
+    """List finished-good variants for the current factory.
+    Optional `?search=` substring-matches against:
+      - product_size_ml (digits)
+      - variety
+      - packaging_size_name
+      - pieces_per_packet
+      - packets_per_box_limit
+    Case-insensitive. Server-side factory scoped (P0 gate).
+    """
     try:
-        rows = (
-            db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == str(current_user.factory_id))
-            .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.variety.asc())
-            .all()
+        query = db.query(FinalProductStock).filter(
+            FinalProductStock.factory_id == str(current_user.factory_id)
         )
+        if search:
+            term = search.strip().lower()
+            if term:
+                like_term = f"%{term}%"
+                query = query.filter(
+                    or_(
+                        func.lower(FinalProductStock.variety).like(like_term),
+                        func.lower(FinalProductStock.packaging_size_name).like(like_term),
+                        func.cast(FinalProductStock.product_size_ml, String).like(like_term),
+                        func.cast(FinalProductStock.pieces_per_packet, String).like(like_term),
+                        func.cast(FinalProductStock.packets_per_box_limit, String).like(like_term),
+                    )
+                )
+        rows = query.order_by(
+            FinalProductStock.product_size_ml.asc(),
+            FinalProductStock.variety.asc(),
+            FinalProductStock.packaging_size_name.asc(),
+        ).all()
         processed_rows = []
         for row in rows:
             live_boxes, live_loose = calculate_live_sku_stock(

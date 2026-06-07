@@ -1,9 +1,40 @@
-import { AlertTriangle, Check, Factory, Loader2, Activity } from "lucide-react";
+import { AlertTriangle, Check, Factory, Loader2, Activity, Plus, X } from "lucide-react";
 import axios from "axios";
 import { useEffect, useState } from "react";
 
-import { createDailyProduction, getDashboardMachines, getDashboardWorkers, getFinalStockOptions } from "../lib/api";
-import type { DailyProductionCreate, DashboardMachine, DashboardWorker, FinalStockOption } from "../lib/api";
+import {
+  createDailyProduction,
+  createFinishedGoodVariant,
+  getDashboardMachines,
+  getDashboardWorkers,
+  getFinalStockOptions,
+} from "../lib/api";
+import type {
+  DailyProductionCreate,
+  DashboardMachine,
+  DashboardWorker,
+  FinalStockOption,
+  FinishedGoodVariantCreate,
+  FinishedGoodVariantResponse,
+} from "../lib/api";
+
+type NewVariantForm = {
+  product_size_ml: string;
+  variety: string;
+  packaging_size_name: string;
+  pieces_per_packet: string;
+  packets_per_box_limit: string;
+  opening_stock_boxes: string;
+};
+
+const emptyNewVariant: NewVariantForm = {
+  product_size_ml: "",
+  variety: "Plain White",
+  packaging_size_name: "",
+  pieces_per_packet: "100",
+  packets_per_box_limit: "10",
+  opening_stock_boxes: "0",
+};
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 const numberOrDefault = (value: unknown, fallback = 0) => {
@@ -43,6 +74,14 @@ export default function ProductionPage() {
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [syncLatency, setSyncLatency] = useState(124);
+  const [showNewVariantModal, setShowNewVariantModal] = useState(false);
+  const [newVariantForm, setNewVariantForm] = useState<NewVariantForm>(emptyNewVariant);
+  const [isSubmittingVariant, setIsSubmittingVariant] = useState(false);
+  const [variantError, setVariantError] = useState("");
+  const [variantDuplicate, setVariantDuplicate] = useState<{
+    existing_product_id: number;
+    existing: FinishedGoodVariantResponse;
+  } | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -165,6 +204,130 @@ export default function ProductionPage() {
     }
   }
 
+  async function handleCreateNewVariant() {
+    setVariantError("");
+    setVariantDuplicate(null);
+    // client-side validation
+    const size_ml = Number(newVariantForm.product_size_ml);
+    const pieces = Number(newVariantForm.pieces_per_packet);
+    const pkts_per_box = Number(newVariantForm.packets_per_box_limit);
+    const opening = Number(newVariantForm.opening_stock_boxes || 0);
+    if (!size_ml || size_ml <= 0) {
+      setVariantError("Product size (ml) is required and must be > 0.");
+      return;
+    }
+    if (!newVariantForm.packaging_size_name.trim()) {
+      setVariantError("Packaging size name is required.");
+      return;
+    }
+    if (!pieces || pieces <= 0) {
+      setVariantError("Pieces per packet is required and must be > 0.");
+      return;
+    }
+    if (!pkts_per_box || pkts_per_box <= 0) {
+      setVariantError("Packets per box is required and must be > 0.");
+      return;
+    }
+    setIsSubmittingVariant(true);
+    try {
+      const payload: FinishedGoodVariantCreate = {
+        product_size_ml: size_ml,
+        variety: newVariantForm.variety || "Plain White",
+        packaging_size_name: newVariantForm.packaging_size_name.trim(),
+        pieces_per_packet: pieces,
+        packets_per_box_limit: pkts_per_box,
+        opening_stock_boxes: opening,
+      };
+      const res = await createFinishedGoodVariant(payload);
+      setToast(`New variant created: ${res.data.product_size_ml}ml ${res.data.variety} ${res.data.packaging_size_name}`);
+      // refresh variant dropdown and auto-select the new one
+      await loadOptions();
+      setFinalStockOptions((current) => {
+        const exists = current.some((item) => item.id === res.data.id);
+        return exists ? current : [...current, {
+          id: res.data.id,
+          product_size_ml: res.data.product_size_ml,
+          variety: res.data.variety,
+          packaging_size: res.data.packaging_size_name,
+          packaging_size_name: res.data.packaging_size_name,
+          pieces_per_packet: res.data.pieces_per_packet,
+          packets_per_box: res.data.packets_per_box_limit,
+          current_quantity: res.data.current_quantity,
+          total_boxes: res.data.total_boxes,
+          loose_packets: res.data.loose_packets,
+          packets_per_box_limit: res.data.packets_per_box_limit,
+        }];
+      });
+      setForm((current) => ({
+        ...current,
+        product_id: res.data.id,
+        product_size_ml: res.data.product_size_ml,
+        variety: res.data.variety,
+        packaging_size: res.data.packaging_size_name,
+        packaging_size_name: res.data.packaging_size_name,
+        pieces_per_packet: res.data.pieces_per_packet,
+        packets_per_box_limit: res.data.packets_per_box_limit,
+      }));
+      setShowNewVariantModal(false);
+      setNewVariantForm(emptyNewVariant);
+      window.dispatchEvent(new CustomEvent("inventory:updated", { detail: res.data }));
+    } catch (caught) {
+      if (axios.isAxiosError(caught)) {
+        const detail = caught.response?.data?.detail;
+        if (caught.response?.status === 409 && detail && typeof detail === "object") {
+          // Duplicate — offer to select the existing one
+          setVariantDuplicate({
+            existing_product_id: detail.existing_product_id,
+            existing: {
+              id: detail.existing.id,
+              factory_id: detail.existing.factory_id || 0,
+              product_size_ml: detail.existing.product_size_ml,
+              variety: detail.existing.variety,
+              packaging_size_name: detail.existing.packaging_size_name,
+              pieces_per_packet: detail.existing.pieces_per_packet,
+              packets_per_box_limit: detail.existing.packets_per_box_limit,
+              current_quantity: detail.existing.current_quantity,
+              total_boxes: 0,
+              loose_packets: 0,
+              created_existing: true,
+            },
+          });
+          setVariantError(detail.message || "A variant with these specs already exists.");
+        } else {
+          const message = Array.isArray(detail)
+            ? detail.map((item) => `${item.loc?.join(".") || "field"}: ${item.msg}`).join("; ")
+            : typeof detail === "string"
+              ? detail
+              : caught.message;
+          setVariantError(`Could not create variant: ${message}`);
+        }
+      } else {
+        setVariantError(caught instanceof Error ? caught.message : "Could not create variant");
+      }
+    } finally {
+      setIsSubmittingVariant(false);
+    }
+  }
+
+  function applyExistingVariant() {
+    if (!variantDuplicate) return;
+    const existing = variantDuplicate.existing;
+    setForm((current) => ({
+      ...current,
+      product_id: existing.id,
+      product_size_ml: existing.product_size_ml,
+      variety: existing.variety,
+      packaging_size: existing.packaging_size_name,
+      packaging_size_name: existing.packaging_size_name,
+      pieces_per_packet: existing.pieces_per_packet,
+      packets_per_box_limit: existing.packets_per_box_limit,
+    }));
+    setShowNewVariantModal(false);
+    setVariantDuplicate(null);
+    setNewVariantForm(emptyNewVariant);
+    setToast(`Existing variant selected: ${existing.product_size_ml}ml ${existing.variety} ${existing.packaging_size_name}`);
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-5">
       {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
@@ -226,6 +389,29 @@ export default function ProductionPage() {
               });
             }}
           />
+          <div className="flex flex-col justify-end">
+            <span className="text-sm font-medium text-zinc-700">Need a new variant?</span>
+            <button
+              className="mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-100"
+              type="button"
+              onClick={() => {
+                setNewVariantForm({
+                  ...emptyNewVariant,
+                  product_size_ml: form.product_size_ml ? String(form.product_size_ml) : "",
+                  variety: form.variety || "Plain White",
+                  packaging_size_name: form.packaging_size_name || "",
+                  pieces_per_packet: form.pieces_per_packet ? String(form.pieces_per_packet) : "100",
+                  packets_per_box_limit: form.packets_per_box_limit ? String(form.packets_per_box_limit) : "10",
+                });
+                setVariantError("");
+                setVariantDuplicate(null);
+                setShowNewVariantModal(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              + Add New Packing / Finished Good Variant
+            </button>
+          </div>
           <VariationSelectField
             label="Packaging Size Variation"
             value={form.product_id || 0}
@@ -279,6 +465,140 @@ export default function ProductionPage() {
           {isSaving ? "Saving..." : "Save Production"}
         </button>
       </section>
+
+      {showNewVariantModal ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 px-4" role="dialog" aria-modal="true" aria-label="Add new finished good variant">
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-zinc-950">+ Add New Packing / Finished Good Variant</h3>
+              <button
+                aria-label="Close"
+                className="grid h-8 w-8 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100"
+                type="button"
+                onClick={() => {
+                  setShowNewVariantModal(false);
+                  setVariantError("");
+                  setVariantDuplicate(null);
+                }}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500">
+              New variant will be available immediately in the Product / Variation dropdown.
+            </p>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Product Size (ml)</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  inputMode="numeric"
+                  placeholder="e.g. 250"
+                  type="number"
+                  value={newVariantForm.product_size_ml}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, product_size_ml: event.target.value })}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Variety / Design</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  placeholder="e.g. Plain White"
+                  type="text"
+                  value={newVariantForm.variety}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, variety: event.target.value })}
+                />
+              </label>
+              <label className="block text-sm md:col-span-2">
+                <span className="font-medium text-zinc-700">Packaging Size Name</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  placeholder="e.g. 250ML - Plain White"
+                  type="text"
+                  value={newVariantForm.packaging_size_name}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, packaging_size_name: event.target.value })}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Pieces per Packet</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  inputMode="numeric"
+                  type="number"
+                  value={newVariantForm.pieces_per_packet}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, pieces_per_packet: event.target.value })}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Packets per Box</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  inputMode="numeric"
+                  type="number"
+                  value={newVariantForm.packets_per_box_limit}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, packets_per_box_limit: event.target.value })}
+                />
+              </label>
+              <label className="block text-sm md:col-span-2">
+                <span className="font-medium text-zinc-700">Opening Stock (boxes, default 0)</span>
+                <input
+                  className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  inputMode="numeric"
+                  type="number"
+                  value={newVariantForm.opening_stock_boxes}
+                  onChange={(event) => setNewVariantForm({ ...newVariantForm, opening_stock_boxes: event.target.value })}
+                />
+              </label>
+            </div>
+
+            {variantError ? (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {variantError}
+              </div>
+            ) : null}
+
+            {variantDuplicate ? (
+              <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                <p>
+                  Existing variant: <strong>{variantDuplicate.existing.product_size_ml}ml {variantDuplicate.existing.variety}</strong>{" "}
+                  {variantDuplicate.existing.packaging_size_name} (Stock: {variantDuplicate.existing.current_quantity})
+                </p>
+                <button
+                  className="mt-2 inline-flex h-8 items-center rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                  type="button"
+                  onClick={applyExistingVariant}
+                >
+                  Select Existing Variant Instead
+                </button>
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="inline-flex h-10 items-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+                type="button"
+                onClick={() => {
+                  setShowNewVariantModal(false);
+                  setVariantError("");
+                  setVariantDuplicate(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300"
+                disabled={isSubmittingVariant}
+                type="button"
+                onClick={handleCreateNewVariant}
+              >
+                {isSubmittingVariant ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {isSubmittingVariant ? "Saving..." : "Save New Variant"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

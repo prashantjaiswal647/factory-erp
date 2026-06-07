@@ -518,6 +518,44 @@ export type FinalProductOpeningStockCreate = {
   factory_id?: string;
 };
 
+export type FinishedGoodVariantCreate = {
+  product_size_ml: number;
+  variety?: string;
+  packaging_size_name: string;
+  pieces_per_packet: number;
+  packets_per_box_limit: number;
+  opening_stock_boxes?: number;
+  opening_stock_loose_packets?: number;
+};
+
+export type FinishedGoodVariantResponse = {
+  id: number;
+  factory_id: number;
+  product_size_ml: number;
+  variety: string;
+  packaging_size_name: string;
+  pieces_per_packet: number;
+  packets_per_box_limit: number;
+  current_quantity: number;
+  total_boxes: number;
+  loose_packets: number;
+  created_existing: boolean;
+};
+
+export type FinishedGoodVariantDuplicateError = {
+  message: string;
+  existing_product_id: number;
+  existing: {
+    id: number;
+    product_size_ml: number;
+    variety: string;
+    packaging_size_name: string;
+    pieces_per_packet: number;
+    packets_per_box_limit: number;
+    current_quantity: number;
+  };
+};
+
 export type LiveStockRow = {
   id: number | string;
   factory_id?: number;
@@ -1010,12 +1048,31 @@ export function getInventory() {
   return api.get<LiveStockRow[]>("/api/inventory/");
 }
 
-export function getFinalStockOptions() {
-  return api.get<FinalStockOption[]>("/api/inventory/final-stock");
+export function getFinalStockOptions(search?: string) {
+  return api.get<FinalStockOption[]>("/api/inventory/final-stock", {
+    params: search && search.trim() ? { search: search.trim() } : undefined,
+  });
 }
 
 export function saveFinalProductOpeningStock(payload: FinalProductOpeningStockCreate) {
   return api.post<FinalStockOption>("/api/onboarding/final-stock", payload);
+}
+
+export function createFinishedGoodVariant(payload: FinishedGoodVariantCreate) {
+  return api.post<FinishedGoodVariantResponse>(
+    "/api/inventory/finished-goods/variants",
+    payload
+  );
+}
+
+export function exportFinishedGoodsSnapshot(
+  date?: string,
+  format: "xlsx" | "csv" = "xlsx"
+) {
+  return api.get("/api/inventory/finished-goods/export", {
+    params: { date, format },
+    responseType: "blob",
+  });
 }
 
 export function getCustomerBalance(customerId: number) {
