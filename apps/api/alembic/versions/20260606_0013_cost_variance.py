@@ -35,10 +35,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_variance_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_daily_variance_snapshot_factory_id", "daily_variance_snapshot", ["factory_id"])
-    op.create_index("ix_daily_variance_snapshot_snapshot_date", "daily_variance_snapshot", ["snapshot_date"])
-    op.create_index("ix_daily_variance_snapshot_variance_level", "daily_variance_snapshot", ["variance_level"])
+    op.create_index("ix_daily_variance_snapshot_factory_id", "daily_variance_snapshot", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_daily_variance_snapshot_snapshot_date", "daily_variance_snapshot", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_daily_variance_snapshot_variance_level", "daily_variance_snapshot", ["variance_level"], if_not_exists=True)
 
     op.create_table(
         "cost_variance_alert_log",
@@ -57,10 +58,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", "channel", name="uq_cost_variance_alert_factory_date_channel"),
+        if_not_exists=True,
     )
-    op.create_index("ix_cost_variance_alert_log_factory_id", "cost_variance_alert_log", ["factory_id"])
-    op.create_index("ix_cost_variance_alert_log_snapshot_date", "cost_variance_alert_log", ["snapshot_date"])
-    op.create_index("ix_cost_variance_alert_log_status", "cost_variance_alert_log", ["status"])
+    op.create_index("ix_cost_variance_alert_log_factory_id", "cost_variance_alert_log", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_cost_variance_alert_log_snapshot_date", "cost_variance_alert_log", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_cost_variance_alert_log_status", "cost_variance_alert_log", ["status"], if_not_exists=True)
 
 
 def downgrade() -> None:

@@ -16,14 +16,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "activity_logs",
-        sa.Column(
-            "metadata_json",
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=True,
-        ),
-    )
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("activity_logs")}
+    if "metadata_json" not in columns:
+        op.add_column(
+            "activity_logs",
+            sa.Column(
+                "metadata_json",
+                postgresql.JSONB(astext_type=sa.Text()),
+                nullable=True,
+            ),
+        )
 
 
 def downgrade() -> None:

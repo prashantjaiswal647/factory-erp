@@ -39,10 +39,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_wastage_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_daily_wastage_snapshot_factory_id", "daily_wastage_snapshot", ["factory_id"])
-    op.create_index("ix_daily_wastage_snapshot_snapshot_date", "daily_wastage_snapshot", ["snapshot_date"])
-    op.create_index("ix_daily_wastage_snapshot_wastage_status", "daily_wastage_snapshot", ["wastage_status"])
+    op.create_index("ix_daily_wastage_snapshot_factory_id", "daily_wastage_snapshot", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_daily_wastage_snapshot_snapshot_date", "daily_wastage_snapshot", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_daily_wastage_snapshot_wastage_status", "daily_wastage_snapshot", ["wastage_status"], if_not_exists=True)
 
     op.create_table(
         "wastage_alert_log",
@@ -56,10 +57,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_wastage_alert_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_wastage_alert_log_factory_id", "wastage_alert_log", ["factory_id"])
-    op.create_index("ix_wastage_alert_log_snapshot_date", "wastage_alert_log", ["snapshot_date"])
-    op.create_index("ix_wastage_alert_log_status", "wastage_alert_log", ["status"])
+    op.create_index("ix_wastage_alert_log_factory_id", "wastage_alert_log", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_wastage_alert_log_snapshot_date", "wastage_alert_log", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_wastage_alert_log_status", "wastage_alert_log", ["status"], if_not_exists=True)
 
 
 def downgrade() -> None:

@@ -45,13 +45,14 @@ def upgrade() -> None:
         sa.CheckConstraint("source_quality IN ('complete', 'partial')", name="ck_cost_daily_source_quality"),
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
+        if_not_exists=True,
     )
-    op.create_index("ix_cost_per_cup_daily_factory_id", "cost_per_cup_daily", ["factory_id"])
-    op.create_index("ix_cost_per_cup_daily_production_date", "cost_per_cup_daily", ["production_date"])
-    op.create_index("ix_cost_per_cup_daily_size_ml", "cost_per_cup_daily", ["size_ml"])
-    op.create_index("ix_cost_per_cup_daily_source_quality", "cost_per_cup_daily", ["source_quality"])
+    op.create_index("ix_cost_per_cup_daily_factory_id", "cost_per_cup_daily", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_cost_per_cup_daily_production_date", "cost_per_cup_daily", ["production_date"], if_not_exists=True)
+    op.create_index("ix_cost_per_cup_daily_size_ml", "cost_per_cup_daily", ["size_ml"], if_not_exists=True)
+    op.create_index("ix_cost_per_cup_daily_source_quality", "cost_per_cup_daily", ["source_quality"], if_not_exists=True)
     op.execute(
-        "CREATE UNIQUE INDEX uq_cost_daily_factory_date_size "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_cost_daily_factory_date_size "
         "ON cost_per_cup_daily (factory_id, production_date, COALESCE(size_ml, -1))"
     )
 

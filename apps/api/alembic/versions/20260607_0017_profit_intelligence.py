@@ -40,10 +40,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_daily_profit_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_daily_profit_snapshot_factory_id", "daily_profit_snapshot", ["factory_id"])
-    op.create_index("ix_daily_profit_snapshot_snapshot_date", "daily_profit_snapshot", ["snapshot_date"])
-    op.create_index("ix_daily_profit_snapshot_profit_status", "daily_profit_snapshot", ["profit_status"])
+    op.create_index("ix_daily_profit_snapshot_factory_id", "daily_profit_snapshot", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_daily_profit_snapshot_snapshot_date", "daily_profit_snapshot", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_daily_profit_snapshot_profit_status", "daily_profit_snapshot", ["profit_status"], if_not_exists=True)
 
     op.create_table(
         "profit_alert_log",
@@ -57,10 +58,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_profit_alert_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_profit_alert_log_factory_id", "profit_alert_log", ["factory_id"])
-    op.create_index("ix_profit_alert_log_snapshot_date", "profit_alert_log", ["snapshot_date"])
-    op.create_index("ix_profit_alert_log_status", "profit_alert_log", ["status"])
+    op.create_index("ix_profit_alert_log_factory_id", "profit_alert_log", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_profit_alert_log_snapshot_date", "profit_alert_log", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_profit_alert_log_status", "profit_alert_log", ["status"], if_not_exists=True)
 
 
 def downgrade() -> None:

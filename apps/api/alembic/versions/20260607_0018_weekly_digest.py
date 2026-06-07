@@ -29,11 +29,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "week_start", name="uq_weekly_digest_factory_week"),
+        if_not_exists=True,
     )
-    op.create_index("ix_weekly_digest_log_factory_id", "weekly_digest_log", ["factory_id"])
-    op.create_index("ix_weekly_digest_log_week_start", "weekly_digest_log", ["week_start"])
-    op.create_index("ix_weekly_digest_log_week_end", "weekly_digest_log", ["week_end"])
-    op.create_index("ix_weekly_digest_log_message_sent", "weekly_digest_log", ["message_sent"])
+    op.create_index("ix_weekly_digest_log_factory_id", "weekly_digest_log", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_weekly_digest_log_week_start", "weekly_digest_log", ["week_start"], if_not_exists=True)
+    op.create_index("ix_weekly_digest_log_week_end", "weekly_digest_log", ["week_end"], if_not_exists=True)
+    op.create_index("ix_weekly_digest_log_message_sent", "weekly_digest_log", ["message_sent"], if_not_exists=True)
 
 
 def downgrade() -> None:

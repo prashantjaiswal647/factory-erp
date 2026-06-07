@@ -1,6 +1,6 @@
 """telegram action layer tables
 
-Revision ID: 20260611_0020_telegram_action_layer
+Revision ID: 0021_telegram_action_layer
 Revises: 0020_explanation_cache
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "20260611_0020_telegram_action_layer"
+revision = "0021_telegram_action_layer"
 down_revision = "0020_explanation_cache"
 branch_labels = None
 depends_on = None
@@ -21,9 +21,10 @@ def upgrade() -> None:
         sa.Column("action", sa.String(length=64), nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("callback_id"),
+        if_not_exists=True,
     )
-    op.create_index("idx_tcd_factory", "telegram_callback_dedupe", ["factory_id"])
-    op.create_index("idx_tcd_received", "telegram_callback_dedupe", ["received_at"])
+    op.create_index("idx_tcd_factory", "telegram_callback_dedupe", ["factory_id"], if_not_exists=True)
+    op.create_index("idx_tcd_received", "telegram_callback_dedupe", ["received_at"], if_not_exists=True)
 
     op.create_table(
         "telegram_action_session",
@@ -47,13 +48,15 @@ def upgrade() -> None:
             "status IN ('pending', 'confirmed', 'cancelled', 'committed', 'expired')",
             name="ck_telegram_action_session_status"
         ),
+        if_not_exists=True,
     )
-    op.create_index("idx_tas_factory_chat", "telegram_action_session", ["factory_id", "chat_id", "status"])
+    op.create_index("idx_tas_factory_chat", "telegram_action_session", ["factory_id", "chat_id", "status"], if_not_exists=True)
     op.create_index(
         "idx_tas_expires",
         "telegram_action_session",
         ["expires_at"],
-        postgresql_where=sa.text("status = 'pending'")
+        postgresql_where=sa.text("status = 'pending'"),
+        if_not_exists=True,
     )
 
 def downgrade() -> None:

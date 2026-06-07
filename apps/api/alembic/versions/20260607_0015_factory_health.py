@@ -35,11 +35,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", name="uq_factory_health_factory_date"),
+        if_not_exists=True,
     )
-    op.create_index("ix_daily_factory_health_snapshot_factory_id", "daily_factory_health_snapshot", ["factory_id"])
-    op.create_index("ix_daily_factory_health_snapshot_snapshot_date", "daily_factory_health_snapshot", ["snapshot_date"])
-    op.create_index("ix_daily_factory_health_snapshot_overall_score", "daily_factory_health_snapshot", ["overall_score"])
-    op.create_index("ix_daily_factory_health_snapshot_health_status", "daily_factory_health_snapshot", ["health_status"])
+    op.create_index("ix_daily_factory_health_snapshot_factory_id", "daily_factory_health_snapshot", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_daily_factory_health_snapshot_snapshot_date", "daily_factory_health_snapshot", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_daily_factory_health_snapshot_overall_score", "daily_factory_health_snapshot", ["overall_score"], if_not_exists=True)
+    op.create_index("ix_daily_factory_health_snapshot_health_status", "daily_factory_health_snapshot", ["health_status"], if_not_exists=True)
 
 
 def downgrade() -> None:

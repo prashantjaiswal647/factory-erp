@@ -42,11 +42,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["factory_id"], ["factories.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("factory_id", "snapshot_date", "size_ml", name="uq_per_size_daily_factory_date_size"),
+        if_not_exists=True,
     )
-    op.create_index("ix_per_size_daily_factory_id", "per_size_daily", ["factory_id"])
-    op.create_index("ix_per_size_daily_snapshot_date", "per_size_daily", ["snapshot_date"])
-    op.create_index("ix_per_size_daily_size_ml", "per_size_daily", ["size_ml"])
-    op.create_index("ix_per_size_daily_status", "per_size_daily", ["status"])
+    op.create_index("ix_per_size_daily_factory_id", "per_size_daily", ["factory_id"], if_not_exists=True)
+    op.create_index("ix_per_size_daily_snapshot_date", "per_size_daily", ["snapshot_date"], if_not_exists=True)
+    op.create_index("ix_per_size_daily_size_ml", "per_size_daily", ["size_ml"], if_not_exists=True)
+    op.create_index("ix_per_size_daily_status", "per_size_daily", ["status"], if_not_exists=True)
 
 
 def downgrade() -> None:

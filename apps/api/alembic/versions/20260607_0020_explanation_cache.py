@@ -42,19 +42,22 @@ def upgrade() -> None:
             "language",
             name="uq_explanation_cache_factory_hash_language",
         ),
+        if_not_exists=True,
     )
-    op.create_index("ix_explanation_cache_snapshot_hash", "explanation_cache", ["snapshot_hash"])
-    op.create_index("ix_explanation_cache_briefing_date", "explanation_cache", ["briefing_date"])
-    op.create_index("ix_explanation_cache_factory_id", "explanation_cache", ["factory_id"])
+    op.create_index("ix_explanation_cache_snapshot_hash", "explanation_cache", ["snapshot_hash"], if_not_exists=True)
+    op.create_index("ix_explanation_cache_briefing_date", "explanation_cache", ["briefing_date"], if_not_exists=True)
+    op.create_index("ix_explanation_cache_factory_id", "explanation_cache", ["factory_id"], if_not_exists=True)
     op.create_index(
         "ix_explanation_cache_factory_hash",
         "explanation_cache",
         ["factory_id", "snapshot_hash"],
+        if_not_exists=True,
     )
     op.create_index(
         "ix_explanation_cache_factory_date",
         "explanation_cache",
         ["factory_id", "briefing_date"],
+        if_not_exists=True,
     )
 
 
