@@ -889,6 +889,18 @@ export function getAiDashboardInsights() {
   return api.get<AiDashboardInsights>("/api/dashboard/ai-insights");
 }
 
+export type DashboardSummary = {
+  total_sales_last_7_days: number | string;
+  total_collection_last_7_days: number | string;
+  current_total_market_outstanding: number | string;
+  average_wastage_percent_last_7_days: number | string;
+  raw_material_low_stock_alerts: number;
+};
+
+export function getDashboardSummary() {
+  return api.get<DashboardSummary>("/api/dashboard/summary");
+}
+
 export type FinancialBIStatsRow = {
   day: string;
   Sales: number;

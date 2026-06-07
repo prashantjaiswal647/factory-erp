@@ -93,6 +93,15 @@ def get_mock_owner_user(factory_id: int) -> SimpleNamespace:
     )
 
 
+def test_dashboard_stats_compatibility_alias_requires_authentication():
+    ensure_testclient_compatibility()
+    client = TestClient(main_app)
+
+    response = client.get("/api/dashboard/stats")
+
+    assert response.status_code == 401
+
+
 # ---------------------------------------------------------------------------
 # Priority 1: Factory Isolation Tests
 # ---------------------------------------------------------------------------
@@ -235,6 +244,9 @@ def test_factory_isolation_flow(monkeypatch):
     assert dash_res_f1.status_code == 200
     f1_stats = dash_res_f1.json()
     assert float(f1_stats["total_sales_last_7_days"]) > 0 or float(f1_stats["current_total_market_outstanding"]) > 0
+    dash_stats_f1 = client.get("/api/dashboard/stats")
+    assert dash_stats_f1.status_code == 200
+    assert dash_stats_f1.json() == f1_stats
 
     # F2 summary shows zeros
     current_active_user = user_f2
@@ -243,6 +255,9 @@ def test_factory_isolation_flow(monkeypatch):
     f2_stats = dash_res_f2.json()
     assert float(f2_stats["total_sales_last_7_days"]) == 0.0
     assert float(f2_stats["current_total_market_outstanding"]) == 0.0
+    dash_stats_f2 = client.get("/api/dashboard/stats")
+    assert dash_stats_f2.status_code == 200
+    assert dash_stats_f2.json() == f2_stats
 
     # Clear dependency overrides when done
     for dep in [get_current_user, get_current_active_user, require_owner]:
