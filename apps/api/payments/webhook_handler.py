@@ -34,8 +34,67 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 def process_cashfree_event(db: Session, event_type: str, payload: dict) -> dict:
     data = _data(payload)
+    order = data.get("order") if isinstance(data.get("order"), dict) else {}
     subscription = _subscription(data)
     payment = _payment(data)
+    order_id = str(order.get("order_id") or data.get("order_id") or "")
+    order_payment = (
+        db.query(SubscriptionPayment)
+        .filter(SubscriptionPayment.cf_order_id == order_id, SubscriptionPayment.provider == "cashfree")
+        .first()
+        if order_id
+        else None
+    )
+    if order_payment is not None:
+        payment_status = str(payment.get("payment_status") or "").upper()
+        cf_payment_id = str(payment.get("cf_payment_id") or "")
+        if event_type == "PAYMENT_SUCCESS_WEBHOOK" and payment_status == "SUCCESS":
+            amount_paise = int(round(float(payment.get("payment_amount") or 0) * 100))
+            currency = str(payment.get("payment_currency") or order.get("order_currency") or "").upper()
+            if amount_paise != order_payment.amount_paise or currency != order_payment.currency:
+                raise ValueError("Cashfree payment amount or currency mismatch")
+            duplicate = db.query(SubscriptionPayment).filter(
+                SubscriptionPayment.cf_payment_id == cf_payment_id,
+                SubscriptionPayment.id != order_payment.id,
+            ).first()
+            if duplicate is not None:
+                return {"processed": True, "factory_id": duplicate.factory_id, "subscription_payment_id": duplicate.id}
+            factory = db.get(Factory, order_payment.factory_id)
+            if factory is None:
+                raise ValueError("Factory for Cashfree order not found")
+            if order_payment.payment_status != "paid":
+                paid_at = _parse_datetime(payment.get("payment_time")) or datetime.now(timezone.utc)
+                existing_end = factory.subscription_end_date or factory.plan_expires_at
+                if existing_end is not None and existing_end.tzinfo is None:
+                    existing_end = existing_end.replace(tzinfo=timezone.utc)
+                cycle_start = existing_end if existing_end and existing_end > paid_at else paid_at
+                cycle_end = cycle_start + timedelta(days=365 if order_payment.billing_cycle == "yearly" else 30)
+                factory.subscription_status = "active"
+                factory.payment_status = "paid"
+                factory.active_plan = order_payment.plan_code
+                factory.plan_name = order_payment.plan_code
+                factory.billing_cycle = order_payment.billing_cycle
+                factory.subscription_start_date = cycle_start
+                factory.subscription_end_date = cycle_end
+                factory.subscription_start = cycle_start
+                factory.subscription_end = cycle_end
+                factory.plan_expires_at = cycle_end
+                factory.current_period_start = cycle_start
+                factory.current_period_end = cycle_end
+                factory.cashfree_plan_code = order_payment.plan_code
+                order_payment.payment_status = "paid"
+                order_payment.provider_payment_id = cf_payment_id
+                order_payment.cf_payment_id = cf_payment_id
+                order_payment.cf_event_id = str(payload.get("event_id") or data.get("event_id") or "") or None
+                order_payment.subscription_start_date = cycle_start
+                order_payment.subscription_end_date = cycle_end
+            db.flush()
+            return {"processed": True, "factory_id": order_payment.factory_id, "subscription_payment_id": order_payment.id}
+        if event_type in {"PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK"} and order_payment.payment_status != "paid":
+            order_payment.payment_status = "failed" if event_type == "PAYMENT_FAILED_WEBHOOK" else "user_dropped"
+            db.flush()
+        return {"processed": True, "factory_id": order_payment.factory_id, "subscription_payment_id": order_payment.id}
+
     subscription_id = (
         subscription.get("subscription_id")
         or data.get("subscription_id")

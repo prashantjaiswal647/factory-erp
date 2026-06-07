@@ -401,6 +401,8 @@ export type RazorpayOrder = {
   currency: string;
   plan_code: string;
   billing_cycle: "monthly" | "yearly";
+  cashfree_mode?: string;
+  payment_session_id?: string;
 };
 
 export type ExpiringSoonSubscription = BillingStatus;
@@ -524,6 +526,7 @@ export type LiveStockRow = {
   variety?: string | null;
   stock_type: "Blank" | "Bottom" | "Box" | "Carton Box" | "Polybag" | "Inventory" | "Final Product";
   item_name: string;
+  bucket?: string | null;
   category?: string | null;
   packaging_size?: string | null;
   packaging_size_name?: string | null;
@@ -1584,6 +1587,7 @@ export function updateUserProfile(payload: {
   full_name: string;
   country_code: string;
   phone_number: string;
+  preferred_language: "en" | "hi" | "hinglish";
 }) {
   return api.put<{
     id: number;
@@ -1594,6 +1598,7 @@ export function updateUserProfile(payload: {
     role: string;
     factory_id: number;
     factory_name?: string | null;
+    preferred_language: "en" | "hi" | "hinglish";
   }>("/api/v1/users/me/profile", payload);
 }
 
@@ -1738,5 +1743,293 @@ export async function uploadCustomersSeed(file: File) {
     },
   });
   return response.data;
+}
+
+export function connectTelegram() {
+  return api.post<{ code: string; expires_at: string }>("/api/telegram/connect");
+}
+
+export function disconnectTelegram() {
+  return api.post<{ status: string }>("/api/telegram/disconnect");
+}
+
+export type BriefingExplanation = {
+  cost_explanation: string;
+  health_explanation: string;
+  wastage_explanation: string;
+  profit_explanation: string;
+  per_size_explanation: string;
+  action_items: string[];
+  model_version: string;
+  tokens_used: number;
+};
+
+export type MorningBriefingResponse = {
+  message_text: string;
+  missing_data: string[];
+  language: "en" | "hi" | "hinglish";
+  risk_items: Array<{
+    severity: "critical" | "warning" | "info";
+    type: "low_stock" | "outstanding";
+    label: string;
+    days_left?: number;
+    pending_amount?: number;
+    message: string;
+  }>;
+  ai_explanation?: BriefingExplanation | null;
+  ai_observability?: {
+    model_name: string | null;
+    token_usage: number;
+    cache_hit: boolean;
+    generation_time: number;
+    fallback_reason: string | null;
+  } | null;
+};
+
+export async function getMorningBriefing() {
+  const response = await api.get<MorningBriefingResponse>("/briefings/today");
+  return response.data;
+}
+
+export type CostDailyResponse = {
+  production_date: string;
+  cups_produced_total: number;
+  total_production_cost: string;
+  total_loaded_cost: string;
+  cost_per_cup: string;
+  loaded_cost_per_cup: string;
+  source_quality: "complete" | "partial";
+  missing_fields: string[];
+};
+
+export type CostWindowResponse = {
+  days: 7 | 30;
+  start_date: string;
+  end_date: string;
+  cups_produced_total: number;
+  total_production_cost: string;
+  weighted_cost_per_cup: string;
+  weighted_loaded_cost_per_cup: string;
+  source_quality: "complete" | "partial";
+  missing_fields: string[];
+};
+
+export async function getTodayCost() {
+  const response = await api.get<CostDailyResponse>("/cost/today");
+  return response.data;
+}
+
+export async function getCostWindow(days: 7 | 30) {
+  const response = await api.get<CostWindowResponse>("/cost/window", { params: { days } });
+  return response.data;
+}
+
+export type CostVarianceResponse = {
+  snapshot_date: string;
+  today_cpc: string;
+  today_loaded_cpc: string;
+  seven_day_cpc: string;
+  seven_day_loaded_cpc: string;
+  thirty_day_cpc: string;
+  thirty_day_loaded_cpc: string;
+  variance_percent: string;
+  variance_level: "NORMAL" | "WARNING" | "CRITICAL";
+  primary_driver: string;
+  material_change_percent: string;
+  labour_change_percent: string;
+  electricity_change_percent: string;
+  overhead_change_percent: string;
+  today: CostDailyResponse;
+  seven_day: CostWindowResponse;
+  thirty_day: CostWindowResponse;
+};
+
+export async function getTodayCostVariance() {
+  const response = await api.get<CostVarianceResponse>("/cost/variance/today");
+  return response.data;
+}
+
+export type WastageResponse = {
+  snapshot_date: string;
+  cups_produced: number;
+  blank_used_kg: number;
+  bottom_used_kg: number;
+  actual_wastage_kg: number;
+  expected_wastage_kg: number;
+  wastage_percentage: number;
+  expected_wastage_percentage: number;
+  extra_wastage_percentage: number;
+  estimated_loss_paise: number;
+  estimated_loss: number;
+  wastage_status: "NORMAL" | "WARNING" | "CRITICAL";
+  primary_wastage_source: "Blank" | "Bottom" | "Mixed";
+  baseline_source: "factory_30_day" | "onboarding_default";
+  seven_day_trend: number | null;
+  thirty_day_trend: number | null;
+};
+
+export async function getTodayWastage() {
+  const response = await api.get<WastageResponse>("/wastage/today");
+  return response.data;
+}
+
+export async function getWastageHistory(days = 30) {
+  const response = await api.get<{ days: number; items: WastageResponse[] }>("/wastage/history", { params: { days } });
+  return response.data;
+}
+
+export type ProfitResponse = {
+  snapshot_date: string;
+  revenue_paise: number;
+  material_cost_paise: number;
+  labour_cost_paise: number;
+  electricity_cost_paise: number;
+  overhead_cost_paise: number;
+  total_cost_paise: number;
+  gross_profit_paise: number;
+  revenue: number | "Data not available";
+  total_cost: number | "Data not available";
+  gross_profit: number | "Data not available";
+  profit_margin_percent: number | "Data not available";
+  profit_status: "EXCELLENT" | "GOOD" | "WARNING" | "CRITICAL" | "DATA_NOT_AVAILABLE";
+  largest_profit_risk: string;
+  seven_day_margin: number | null;
+  thirty_day_margin: number | null;
+  data_available: boolean;
+};
+
+export async function getTodayProfit() {
+  const response = await api.get<ProfitResponse>("/profit/today");
+  return response.data;
+}
+
+export async function getProfitHistory(days = 30) {
+  const response = await api.get<{ days: number; items: ProfitResponse[] }>("/profit/history", { params: { days } });
+  return response.data;
+}
+
+export type PerSizeProfitItem = {
+  size_ml: number;
+  revenue_paise: number;
+  cost_paise: number | "Data not available";
+  gross_profit_paise: number | "Data not available";
+  margin_percent: number | "Data not available";
+  units_sold: number;
+  units_produced: number;
+  status: "EXCELLENT" | "GOOD" | "WARNING" | "CRITICAL" | "DATA_NOT_AVAILABLE";
+  data_available: boolean;
+  cost_source: "CostPerCupDaily" | "DailyProduction" | "Data not available";
+};
+
+export type PerSizeProfitResponse = {
+  date: string;
+  sizes: PerSizeProfitItem[];
+  best_size: PerSizeProfitItem | null;
+  worst_size: PerSizeProfitItem | null;
+  total_revenue: number;
+  total_profit: number | "Data not available";
+  weighted_margin: number | "Data not available";
+  data_available: boolean;
+};
+
+export async function getPerSizeProfit(date?: string) {
+  const response = await api.get<PerSizeProfitResponse>("/profit/per-size", { params: date ? { date } : undefined });
+  return response.data;
+}
+
+export async function getPerSizeProfitHistory(days = 30) {
+  const response = await api.get<{ days: number; items: PerSizeProfitResponse[] }>("/profit/per-size/history", { params: { days } });
+  return response.data;
+}
+
+export type WeeklyDigestResponse = {
+  week_start: string;
+  week_end: string;
+  revenue: number;
+  profit: number;
+  margin: number | null;
+  health_score: number | null;
+  best_day: string;
+  worst_day: string;
+  largest_risk: string;
+  generated_at: string;
+  message_text: string;
+  language: "en" | "hi" | "hinglish";
+  days_available: number;
+};
+
+export async function getLatestWeeklyDigest() {
+  const response = await api.get<WeeklyDigestResponse>("/weekly-digest/latest");
+  return response.data;
+}
+
+export type FactoryHealthResponse = {
+  id: number;
+  snapshot_date: string;
+  production_score: number;
+  attendance_score: number;
+  collections_score: number;
+  inventory_score: number;
+  cost_score: number;
+  overall_score: number;
+  health_status: "CRITICAL" | "WARNING" | "GOOD" | "EXCELLENT";
+  largest_strength: string;
+  largest_risk: string;
+  trend?: number | null;
+};
+
+export async function getTodayFactoryHealth() {
+  const response = await api.get<FactoryHealthResponse>("/factory-health/today");
+  return response.data;
+}
+
+export type FactoryHealthHistoryItem = {
+  date: string;
+  overall_score: number;
+  health_status: "CRITICAL" | "WARNING" | "GOOD" | "EXCELLENT";
+  production_score: number;
+  attendance_score: number;
+  collections_score: number;
+  inventory_score: number;
+  cost_score: number;
+  largest_strength: string;
+  largest_risk: string;
+};
+
+export type FactoryHealthHistoryResponse = {
+  days: number;
+  items: FactoryHealthHistoryItem[];
+  summary: {
+    current_score: number | null;
+    previous_score: number | null;
+    seven_day_average: number | null;
+    thirty_day_average: number | null;
+    best_day: FactoryHealthHistoryItem | null;
+    worst_day: FactoryHealthHistoryItem | null;
+    trend_direction: "IMPROVING" | "STABLE" | "DECLINING";
+  };
+};
+
+export async function getFactoryHealthHistory(days = 30) {
+  const response = await api.get<FactoryHealthHistoryResponse>("/factory-health/history", { params: { days } });
+  return response.data;
+}
+
+export function getCashfreeOrderStatus(orderId: string) {
+  return api.get<{ subscription_active: boolean; payment_status?: string | null }>(`/billing/cashfree/orders/${orderId}`);
+}
+
+export function generateInvoiceFromSale(
+  saleId: number,
+  payload: {
+    invoice_type: "tax_invoice" | "bill_of_supply";
+    tax_rate: number;
+    payment_method: string;
+  }
+) {
+  return api.post<{ invoice_id: number; invoice_number: string }>(
+    `/invoices/from-sale/${saleId}`,
+    payload
+  );
 }
 

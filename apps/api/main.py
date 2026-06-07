@@ -92,7 +92,16 @@ from routers import expenses
 from routers import integrations
 from routers import machine_onboarding
 from routers import machine_templates
+from routers import cost
+from routers import factory_health
+from routers import wastage
+from routers import profit
+from routers import weekly_digest
 from routers.daily_sequence import router as daily_sequence_router
+from routers.briefings import router as briefings_router
+from routers.briefing_admin import router as briefing_admin_router
+from routers.explanation_admin import router as explanation_admin_router
+from routers.telegram_actions import router as telegram_actions_router
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +223,19 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(machine_onboarding.machines_router)
     application.include_router(machine_templates.router)
     application.include_router(daily_sequence_router, prefix="/api", tags=["Daily Sequence"])
+    application.include_router(briefings_router)
+    application.include_router(cost.router)
+    application.include_router(factory_health.router)
+    application.include_router(factory_health.admin_router)
+    application.include_router(wastage.router)
+    application.include_router(wastage.admin_router)
+    application.include_router(profit.router)
+    application.include_router(profit.admin_router)
+    application.include_router(weekly_digest.router)
+    application.include_router(weekly_digest.admin_router)
+    application.include_router(briefing_admin_router)
+    application.include_router(explanation_admin_router)
+    application.include_router(telegram_actions_router)
     #application.include_router(ai_invoice_router)
     #application.include_router(internal_automation_router)
 
@@ -283,6 +305,9 @@ class CurrentUserResponse(BaseModel):
     factory_id: int
     phone_number: Optional[str] = None
     telegram_id: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    telegram_bot_username: Optional[str] = None
+    preferred_language: str = "hinglish"
 
 class N8NTestRequest(BaseModel):
     factory_id: int
@@ -1301,8 +1326,20 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), x_f
     return TokenResponse(access_token=create_access_token(user.username, user.role, user.factory_id), username=user.username, role=user.role, factory_id=user.factory_id)
 
 @app.get("/users/me", response_model=CurrentUserResponse)
-def read_current_user(current_user: User = Depends(get_current_user)):
-    return CurrentUserResponse(id=current_user.id, username=current_user.username, role=current_user.role, factory_id=current_user.factory_id)
+def read_current_user(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    bot_username = factory.telegram_bot_username if factory else None
+    return CurrentUserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        role=current_user.role,
+        factory_id=current_user.factory_id,
+        phone_number=current_user.phone_number,
+        telegram_id=current_user.telegram_id,
+        telegram_chat_id=current_user.telegram_chat_id,
+        telegram_bot_username=bot_username,
+        preferred_language=current_user.preferred_language,
+    )
 
 @app.post("/ask-ai", response_model=AskAIResponse)
 def ask_ai(payload: AskAIRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

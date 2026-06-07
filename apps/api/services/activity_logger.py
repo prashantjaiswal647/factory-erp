@@ -47,6 +47,7 @@ def log_activity(
             entity_id=entity_id,
             short_statement=normalized_summary,
             committed_at=committed_at,
+            metadata_json=metadata,
         )
         db.add(activity)
         db.commit()

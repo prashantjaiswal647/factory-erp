@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 from types import SimpleNamespace
 
 import pandas as pd
@@ -8,8 +9,205 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import BottomStock, Machine, Worker, WorkerOpeningAttendance
-from routers.onboarding import apply_bulk_rows, dedupe_valid_bulk_rows, validate_bulk_frame
+from models import BottomStock, Customer, Factory, Machine, Worker, WorkerOpeningAttendance
+from routers.onboarding import apply_bulk_rows, build_master_onboarding_workbook, dedupe_valid_bulk_rows, validate_bulk_frame
+
+
+def customer_row(**overrides):
+    row = {
+        "row_type": "ACTUAL",
+        "name": "Rajesh Kumar",
+        "firm_name": "Rajesh Traders",
+        "contact_number": "9876543210",
+        "phone_number": "9876543210",
+        "place": "Delhi",
+        "address": "Wazirpur Industrial Area",
+        "gst_number": "07ABCDE1234F1Z5",
+        "previous_due": Decimal("1500"),
+    }
+    row.update(overrides)
+    return row
+
+
+def test_master_template_contains_customers_sheet_with_valid_sample():
+    workbook = pd.read_excel(BytesIO(build_master_onboarding_workbook().getvalue()), sheet_name=None, header=None)
+
+    assert "Customers" in workbook
+    headers = workbook["Customers"].iloc[1].tolist()
+    assert headers == [
+        "row_type",
+        "name",
+        "firm_name",
+        "contact_number",
+        "phone_number",
+        "place",
+        "address",
+        "gst_number",
+        "previous_due",
+    ]
+
+
+def test_customer_bulk_row_validation_rejects_blank_name():
+    frame = pd.DataFrame([customer_row(name="")])
+
+    rows, errors = validate_bulk_frame(frame, "customer", "Customers")
+
+    assert rows == []
+    assert len(errors) == 1
+    assert "name" in errors[0]["error"]
+
+
+def test_customer_sheet_without_previous_due_imports_with_zero_balance():
+    frame = pd.DataFrame(
+        [
+            {
+                "row_type": "ACTUAL",
+                "customer_name": "Minimal Customer",
+                "phone": "9876500000",
+                "address": "Delhi",
+            }
+        ]
+    )
+
+    rows, errors = validate_bulk_frame(frame, "customer", "Customers")
+
+    assert errors == []
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Minimal Customer"
+    assert rows[0]["phone_number"] == "9876500000"
+    assert rows[0]["previous_due"] == Decimal("0")
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        factory = Factory(name="Minimal Customer Factory")
+        db.add(factory)
+        db.flush()
+
+        assert apply_bulk_rows(
+            db,
+            SimpleNamespace(id=1, factory_id=factory.id),
+            "customer",
+            rows,
+            {},
+        ) == 1
+        db.commit()
+
+        customer = db.query(Customer).filter(Customer.factory_id == factory.id).one()
+        assert customer.name == "Minimal Customer"
+        assert customer.phone_number == "9876500000"
+        assert customer.address == "Delhi"
+        assert customer.previous_due == Decimal("0")
+        assert customer.total_due == Decimal("0")
+        assert customer.pending_balance == Decimal("0")
+        assert customer.balance_amount == Decimal("0")
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_customer_bulk_upload_happy_path_and_idempotent_reupload():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        current_user = SimpleNamespace(id=1, factory_id=2)
+        first_stats = {"inserted": 0, "updated": 0, "skipped": 0}
+        assert apply_bulk_rows(db, current_user, "customer", [customer_row()], first_stats) == 1
+        db.commit()
+
+        second_stats = {"inserted": 0, "updated": 0, "skipped": 0}
+        assert apply_bulk_rows(
+            db,
+            current_user,
+            "customer",
+            [customer_row(firm_name="Rajesh Enterprises", previous_due=Decimal("1750"))],
+            second_stats,
+        ) == 1
+        db.commit()
+
+        customers = db.query(Customer).filter(Customer.factory_id == 2).all()
+        assert len(customers) == 1
+        assert customers[0].firm_name == "Rajesh Enterprises"
+        assert customers[0].phone == "9876543210"
+        assert customers[0].previous_due == Decimal("1750")
+        assert customers[0].total_due == Decimal("1750")
+        assert customers[0].pending_dues == 1750.0
+        assert customers[0].pending_balance == Decimal("1750")
+        assert customers[0].balance_amount == Decimal("1750")
+        assert first_stats["inserted"] == 1
+        assert second_stats["updated"] == 1
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_customer_bulk_upload_is_isolated_by_factory():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        factory_a = Factory(name="Factory A")
+        factory_b = Factory(name="Factory B")
+        db.add_all([factory_a, factory_b])
+        db.flush()
+
+        shared_customer = customer_row(
+            name="Shree Traders",
+            firm_name="Shree Traders",
+            contact_number="9876543210",
+            phone_number="9876543210",
+            gst_number="07ABCDE1234F1Z5",
+        )
+        assert apply_bulk_rows(
+            db,
+            SimpleNamespace(id=1, factory_id=factory_a.id),
+            "customer",
+            [shared_customer],
+            {},
+        ) == 1
+        assert apply_bulk_rows(
+            db,
+            SimpleNamespace(id=2, factory_id=factory_b.id),
+            "customer",
+            [shared_customer],
+            {},
+        ) == 1
+        db.commit()
+
+        assert apply_bulk_rows(
+            db,
+            SimpleNamespace(id=1, factory_id=factory_a.id),
+            "customer",
+            [customer_row(
+                name="Shree Traders",
+                firm_name="Factory A Updated Customer",
+                contact_number="9876543210",
+                phone_number="9876543210",
+                gst_number="07ABCDE1234F1Z5",
+            )],
+            {},
+        ) == 1
+        db.commit()
+
+        customers = db.query(Customer).filter(Customer.name == "Shree Traders").order_by(Customer.factory_id).all()
+        assert len(customers) == 2
+        assert {customer.factory_id for customer in customers} == {factory_a.id, factory_b.id}
+
+        factory_a_customer = next(customer for customer in customers if customer.factory_id == factory_a.id)
+        factory_b_customer = next(customer for customer in customers if customer.factory_id == factory_b.id)
+        assert factory_a_customer.firm_name == "Factory A Updated Customer"
+        assert factory_b_customer.firm_name == "Shree Traders"
+        assert factory_a_customer.phone_number == factory_b_customer.phone_number == "9876543210"
+        assert factory_a_customer.gst_number == factory_b_customer.gst_number == "07ABCDE1234F1Z5"
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_bottom_reel_bulk_rows_default_blank_weight_to_zero():

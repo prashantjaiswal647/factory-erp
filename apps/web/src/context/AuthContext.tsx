@@ -27,6 +27,10 @@ type AuthUser = {
   machines_used?: number;
   machine_limit?: number;
   machine_plan?: string;
+  telegram_chat_id?: string | null;
+  telegram_id?: string | null;
+  telegram_bot_username?: string | null;
+  preferred_language?: "en" | "hi" | "hinglish";
 };
 
 type AuthContextValue = {
@@ -50,6 +54,7 @@ type TokenResponse = {
     username: string;
     phone_number?: string | null;
     full_name?: string | null;
+    preferred_language?: "en" | "hi" | "hinglish";
     role: string;
     subscription_status?: SubscriptionStatus | null;
     trial_end_date?: string | null;
@@ -142,7 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       full_name: data.user.full_name,
       role,
       factory_id: data.user.factory_id,
-      factory_name: data.user.factory_name
+      factory_name: data.user.factory_name,
+      preferred_language: data.user.preferred_language,
     };
 
     localStorage.setItem(tokenKey, data.access_token);

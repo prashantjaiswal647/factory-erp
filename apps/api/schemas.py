@@ -5,6 +5,17 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class BriefingExplanation(BaseModel):
+    cost_explanation: str = ""
+    health_explanation: str = ""
+    wastage_explanation: str = ""
+    profit_explanation: str = ""
+    per_size_explanation: str = ""
+    action_items: List[str] = Field(default_factory=list)
+    model_version: str
+    tokens_used: int = Field(default=0, ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Auth Schemas
 # ---------------------------------------------------------------------------

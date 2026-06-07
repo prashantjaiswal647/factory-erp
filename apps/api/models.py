@@ -1565,3 +1565,40 @@ def sync_machine_columns(mapper, connection, target):
         target.cup_size_ml = target.mould_size_ml
         target.current_mould_size = str(target.mould_size_ml)
         target.default_mould_size = str(target.mould_size_ml)
+
+
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+import uuid
+
+class TelegramCallbackDedupe(Base):
+    __tablename__ = "telegram_callback_dedupe"
+
+    callback_id = Column(String(64), primary_key=True)
+    factory_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
+class TelegramActionSession(Base):
+    __tablename__ = "telegram_action_session"
+
+    session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    factory_id = Column(Integer, nullable=False, index=True)
+    chat_id = Column(String(64), nullable=False, index=True)
+    action = Column(String(32), nullable=False)
+    step = Column(String(32), nullable=False)
+    payload_json = Column(JSONB, nullable=False, server_default="{}")
+    callback_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    status = Column(String(16), nullable=False, server_default="pending")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'cancelled', 'committed', 'expired')",
+            name="ck_telegram_action_session_status"
+        ),
+        Index("idx_tas_factory_chat", "factory_id", "chat_id", "status"),
+        Index("idx_tas_expires", "expires_at", postgresql_where=text("status = 'pending'")),
+    )

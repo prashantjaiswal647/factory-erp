@@ -767,3 +767,154 @@ def generate_mode_invoice(
             text_summary=summary_text,
             status="SUCCESS"
         )
+
+
+# ==========================================
+# Telegram Account Binding Endpoints
+# ==========================================
+
+class TelegramConnectResponse(BaseModel):
+    code: str
+    expires_at: str
+
+class TelegramVerifyCodeRequest(BaseModel):
+    code: str
+    chat_id: str
+
+class TelegramVerifyCodeResponse(BaseModel):
+    status: str
+    username: str
+    factory_id: int
+
+class TelegramDisconnectResponse(BaseModel):
+    status: str
+
+@router.post("/api/telegram/connect", response_model=TelegramConnectResponse)
+def telegram_connect(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db)
+):
+    import random
+    import string
+    from datetime import datetime, timedelta, timezone
+
+    # Generate a one-time 6-character uppercase alphanumeric code
+    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    # Save to user
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    user.telegram_binding_code = code
+    user.telegram_binding_expiry = expiry
+    db.commit()
+    db.refresh(user)
+
+    return TelegramConnectResponse(
+        code=code,
+        expires_at=expiry.isoformat()
+    )
+
+@router.post("/api/telegram/verify-code", response_model=TelegramVerifyCodeResponse)
+def telegram_verify_code(
+    payload: TelegramVerifyCodeRequest,
+    _: None = Depends(require_n8n_api_key),
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timezone
+
+    code = payload.code.strip().upper()
+    chat_id = payload.chat_id.strip()
+
+    # Find the user with this binding code
+    user = db.query(User).filter(User.telegram_binding_code == code).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid binding code"
+        )
+
+    # Check if code has expired
+    if not user.telegram_binding_expiry:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Binding code has expired"
+        )
+
+    expiry = user.telegram_binding_expiry
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expiry:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Binding code has expired"
+        )
+
+    # Enforce duplicate bind security check
+    existing_user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Telegram account is already bound to another user"
+        )
+
+    # Enforce duplicate factory check
+    existing_factory = db.query(Factory).filter(Factory.telegram_chat_id == chat_id).first()
+    if existing_factory:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Telegram account is already bound to another factory"
+        )
+
+    # Bind chat_id to user and factory
+    user.telegram_chat_id = chat_id
+    user.telegram_id = chat_id
+    
+    factory = db.query(Factory).filter(Factory.id == user.factory_id).first()
+    if factory:
+        factory.telegram_chat_id = chat_id
+
+    # Clear binding code
+    user.telegram_binding_code = None
+    user.telegram_binding_expiry = None
+
+    db.commit()
+    db.refresh(user)
+
+    return TelegramVerifyCodeResponse(
+        status="success",
+        username=user.username,
+        factory_id=user.factory_id
+    )
+
+@router.post("/api/telegram/disconnect", response_model=TelegramDisconnectResponse)
+def telegram_disconnect(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    user.telegram_chat_id = None
+    user.telegram_id = None
+    user.telegram_binding_code = None
+    user.telegram_binding_expiry = None
+
+    factory = db.query(Factory).filter(Factory.id == user.factory_id).first()
+    if factory:
+        factory.telegram_chat_id = None
+
+    db.commit()
+    db.refresh(user)
+
+    return TelegramDisconnectResponse(status="disconnected")

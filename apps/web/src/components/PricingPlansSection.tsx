@@ -8,19 +8,21 @@ import { useAuth } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import {
   createBillingOrder,
+  getCashfreeOrderStatus,
   getBillingStatus,
   getPricingPlans,
   startFreeTrial,
   submitCustomPlanEnquiry,
   submitDemoBooking,
-  verifyBillingPayment
 } from "../lib/api";
 import type { PricingPlan } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
 declare global {
   interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
+    Cashfree?: (options: { mode: "sandbox" | "production" }) => {
+      checkout: (options: { paymentSessionId: string; redirectTarget: "_self" | "_modal" }) => Promise<{ error?: { message?: string } }>;
+    };
   }
 }
 
@@ -133,6 +135,42 @@ export default function PricingPlansSection({ className = "", source = "billing"
       .catch(() => setPlans(fallbackPlans));
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get("order_id");
+    if (params.get("cashfree") !== "return" || !orderId || !user) return;
+    const cashfreeOrderId = orderId;
+    let active = true;
+    let attempts = 0;
+    async function poll() {
+      try {
+        const response = await getCashfreeOrderStatus(cashfreeOrderId);
+        if (!active) return;
+        if (response.data.subscription_active) {
+          await refreshBillingStatus();
+          triggerDataRefresh();
+          setMessage("Payment verified. Your subscription is active.");
+          window.history.replaceState({}, "", "/billing?payment=success");
+          return;
+        }
+        if (["failed", "user_dropped"].includes(response.data.payment_status || "")) {
+          setError("Payment was not completed. You can retry from the selected plan.");
+          window.history.replaceState({}, "", "/billing?payment=failed");
+          return;
+        }
+      } catch {
+        if (active) setError("Unable to verify payment status yet.");
+      }
+      attempts += 1;
+      if (active && attempts < 10) window.setTimeout(poll, 2000);
+      else if (active) setMessage("Payment confirmation is pending. Refresh this page shortly.");
+    }
+    void poll();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
   const paidPlans = useMemo(() => plans.filter((plan) => !plan.is_custom), [plans]);
   const customPlan = plans.find((plan) => plan.is_custom) || fallbackPlans[3];
   const customPhone = splitE164Phone(customForm.phone);
@@ -153,13 +191,13 @@ export default function PricingPlansSection({ className = "", source = "billing"
     return response.data;
   }
 
-  async function loadRazorpay() {
-    if (window.Razorpay) return;
+  async function loadCashfree() {
+    if (window.Cashfree) return;
     await new Promise<void>((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
       script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Razorpay checkout failed to load"));
+      script.onerror = () => reject(new Error("Cashfree checkout failed to load"));
       document.body.appendChild(script);
     });
   }
@@ -201,32 +239,17 @@ export default function PricingPlansSection({ className = "", source = "billing"
     setMessage(null);
     setError(null);
     try {
-      await loadRazorpay();
+      await loadCashfree();
       const order = await createBillingOrder({ plan_code: plan.code, billing_cycle: billingCycle });
-      const Razorpay = window.Razorpay;
-      if (!Razorpay) throw new Error("Razorpay checkout unavailable");
-
-      new Razorpay({
-        key: order.data.key_id,
-        amount: order.data.amount,
-        currency: order.data.currency,
-        name: "Munshi AI",
-        description: `${plan.name} ${billingCycle} subscription`,
-        order_id: order.data.order_id,
-        handler: async (response: Record<string, string>) => {
-          await verifyBillingPayment({
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-            plan_code: plan.code,
-            billing_cycle: billingCycle
-          });
-          await refreshBillingStatus();
-          triggerDataRefresh();
-          setMessage(`${plan.name} plan activated successfully.`);
-        },
-        theme: { color: "#6D28D9" }
-      }).open();
+      const Cashfree = window.Cashfree;
+      if (!Cashfree) throw new Error("Cashfree checkout unavailable");
+      const mode = (order.data.cashfree_mode || "sandbox") as "production" | "sandbox";
+      const paymentSessionId = order.data.payment_session_id || "";
+      const result = await Cashfree({ mode }).checkout({
+        paymentSessionId,
+        redirectTarget: "_self"
+      });
+      if (result?.error) throw new Error(result.error.message || "Cashfree checkout failed");
     } catch (caught) {
       setError(getErrorMessage(caught, "Payment start failed."));
     } finally {

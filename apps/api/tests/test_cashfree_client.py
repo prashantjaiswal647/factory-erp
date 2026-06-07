@@ -54,3 +54,24 @@ def test_create_subscription_body(monkeypatch):
     assert result["subscription_id"] == "sub_1"
     assert captured["json"]["plan_id"] == "plan"
     assert captured["json"]["subscription_id"] == "sub_1"
+
+
+def test_create_order_uses_payment_gateway_order_contract(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured.update(method=method, url=url, **kwargs)
+        return httpx.Response(200, json={"order_id": "order_1", "payment_session_id": "session_1"})
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    result = client().create_order(
+        {
+            "order_id": "order_1",
+            "order_amount": 999,
+            "order_currency": "INR",
+            "customer_details": {"customer_id": "factory_1", "customer_phone": "9999999999"},
+        }
+    )
+    assert result["payment_session_id"] == "session_1"
+    assert captured["url"].endswith("/orders")
+    assert captured["json"]["order_id"] == "order_1"

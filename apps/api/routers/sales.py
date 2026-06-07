@@ -484,6 +484,19 @@ class InvoiceDashboardResponse(BaseModel):
     invoices: list[InvoiceDocumentSummary]
 
 
+class InvoiceFromSaleRequest(BaseModel):
+    invoice_type: str = "tax_invoice"
+    tax_rate: float = 18.0
+    payment_method: str = "Cash"
+    notes: str | None = None
+
+
+class InvoiceFromSaleResponse(BaseModel):
+    invoice_id: int
+    invoice_number: str
+    pdf_url: str
+
+
 def build_invoice_details(payload: DailySaleCreate) -> str:
     details = []
     for item in payload.items:
@@ -1625,6 +1638,113 @@ def list_invoice_documents(
         total_paid=to_money(totals[2]),
         total_due=to_money(totals[3]),
         invoices=invoice_summaries,
+    )
+
+
+@router.post("/invoices/from-sale/{sale_id}", response_model=InvoiceFromSaleResponse)
+def create_invoice_from_sale(
+    sale_id: int,
+    payload: InvoiceFromSaleRequest = InvoiceFromSaleRequest(),
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = factory_id_text(current_user.factory_id)
+    sale = (
+        db.query(DailySale)
+        .filter(factory_id_filter(DailySale.factory_id, factory_id))
+        .filter(DailySale.id == sale_id)
+        .first()
+    )
+    if sale is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sale not found")
+
+    existing = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .order_by(InvoiceDocument.id.desc())
+        .all()
+    )
+    for document in existing:
+        sale_ids = (document.payload_json or {}).get("invoice", {}).get("sale_ids", [])
+        if sale_id in sale_ids:
+            return InvoiceFromSaleResponse(
+                invoice_id=document.id,
+                invoice_number=document.invoice_number,
+                pdf_url=f"/api/invoices/{document.id}/pdf",
+            )
+
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+    customer = (
+        db.query(Customer)
+        .filter(factory_id_filter(Customer.factory_id, factory_id))
+        .filter(Customer.id == sale.customer_id)
+        .first()
+    )
+    if customer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    invoice_type = payload.invoice_type if payload.invoice_type in {"tax_invoice", "bill_of_supply"} else "tax_invoice"
+    invoice_number = allocate_invoice_number(db, factory, invoice_type)
+    subtotal = to_money(sale.total_amount or sale.total_bill)
+    tax_rate = max(0.0, float(payload.tax_rate or 0.0)) if invoice_type == "tax_invoice" else 0.0
+    intra_state = is_intra_state_supply(factory, customer.gst_number, customer.place)
+    total_tax = to_money(subtotal * Decimal(str(tax_rate / 100)))
+    cgst = to_money(total_tax / 2) if intra_state else Decimal("0.00")
+    sgst = to_money(total_tax / 2) if intra_state else Decimal("0.00")
+    igst = total_tax if not intra_state else Decimal("0.00")
+    total = to_money(subtotal + cgst + sgst + igst)
+    amount_paid = to_money(sale.amount_paid or sale.initial_payment)
+    invoice_payload = {
+        "event": "invoice.created_from_sale",
+        "factory_id": factory_id,
+        "invoice": {
+            "invoice_id": invoice_number,
+            "invoice_type": invoice_type,
+            "sale_ids": [sale.id],
+            "invoice_date": sale.date,
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "customer_phone": customer_display_phone(customer),
+            "customer_place": customer.place,
+            "payment_method": payload.payment_method,
+            "bill_total": total,
+            "amount_paid": amount_paid,
+            "customer_total_due": max(Decimal("0.00"), total - amount_paid),
+            "status": "created",
+        },
+        "items": [{
+            "product_size_ml": sale.product_size_ml,
+            "variety": sale.variety,
+            "packaging_size_name": sale.packaging_size_name,
+            "boxes_sold": sale.boxes_sold,
+            "loose_packets_sold": sale.loose_packets_sold,
+            "rate_per_box": sale.rate_per_box,
+            "rate_per_packet": sale.rate_per_packet,
+            "line_total": subtotal,
+            "tax_rate": tax_rate,
+        }],
+        "buyer_gstin": customer.gst_number,
+        "place_of_supply": customer.place,
+        "tax_rate": tax_rate,
+        "total_taxable_value": subtotal,
+        "total_cgst": cgst,
+        "total_sgst": sgst,
+        "total_igst": igst,
+        "notes": clean_optional_text(payload.notes),
+    }
+    document = create_invoice_document(
+        db=db,
+        factory_id=factory_id,
+        current_user=current_user,
+        customer=customer,
+        invoice_payload=invoice_payload,
+    )
+    sync_next_invoice_setting(db, factory, invoice_number, invoice_type)
+    db.commit()
+    return InvoiceFromSaleResponse(
+        invoice_id=document.id,
+        invoice_number=document.invoice_number,
+        pdf_url=f"/api/invoices/{document.id}/pdf",
     )
 
 

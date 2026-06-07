@@ -1,4 +1,4 @@
-import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletCards, ShieldAlert } from "lucide-react";
+import { Building2, CreditCard, Mail, Phone, RefreshCw, Save, UserRound, WalletCards, ShieldAlert, Send, CheckCircle2, ExternalLink } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
@@ -6,7 +6,7 @@ import axios from "axios";
 import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { useAuth } from "../context/AuthContext";
-import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile } from "../lib/api";
+import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile, connectTelegram, disconnectTelegram, api } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
@@ -22,8 +22,13 @@ export default function ProfilePage() {
     full_name: user?.full_name || user?.username || "",
     email: user?.user_id || "",
     phone_country_code: splitE164Phone(user?.phone_number).country.dialCode,
-    phone_number: splitE164Phone(user?.phone_number).localNumber
+    phone_number: splitE164Phone(user?.phone_number).localNumber,
+    preferred_language: (user?.preferred_language || "hinglish") as "en" | "hi" | "hinglish",
   });
+
+  const [telegramCode, setTelegramCode] = useState("");
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   const [passwordForm, setPasswordForm] = useState({
     current_password: "",
@@ -75,6 +80,48 @@ export default function ProfilePage() {
       }
     } finally {
       setIsChangingPassword(false);
+    }
+  }
+
+  async function handleConnectTelegram() {
+    setIsGeneratingCode(true);
+    try {
+      const response = await connectTelegram();
+      setTelegramCode(response.data.code);
+      setToast("Verification code generated!");
+    } catch {
+      setToast("Failed to generate verification code.");
+    } finally {
+      setIsGeneratingCode(false);
+    }
+  }
+
+  async function handleDisconnectTelegram() {
+    setIsDisconnecting(true);
+    try {
+      await disconnectTelegram();
+      updateUser({ telegram_chat_id: null, telegram_id: null });
+      setTelegramCode("");
+      setToast("Telegram disconnected.");
+    } catch {
+      setToast("Failed to disconnect Telegram.");
+    } finally {
+      setIsDisconnecting(false);
+    }
+  }
+
+  async function checkTelegramStatus() {
+    try {
+      const response = await api.get("/users/me");
+      updateUser(response.data);
+      if (response.data.telegram_chat_id) {
+        setTelegramCode("");
+        setToast("Telegram connected successfully!");
+      } else {
+        setToast("Not verified yet. Please message the bot.");
+      }
+    } catch {
+      setToast("Failed to check status.");
     }
   }
 
@@ -169,12 +216,14 @@ export default function ProfilePage() {
     const response = await updateUserProfile({
       full_name: form.full_name,
       country_code: form.phone_country_code,
-      phone_number: form.phone_number
+      phone_number: form.phone_number,
+      preferred_language: form.preferred_language,
     });
     updateUser({
       full_name: response.data.full_name,
       phone_number: response.data.phone_number,
-      user_id: response.data.user_id
+      user_id: response.data.user_id,
+      preferred_language: response.data.preferred_language,
     });
     setIsEditing(false);
     setToast("Profile saved.");
@@ -257,6 +306,24 @@ export default function ProfilePage() {
               </div>
               <p className="mt-3 text-sm font-semibold text-zinc-950">{user?.factory_name ?? "Not assigned"}</p>
             </div>
+            {user?.role === "Owner" ? (
+              <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                <span className="text-xs font-semibold uppercase text-zinc-500">Morning Briefing Language</span>
+                <select
+                  className="mt-3 h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-950 disabled:border-transparent disabled:bg-transparent disabled:px-0"
+                  disabled={!isEditing}
+                  value={form.preferred_language}
+                  onChange={(event) => setForm((current) => ({
+                    ...current,
+                    preferred_language: event.target.value as "en" | "hi" | "hinglish",
+                  }))}
+                >
+                  <option value="en">English</option>
+                  <option value="hi">Hindi</option>
+                  <option value="hinglish">Hinglish</option>
+                </select>
+              </label>
+            ) : null}
           </div>
 
           {isEditing ? (
@@ -401,6 +468,107 @@ export default function ProfilePage() {
           </form>
         </section>
       )}
+
+      <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" data-testid="telegram-binding-section">
+        <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">
+          <div className="flex items-center gap-2">
+            <Send className="h-5 w-5 text-brand-600" />
+            <h2 className="text-lg font-semibold text-zinc-950">Telegram Notifications</h2>
+          </div>
+          <p className="text-sm text-zinc-500">Connect your personal Telegram account to receive morning briefings and production alerts directly.</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-zinc-700">Status</p>
+              <div className="mt-1 flex items-center gap-2">
+                {user?.telegram_chat_id ? (
+                  <>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      Connected
+                    </span>
+                    <span className="text-xs text-zinc-500">Chat ID: {user.telegram_chat_id}</span>
+                  </>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-zinc-600">
+                    Not Connected
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {user?.telegram_chat_id ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleConnectTelegram}
+                    disabled={isGeneratingCode}
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition disabled:opacity-50"
+                  >
+                    Reconnect
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDisconnectTelegram}
+                    disabled={isDisconnecting}
+                    className="inline-flex h-9 items-center justify-center rounded-md bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 transition disabled:opacity-50"
+                  >
+                    Disconnect
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleConnectTelegram}
+                  disabled={isGeneratingCode}
+                  className="inline-flex h-9 items-center justify-center rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 transition disabled:opacity-50"
+                >
+                  Connect Telegram
+                </button>
+              )}
+            </div>
+          </div>
+
+          {telegramCode && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50/30 p-4 space-y-3">
+              <p className="text-sm font-semibold text-brand-900">One-Time Binding Code</p>
+              <div className="flex items-center gap-4">
+                <span className="inline-block rounded-md bg-white border border-brand-200 px-4 py-2 text-2xl font-mono font-bold tracking-widest text-brand-700 shadow-sm">
+                  {telegramCode}
+                </span>
+                <button
+                  type="button"
+                  onClick={checkTelegramStatus}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 transition"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Verify Status
+                </button>
+              </div>
+              <p className="text-xs text-zinc-500">
+                1. Open your factory's Telegram bot: {user?.telegram_bot_username ? (
+                  <a
+                    href={`https://t.me/${user.telegram_bot_username}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 text-brand-600 font-semibold hover:underline"
+                  >
+                    @{user.telegram_bot_username} <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <span className="font-semibold">your Telegram bot</span>
+                )}
+                <br />
+                2. Send the code <span className="font-semibold">{telegramCode}</span> directly to the bot.
+                <br />
+                3. Click <strong>Verify Status</strong> above to complete the connection. Code expires in 10 minutes.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white shadow-sm" data-testid="change-password-section">
         <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">

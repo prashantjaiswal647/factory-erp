@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -30,10 +31,13 @@ async def cashfree_webhook(request: Request, db: Session = Depends(get_db)):
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    event_type = str(payload.get("type") or data.get("event_type") or "")
+    payment = data.get("payment") if isinstance(data.get("payment"), dict) else {}
+    order = data.get("order") if isinstance(data.get("order"), dict) else {}
     event_id = payload.get("event_id") or data.get("event_id")
     if not event_id:
-        raise HTTPException(status_code=400, detail="Cashfree event_id is required")
-    event_type = str(payload.get("type") or data.get("event_type") or "")
+        event_key = f"{event_type}:{order.get('order_id', '')}:{payment.get('cf_payment_id', '')}:{payment.get('payment_status', '')}"
+        event_id = hashlib.sha256(event_key.encode("utf-8")).hexdigest()
     event_id = str(event_id)
     event = (
         db.query(CashfreeWebhookEvent)
