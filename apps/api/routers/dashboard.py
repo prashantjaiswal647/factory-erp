@@ -143,6 +143,7 @@ def dashboard_subscription_status(
     )
 
 
+@router.get("/stats", response_model=AiDashboardStats, include_in_schema=False)
 @router.get("/summary", response_model=AiDashboardStats)
 def get_dashboard_summary(
     current_user: User = Depends(check_permissions(DASHBOARD_ROLES)),
