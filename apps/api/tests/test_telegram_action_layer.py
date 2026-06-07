@@ -22,10 +22,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
-os.environ.setdefault("N8N_API_KEY", "test-n8n-secret-integration")
-
 from db import get_db
 from routers.telegram_actions import router
+
+
+TEST_N8N_API_KEY = "test-n8n-secret-integration"
+_ORIGINAL_N8N_API_KEY = None
 
 
 def _apply_httpx_patch():
@@ -42,7 +44,17 @@ def _apply_httpx_patch():
 
 
 def setup_module(module):
+    global _ORIGINAL_N8N_API_KEY
+    _ORIGINAL_N8N_API_KEY = os.environ.get("N8N_API_KEY")
+    os.environ["N8N_API_KEY"] = TEST_N8N_API_KEY
     _apply_httpx_patch()
+
+
+def teardown_module(module):
+    if _ORIGINAL_N8N_API_KEY is None:
+        os.environ.pop("N8N_API_KEY", None)
+    else:
+        os.environ["N8N_API_KEY"] = _ORIGINAL_N8N_API_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +67,7 @@ def build_app():
     return app
 
 
-VALID_HEADERS = {"X-N8N-API-KEY": "test-n8n-secret-integration"}
+VALID_HEADERS = {"X-N8N-API-KEY": TEST_N8N_API_KEY}
 
 FACTORY_1_CHAT = "chat_factory_1_integration"
 FACTORY_2_CHAT = "chat_factory_2_integration"
