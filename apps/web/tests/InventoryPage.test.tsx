@@ -12,11 +12,15 @@ vi.mock("../src/lib/api", async () => {
   };
 });
 
-vi.mock("../src/context/AuthContext", () => ({
-  useAuth: () => ({
-    user: { role: "Owner", factory_id: 1 }
-  })
-}));
+vi.mock("../src/context/AuthContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/context/AuthContext")>();
+  return {
+    ...actual,
+    useAuth: () => ({
+      user: { role: "Owner", factory_id: 1 }
+    })
+  };
+});
 
 describe("InventoryPage Packaging Cleanup", () => {
   beforeEach(() => {
@@ -75,5 +79,4 @@ describe("InventoryPage Packaging Cleanup", () => {
     expect(screen.queryByText("Packaging KPIs")).not.toBeInTheDocument();
   });
 });
-
 
