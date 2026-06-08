@@ -1660,6 +1660,7 @@ export type TelegramConnectionStatus = {
   role: "Owner" | "Sub-Owner";
   telegram_username?: string | null;
   chat_id_verified: boolean;
+  welcome_sent_at?: string | null;
   last_message_at?: string | null;
   last_message_status?: "sent" | "failed" | null;
 };

@@ -161,6 +161,10 @@ export default function Integrations() {
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <Info label="Telegram Account" value={status?.telegram_username ? `@${status.telegram_username}` : "Connected account"} />
             <Info label="Chat ID" value={status?.chat_id_verified ? "Verified" : "-"} />
+            <Info
+              label="Welcome Message"
+              value={status?.welcome_sent_at ? "Sent" : status?.last_message_status === "failed" ? "Failed" : "Pending"}
+            />
             <Info label="Last message" value={formatDateTime(status?.last_message_at)} />
             <Info label="Last test status" value={status?.last_message_status || "-"} />
           </div>

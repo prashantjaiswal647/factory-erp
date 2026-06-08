@@ -15,6 +15,7 @@ from auth import get_current_user
 from db import Base, get_db
 from models import Factory, TelegramConnectToken, TelegramUserBinding, User
 from routers.integrations import router
+from services.telegram_delivery import TelegramDeliveryError
 
 
 if "app" not in inspect.signature(httpx.Client.__init__).parameters:
@@ -104,6 +105,29 @@ def webhook(client: TestClient, raw_token: str, chat_id: str = "10001", username
     )
 
 
+def menu_webhook(client: TestClient, chat_id: str):
+    return client.post(
+        "/api/integrations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+        json={"update_id": 2, "message": {"text": "/menu", "chat": {"id": chat_id}}},
+    )
+
+
+def callback_webhook(client: TestClient, chat_id: str, callback_data: str):
+    return client.post(
+        "/api/integrations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+        json={
+            "update_id": 3,
+            "callback_query": {
+                "id": "callback-1",
+                "data": callback_data,
+                "message": {"chat": {"id": chat_id}},
+            },
+        },
+    )
+
+
 def test_connect_link_generation_is_opaque_and_factory_bound(telegram_app):
     client, SessionLocal, _ = telegram_app
     raw_token, payload = create_link(client)
@@ -152,6 +176,8 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
     assert response.json()["status"] == "connected"
     assert replay.json()["status"] == "invalid"
     sender.assert_called_once()
+    assert "Factory Details" in sender.call_args.args[1]
+    assert sender.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "owner_today_summary"
 
     db = SessionLocal()
     try:
@@ -165,6 +191,7 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
         binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.user_id == 11).one()
         assert binding.role == "Owner"
         assert binding.telegram_chat_id == "10001"
+        assert binding.welcome_sent_at is not None
         assert token.used_at is not None
     finally:
         db.close()
@@ -263,3 +290,45 @@ def test_supervisor_cannot_access_user_telegram_integration(telegram_app):
     assert client.get("/api/integrations/telegram/status").status_code == 403
     assert client.post("/api/integrations/telegram/test-message").status_code == 403
     assert client.post("/api/integrations/telegram/disconnect").status_code == 403
+
+
+def test_role_menu_and_callbacks_resolve_user_binding(telegram_app):
+    client, _, active_user_id = telegram_app
+    owner_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        webhook(client, owner_token, chat_id="owner-menu")
+
+    with patch("routers.integrations.send_telegram_message") as sender:
+        menu = menu_webhook(client, "owner-menu")
+        callback = callback_webhook(client, "owner-menu", "telegram_test_message")
+    assert menu.json()["status"] == "ok"
+    assert callback.json()["status"] == "ok"
+    assert "test successful" in callback.json()["message"]
+    assert sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
+
+    active_user_id["value"] = 12
+    sub_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        webhook(client, sub_token, chat_id="sub-menu")
+    forbidden = callback_webhook(client, "sub-menu", "owner_staff_actions")
+    assert forbidden.json()["status"] == "invalid"
+
+
+def test_unknown_chat_and_welcome_failure_are_safe(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    assert menu_webhook(client, "unknown-chat").json()["status"] == "invalid"
+    assert callback_webhook(client, "unknown-chat", "telegram_test_message").json()["status"] == "invalid"
+
+    raw_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message", side_effect=TelegramDeliveryError("delivery failed")):
+        response = webhook(client, raw_token, chat_id="failed-welcome")
+    assert response.json()["status"] == "connected"
+
+    db = SessionLocal()
+    try:
+        binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.telegram_chat_id == "failed-welcome").one()
+        assert binding.is_active is True
+        assert binding.welcome_sent_at is None
+        assert binding.last_message_status == "failed"
+    finally:
+        db.close()

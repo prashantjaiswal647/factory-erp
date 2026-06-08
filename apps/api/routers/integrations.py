@@ -17,6 +17,7 @@ from db import get_db
 from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken, TelegramUserBinding
 from telegram_crypto import encrypt_token, decrypt_token
 from services.telegram_delivery import TelegramDeliveryError, send_telegram_message
+from services.telegram_onboarding import inline_keyboard, render_callback_response, render_welcome_message
 
 router = APIRouter(tags=["integrations"])
 
@@ -56,6 +57,7 @@ class TelegramStatusResponse(BaseModel):
     role: str
     telegram_username: Optional[str] = None
     chat_id_verified: bool
+    welcome_sent_at: Optional[str] = None
     last_message_at: Optional[str] = None
     last_message_status: Optional[str] = None
 
@@ -83,6 +85,7 @@ class TelegramWebhookMessage(BaseModel):
 class TelegramWebhookUpdate(BaseModel):
     update_id: int | str
     message: Optional[TelegramWebhookMessage] = None
+    callback_query: Optional[dict] = None
 
 
 class N8NAIWebhookRequest(BaseModel):
@@ -259,6 +262,7 @@ def get_telegram_status(
         role=current_user.role,
         telegram_username=binding.telegram_username if binding else factory.telegram_username if legacy_owner_connected else None,
         chat_id_verified=connected,
+        welcome_sent_at=binding.welcome_sent_at.isoformat() if binding and binding.welcome_sent_at else None,
         last_message_at=(
             binding.last_message_at.isoformat()
             if binding and binding.last_message_at
@@ -354,7 +358,59 @@ def telegram_self_service_webhook(
     ):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
 
+    if payload.callback_query:
+        callback = payload.callback_query
+        callback_data = str(callback.get("data") or "")
+        callback_message = callback.get("message") or {}
+        chat_id = str((callback_message.get("chat") or {}).get("id") or "")
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True),
+        ).first()
+        if binding is None:
+            return TelegramActionResponse(status="invalid", message="Telegram account is not connected")
+        user = db.query(User).filter(
+            User.id == binding.user_id,
+            User.factory_id == binding.factory_id,
+            User.is_active.is_(True),
+        ).first()
+        factory = db.query(Factory).filter(Factory.id == binding.factory_id, Factory.is_active.is_(True)).first()
+        if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
+            return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
+        allowed = {button["callback_data"] for row in inline_keyboard(binding.role)["inline_keyboard"] for button in row}
+        if callback_data not in allowed:
+            return TelegramActionResponse(status="invalid", message="This action is not available for your role")
+        factory._telegram_target_chat_id = chat_id
+        response_text = render_callback_response(db, binding, callback_data)
+        try:
+            send_telegram_message(factory, response_text, reply_markup=inline_keyboard(binding.role))
+            binding.last_message_at = _utcnow()
+            binding.last_message_status = "sent"
+            db.commit()
+        except TelegramDeliveryError:
+            binding.last_message_status = "failed"
+            db.commit()
+        return TelegramActionResponse(status="ok", message=response_text)
+
     message = payload.message
+    if message is not None and (message.text or "").strip() == "/menu":
+        chat_id = str(message.chat.id).strip()
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True),
+        ).first()
+        if binding is None:
+            return TelegramActionResponse(status="invalid", message="Telegram account is not connected")
+        user = db.query(User).filter(User.id == binding.user_id, User.factory_id == binding.factory_id).first()
+        factory = db.query(Factory).filter(Factory.id == binding.factory_id).first()
+        if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
+            return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
+        factory._telegram_target_chat_id = chat_id
+        send_telegram_message(factory, "Munshi AI menu", reply_markup=inline_keyboard(binding.role))
+        binding.last_message_at = _utcnow()
+        binding.last_message_status = "sent"
+        db.commit()
+        return TelegramActionResponse(status="ok", message="Menu sent")
     if message is None or not (message.text or "").startswith("/start"):
         return TelegramActionResponse(status="ignored", message="Update ignored")
     parts = (message.text or "").strip().split(maxsplit=1)
@@ -442,8 +498,13 @@ def telegram_self_service_webhook(
     try:
         send_telegram_message(
             factory,
-            "✅ Munshi AI Telegram connected successfully. Ab aapko daily morning briefing yahin milegi.",
+            render_welcome_message(factory, owner, binding),
+            reply_markup=inline_keyboard(owner.role),
         )
+        binding.welcome_sent_at = _utcnow()
+        binding.last_message_at = binding.welcome_sent_at
+        binding.last_message_status = "sent"
+        db.commit()
     except TelegramDeliveryError:
         binding.last_message_status = "failed"
         if owner.role == "Owner":

@@ -1690,6 +1690,7 @@ class TelegramUserBinding(TenantMixin, Base):
     telegram_username = Column(String(255), nullable=True)
     telegram_first_name = Column(String(255), nullable=True)
     telegram_connected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    welcome_sent_at = Column(DateTime(timezone=True), nullable=True)
     last_message_at = Column(DateTime(timezone=True), nullable=True)
     last_message_status = Column(String(30), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
