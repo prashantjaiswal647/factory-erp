@@ -1,7 +1,7 @@
-from auth import check_permissions, get_current_active_user, get_current_user
+from auth import OWNER_LEVEL_ROLES, check_permissions, get_current_active_user, get_current_user
 
 
-OWNER_ROLES = ["Owner", "Sub-Owner"]
+OWNER_ROLES = OWNER_LEVEL_ROLES
 PRODUCTION_ROLES = ["Owner", "Sub-Owner", "Supervisor", "Operator"]
 INVENTORY_ROLES = ["Owner", "Sub-Owner", "Supervisor", "Operator"]
 SALES_ROLES = ["Owner", "Sub-Owner", "Supervisor"]

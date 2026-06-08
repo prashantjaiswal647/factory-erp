@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { clearOutstandingBill, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import type { OutstandingBill, OutstandingCustomer, PaymentCreate } from "../lib/api";
 
 const initialPayment: PaymentCreate = {
@@ -47,7 +47,7 @@ export default function OutstandingPage() {
   const [expandedBillHistoryId, setExpandedBillHistoryId] = useState<number | null>(null);
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
-  const canDeleteOutstanding = user?.role === "Owner";
+  const canDeleteOutstanding = isOwnerLevelRole(user?.role);
 
   async function load() {
     setIsLoading(true);

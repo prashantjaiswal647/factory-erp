@@ -5,7 +5,7 @@ import axios from "axios";
 
 import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile, connectTelegram, disconnectTelegram, api } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
@@ -129,7 +129,7 @@ export default function ProfilePage() {
   const [isFactorySaving, setIsFactorySaving] = useState(false);
 
   useEffect(() => {
-    if (user?.role === 'Owner') {
+    if (isOwnerLevelRole(user?.role)) {
       void loadFactoryProfile();
     }
   }, [user]);
@@ -188,7 +188,7 @@ export default function ProfilePage() {
     try {
       const [statusResponse, historyResponse] = await Promise.all([
         getBillingStatus(),
-        user?.role === "Owner" ? getBillingHistory() : Promise.resolve({ data: [] as BillingHistoryItem[] })
+        isOwnerLevelRole(user?.role) ? getBillingHistory() : Promise.resolve({ data: [] as BillingHistoryItem[] })
       ]);
       setBillingStatus(statusResponse.data);
       setBillingHistory(historyResponse.data);
@@ -306,7 +306,7 @@ export default function ProfilePage() {
               </div>
               <p className="mt-3 text-sm font-semibold text-zinc-950">{user?.factory_name ?? "Not assigned"}</p>
             </div>
-            {user?.role === "Owner" ? (
+            {isOwnerLevelRole(user?.role) ? (
               <label className="block rounded-md border border-zinc-200 bg-zinc-50 p-4">
                 <span className="text-xs font-semibold uppercase text-zinc-500">Morning Briefing Language</span>
                 <select
@@ -337,7 +337,7 @@ export default function ProfilePage() {
         </form>
       </section>
 
-      {user?.role === "Owner" && factoryProfile && (
+      {isOwnerLevelRole(user?.role) && factoryProfile && (
         <section className="rounded-lg border border-zinc-200 bg-white shadow-sm">
           <div className="flex flex-col gap-1.5 border-b border-zinc-200 p-5">
             <h2 className="text-lg font-semibold text-zinc-950">Factory B2B Setup & Store Settings</h2>
@@ -650,7 +650,7 @@ export default function ProfilePage() {
               <RefreshCw className={`h-4 w-4 ${isBillingLoading ? "animate-spin" : ""}`} />
               Check Payment
             </button>
-            {user?.role === "Owner" ? (
+            {isOwnerLevelRole(user?.role) ? (
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700"
                 type="button"

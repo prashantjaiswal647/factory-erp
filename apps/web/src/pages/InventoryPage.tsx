@@ -3,7 +3,7 @@ import { Camera, ChevronDown, Download, Edit3, FileSpreadsheet, Loader2, Package
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { API_BASE_URL, deleteOnboardingItem, exportFinishedGoodsSnapshot, getInventory } from "../lib/api";
 import type { LiveStockRow } from "../lib/api";
 
@@ -51,7 +51,7 @@ const defaultCollapsed: Record<GroupKey, boolean> = {
 
 export default function InventoryPage() {
   const { user } = useAuth();
-  const canDelete = user?.role === "Owner";
+  const canDelete = isOwnerLevelRole(user?.role);
   const [rows, setRows] = useState<LiveStockRow[]>([]);
   const [activeFilter, setActiveFilter] = useState<InventoryFilter>("all");
   const [collapsed, setCollapsed] = useState<Record<GroupKey, boolean>>(defaultCollapsed);

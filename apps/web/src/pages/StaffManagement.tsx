@@ -35,9 +35,15 @@ import type { StaffMember, OpeningAttendancePayload, OpeningAttendanceResponse }
 import { useAuth } from "../context/AuthContext";
 import { validateLocalPhone } from "../lib/phoneCountries";
 
+const STAFF_ROLE_OPTIONS = [
+  { value: "sub_owner", label: "Sub Owner", ownerOnly: true },
+  { value: "supervisor", label: "Supervisor", ownerOnly: false },
+  { value: "worker", label: "Worker (Operator)", ownerOnly: false }
+] as const;
+
 export default function StaffManagement() {
   const { user } = useAuth();
-  const canDelete = user?.role === "Owner";
+  const isPrimaryOwner = user?.role === "Owner";
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -52,7 +58,7 @@ export default function StaffManagement() {
     phone: "",
     password: "",
     confirm_password: "",
-    role: "supervisor" as "supervisor" | "worker"
+    role: "supervisor" as "sub_owner" | "supervisor" | "worker"
   });
 
   const [showOpeningAttendance, setShowOpeningAttendance] = useState(false);
@@ -74,7 +80,7 @@ export default function StaffManagement() {
     member: StaffMember;
     name: string;
     phone: string;
-    role: "supervisor" | "worker";
+    role: "sub_owner" | "supervisor" | "worker";
     password?: string;
     confirm_password?: string;
     opening_attendance?: OpeningAttendanceResponse | null;
@@ -110,8 +116,8 @@ export default function StaffManagement() {
   }
 
   async function handleRemoveWorker(member: StaffMember) {
-    if (!canDelete) {
-      setToast("Access Denied: Only the Factory Owner is authorized to delete entries.");
+    if (!canManageMember(member)) {
+      setToast("You cannot remove this staff member.");
       return;
     }
     if (!member.worker_id) {
@@ -149,6 +155,12 @@ export default function StaffManagement() {
       )
     );
   }, [query, staff]);
+
+  function canManageMember(member: StaffMember) {
+    if (member.role === "Owner") return false;
+    if (user?.role === "Sub-Owner" && member.role === "Sub-Owner") return false;
+    return user?.role === "Owner" || user?.role === "Sub-Owner";
+  }
 
   // Handle staff creation
   async function handleCreateSubmit() {
@@ -356,8 +368,8 @@ export default function StaffManagement() {
   // Handle staff deletion
   async function handleDeleteConfirm() {
     if (!deleteModal) return;
-    if (!canDelete) {
-      setToast("Access Denied: Only the Factory Owner is authorized to delete entries.");
+    if (!canManageMember(deleteModal)) {
+      setToast("You cannot remove this staff member.");
       setDeleteModal(null);
       return;
     }
@@ -371,6 +383,27 @@ export default function StaffManagement() {
       setToast("Deletion failed. Please try again.");
     } finally {
       setIsDeleting(false);
+    }
+  }
+
+  async function handleStatusToggle(member: StaffMember) {
+    if (!canManageMember(member)) {
+      setToast("You cannot change this staff member's status.");
+      return;
+    }
+    setError("");
+    try {
+      await updateStaffMember(member.id, {
+        status: member.is_active === false ? "active" : "inactive"
+      });
+      setToast(member.is_active === false ? "Staff account activated." : "Staff account deactivated.");
+      await loadStaff();
+    } catch (caught) {
+      if (axios.isAxiosError(caught)) {
+        setError(caught.response?.data?.detail || "Status update failed.");
+      } else {
+        setError("Status update failed.");
+      }
     }
   }
 
@@ -513,9 +546,21 @@ export default function StaffManagement() {
                 onChange={(e) => setCreateForm({ ...createForm, role: e.target.value as any })}
                 data-testid="staff-role-select"
               >
-                <option value="supervisor">Supervisor</option>
-                <option value="worker">Worker (Operator)</option>
+                {STAFF_ROLE_OPTIONS.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={option.ownerOnly && !isPrimaryOwner}
+                  >
+                    {option.label}
+                  </option>
+                ))}
               </select>
+              {createForm.role === "sub_owner" ? (
+                <p className="mt-2 text-xs text-zinc-500">
+                  Owner jaise full access, lekin Owner ko remove ya edit nahi kar sakta.
+                </p>
+              ) : null}
             </label>
 
             {createForm.role === "worker" && (
@@ -738,7 +783,7 @@ export default function StaffManagement() {
                       </td>
                       <td className="px-5 py-4 text-right">
                         <div className="inline-flex gap-2">
-                          <button
+                          {canManageMember(member) ? <button
                             className="inline-grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-[#F3E8FF] hover:text-[#6D28D9] transition"
                             type="button"
                             title="Edit Staff Member"
@@ -747,15 +792,31 @@ export default function StaffManagement() {
                                 member,
                                 name: member.full_name || "",
                                 phone: member.phone_number || "",
-                                role: member.role === "Supervisor" ? "supervisor" : "worker",
+                                role:
+                                  member.role === "Sub-Owner"
+                                    ? "sub_owner"
+                                    : member.role === "Supervisor"
+                                      ? "supervisor"
+                                      : "worker",
                                 opening_attendance: member.opening_attendance ? { ...member.opening_attendance } : null
                               })
                             }
                             data-testid="edit-staff-button"
                           >
                             <Edit3 className="h-4 w-4" />
-                          </button>
-                          {canDelete ? (
+                          </button> : null}
+                          {canManageMember(member) ? (
+                            <button
+                              className="inline-grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-500 hover:bg-amber-50 hover:text-amber-700 transition"
+                              type="button"
+                              title={member.is_active === false ? "Activate Staff Member" : "Deactivate Staff Member"}
+                              onClick={() => void handleStatusToggle(member)}
+                              data-testid="toggle-staff-status-button"
+                            >
+                              {member.is_active === false ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                            </button>
+                          ) : null}
+                          {canManageMember(member) ? (
                             <button
                               className="inline-grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:bg-red-50 hover:text-red-600 transition"
                               type="button"
@@ -766,7 +827,7 @@ export default function StaffManagement() {
                               <Trash2 className="h-4 w-4" />
                             </button>
                           ) : null}
-                          {canDelete && member.role === "Operator" && member.worker_id && (
+                          {canManageMember(member) && member.role === "Operator" && member.worker_id && (
                             <button
                               className="inline-flex h-9 items-center gap-1.5 px-3 rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 transition font-semibold text-xs"
                               type="button"
@@ -835,8 +896,15 @@ export default function StaffManagement() {
                   value={editModal.role}
                   onChange={(e) => setEditModal({ ...editModal, role: e.target.value as any })}
                 >
-                  <option value="supervisor">Supervisor</option>
-                  <option value="worker">Worker (Operator)</option>
+                  {STAFF_ROLE_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.ownerOnly && !isPrimaryOwner}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -993,7 +1061,7 @@ export default function StaffManagement() {
                         />
                       </label>
                     </div>
-                  {canDelete && editModal.member.opening_attendance && (
+                  {canManageMember(editModal.member) && editModal.member.opening_attendance && (
                     <button
                       type="button"
                       className="mt-1 text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 bg-transparent border-none p-0 cursor-pointer"
@@ -1211,6 +1279,6 @@ export default function StaffManagement() {
 
 function displayRole(role: string) {
   if (role === "Operator") return "Worker";
-  if (role === "Sub-Owner") return "Sub-Owner";
+  if (role === "Sub-Owner") return "Sub Owner";
   return role;
 }

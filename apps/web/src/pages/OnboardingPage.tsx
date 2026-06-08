@@ -8,7 +8,7 @@ import BulkUploadSection from "../components/BulkUploadSection";
 import { EditMachineModal } from "../components/EditMachineModal";
 import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { useUpgrade } from "../context/UpgradeContext";
 
 const todayWorker: WorkerCreate = { name: "", country_code: "+91", phone: "", daily_wages: 0, duty_hours: 8 };
@@ -69,7 +69,7 @@ export default function OnboardingPage() {
   const [isSaving, setIsSaving] = useState(false);
   const { showToast, showUpgradeModal } = useUpgrade();
   const { updateUser, user } = useAuth();
-  const canDelete = user?.role === "Owner";
+  const canDelete = isOwnerLevelRole(user?.role);
 
   // Manual Finished Goods Stock States
   const [productSizeMl, setProductSizeMl] = useState<number>(0);
