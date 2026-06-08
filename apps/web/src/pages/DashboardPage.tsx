@@ -102,7 +102,7 @@ export default function DashboardPage() {
       if (inventoryRes.status === "fulfilled") setInventory(Array.isArray(inventoryRes.value.data) ? inventoryRes.value.data : []);
       if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
 
-      if (user?.role === "Owner") {
+      if (user?.role === "Owner" || user?.role === "Sub-Owner") {
         const ownerResults = await Promise.allSettled([getPendingSales(), getDashboardAnalytics()]);
         if (ownerResults[0].status === "fulfilled") {
           setPendingSales(Array.isArray(ownerResults[0].value.data) ? ownerResults[0].value.data : []);
@@ -308,7 +308,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {user?.role === "Owner" && safeArray(pendingSales).length > 0 ? (
+      {(user?.role === "Owner" || user?.role === "Sub-Owner") && safeArray(pendingSales).length > 0 ? (
         <PendingSalesApprovalSection
           message={approvalMessage}
           pendingSales={pendingSales}
@@ -435,4 +435,3 @@ function sizeFor(row: LiveStockRow, type: string) {
 function formatNumber(value: number) {
   return Number(value || 0).toLocaleString("en-IN");
 }
-

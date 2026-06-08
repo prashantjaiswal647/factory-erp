@@ -1792,7 +1792,7 @@ def download_invoice_pdf(
 
 @router.get("/pending", response_model=list[PendingSaleResponse])
 def list_pending_sales(
-    current_user: User = Depends(check_permissions(["Owner"])),
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
     try:
@@ -2154,7 +2154,7 @@ def clear_outstanding_order(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Supervisor role is not authorized to edit or delete operational data",
         )
-    if current_user.role != "Owner":
+    if current_user.role not in {"Owner", "Sub-Owner"}:
         return SalesOrderActionResponse(
             status="error",
             message="Access Denied: Only the Factory Owner is authorized to delete entries.",

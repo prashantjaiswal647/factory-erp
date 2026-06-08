@@ -1,12 +1,12 @@
 import logging
 import re
 import random
-from typing import Literal, Optional
+from typing import Optional
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status, BackgroundTasks
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -48,7 +48,12 @@ class StaffCreateRequest(BaseModel):
     country_code: str = Field(default="+91", min_length=1, max_length=8)
     phone_number: str = Field(..., min_length=1, max_length=50)
     password: str = Field(..., min_length=6, max_length=255)
-    role: Literal["sub_owner", "supervisor", "worker"]
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        return normalize_staff_role_input(value)
 
 
 class StaffResponse(BaseModel):
@@ -81,11 +86,16 @@ class SecureStaffCreateRequest(BaseModel):
     phone: str = Field(..., min_length=1, max_length=50)
     password: str = Field(..., min_length=8, max_length=255)
     confirm_password: Optional[str] = Field(default=None)
-    role: Literal["supervisor", "worker", "sub_owner"]
+    role: str
     email: Optional[str] = Field(default=None)
     status: Optional[str] = Field(default="active")
     notes: Optional[str] = Field(default=None)
     opening_attendance: Optional[OpeningAttendanceCreate] = None
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        return normalize_staff_role_input(value)
 
 
 class SecureStaffUpdateRequest(BaseModel):
@@ -93,10 +103,15 @@ class SecureStaffUpdateRequest(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     password: Optional[str] = Field(default=None)
     confirm_password: Optional[str] = Field(default=None)
-    role: Optional[Literal["supervisor", "worker", "sub_owner"]] = Field(default=None)
+    role: Optional[str] = Field(default=None)
     email: Optional[str] = Field(default=None)
     status: Optional[str] = Field(default=None)
     notes: Optional[str] = Field(default=None)
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str | None) -> str | None:
+        return normalize_staff_role_input(value) if value is not None else None
 
 
 class SecurityRequestFactoryIdRequest(BaseModel):
@@ -143,7 +158,16 @@ class WorkerProfileResponse(BaseModel):
 # Helper Functions
 # ---------------------------------------------------------------------------
 
+def normalize_staff_role_input(role: str) -> str:
+    normalized = role.strip().lower().replace("-", "_").replace(" ", "_")
+    allowed_roles = {"sub_owner", "supervisor", "worker"}
+    if normalized not in allowed_roles:
+        raise ValueError("Role must be Sub Owner, Supervisor, or Worker")
+    return normalized
+
+
 def normalize_staff_role(role: str) -> str:
+    role = normalize_staff_role_input(role)
     if role == "sub_owner":
         return "Sub-Owner"
     if role == "supervisor":

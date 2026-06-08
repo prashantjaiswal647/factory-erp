@@ -354,7 +354,7 @@ def status_payload(factory: Factory, current_user: User, res: Optional[dict] = N
         trial_days_remaining=res["days_left"] if res["effective_status"] == "trial_active" else remaining_trial_days(factory),
         is_access_allowed=is_access_allowed,
         access_allowed=is_access_allowed,
-        is_owner=(current_user.role == "Owner"),
+        is_owner=(current_user.role in {"Owner", "Sub-Owner"}),
         active_plan=res["active_plan"] or res["plan_name"],
         plan_name=res["plan_name"],
         plan_expires_at=res["plan_expires_at"],

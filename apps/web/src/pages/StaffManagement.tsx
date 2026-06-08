@@ -35,6 +35,12 @@ import type { StaffMember, OpeningAttendancePayload, OpeningAttendanceResponse }
 import { useAuth } from "../context/AuthContext";
 import { validateLocalPhone } from "../lib/phoneCountries";
 
+const STAFF_ROLE_OPTIONS = [
+  { value: "sub_owner", label: "Sub Owner", ownerOnly: true },
+  { value: "supervisor", label: "Supervisor", ownerOnly: false },
+  { value: "worker", label: "Worker (Operator)", ownerOnly: false }
+] as const;
+
 export default function StaffManagement() {
   const { user } = useAuth();
   const isPrimaryOwner = user?.role === "Owner";
@@ -540,9 +546,15 @@ export default function StaffManagement() {
                 onChange={(e) => setCreateForm({ ...createForm, role: e.target.value as any })}
                 data-testid="staff-role-select"
               >
-                {isPrimaryOwner ? <option value="sub_owner">Sub Owner</option> : null}
-                <option value="supervisor">Supervisor</option>
-                <option value="worker">Worker (Operator)</option>
+                {STAFF_ROLE_OPTIONS.map((option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={option.ownerOnly && !isPrimaryOwner}
+                  >
+                    {option.label}
+                  </option>
+                ))}
               </select>
               {createForm.role === "sub_owner" ? (
                 <p className="mt-2 text-xs text-zinc-500">
@@ -884,11 +896,15 @@ export default function StaffManagement() {
                   value={editModal.role}
                   onChange={(e) => setEditModal({ ...editModal, role: e.target.value as any })}
                 >
-                  {isPrimaryOwner && editModal.member.role === "Sub-Owner" ? (
-                    <option value="sub_owner">Sub Owner</option>
-                  ) : null}
-                  <option value="supervisor">Supervisor</option>
-                  <option value="worker">Worker (Operator)</option>
+                  {STAFF_ROLE_OPTIONS.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.ownerOnly && !isPrimaryOwner}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 

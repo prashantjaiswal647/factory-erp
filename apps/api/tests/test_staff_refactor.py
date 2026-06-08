@@ -242,6 +242,50 @@ def test_owner_can_create_and_delete_sub_owner():
     assert delete_response.status_code == 204
 
 
+@pytest.mark.parametrize("role_value", ["sub_owner", "Sub-Owner", "Sub Owner"])
+def test_owner_can_create_sub_owner_from_supported_role_aliases(role_value):
+    global mock_user
+    client = build_client()
+    mock_user = SimpleNamespace(id=99, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
+
+    response = client.post(
+        "/api/v1/staff/create",
+        json={
+            "name": f"Alias {role_value}",
+            "phone": f"8888888{len(role_value):03d}",
+            "password": "securePassword1",
+            "role": role_value,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["role"] == "Sub-Owner"
+
+
+def test_owner_can_promote_supervisor_to_sub_owner():
+    global mock_user
+    db = TestingSessionLocal()
+    db.add(
+        User(
+            id=31,
+            factory_id=1,
+            username="supervisor31",
+            full_name="Supervisor Thirty One",
+            role="Supervisor",
+            password_hash="hash",
+        )
+    )
+    db.commit()
+    db.close()
+
+    client = build_client()
+    mock_user = SimpleNamespace(id=99, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
+    response = client.put("/api/v1/staff/31/update", json={"role": "Sub Owner"})
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "Sub-Owner"
+
+
 def test_sub_owner_can_manage_normal_staff_but_not_owner_or_sub_owner():
     global mock_user
     db = TestingSessionLocal()

@@ -3,7 +3,7 @@ import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { createDailySale, createPendingSaleOrder, downloadInvoicePdf, generateInvoiceFromSale, getInventory, getNextInvoiceNumber, searchCustomers, getFactoryProfile } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
 
@@ -331,7 +331,7 @@ export default function SalesEntryPage() {
         }],
       };
       
-      if (user?.role === "Owner") {
+      if (isOwnerLevelRole(user?.role)) {
         const response = await createDailySale(payload);
         setLastInvoiceId(response.data.invoice_document_id || null);
         setLastSaleId(response.data.sale_ids[0] || null);
@@ -406,7 +406,7 @@ export default function SalesEntryPage() {
         })),
       };
 
-      if (user?.role === "Owner") {
+      if (isOwnerLevelRole(user?.role)) {
         const response = await createDailySale(payload);
         setLastInvoiceId(response.data.invoice_document_id || null);
         setLastSaleId(response.data.sale_ids[0] || null);

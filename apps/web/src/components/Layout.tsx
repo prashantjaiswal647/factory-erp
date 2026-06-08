@@ -2,7 +2,7 @@ import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, Clipb
 import { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { getUserSubscription } from "../lib/api";
@@ -181,11 +181,11 @@ export default function Layout() {
 
   const isBillingRoute = location.pathname === "/billing" || location.pathname === "/plans";
   const isExpiredLock = layoutStatus?.is_expired === true || layoutStatus?.access_allowed === false;
-  if (isExpiredLock && user?.role !== "Owner") {
+  if (isExpiredLock && !isOwnerLevelRole(user?.role)) {
     return <StaffSubscriptionLock onSignOut={handleSignOut} />;
   }
 
-  if (isExpiredLock && user?.role === "Owner" && !isBillingRoute) {
+  if (isExpiredLock && isOwnerLevelRole(user?.role) && !isBillingRoute) {
     return <OwnerSubscriptionLock onRenew={() => navigate("/billing")} onSignOut={handleSignOut} />;
   }
 
@@ -391,7 +391,7 @@ export default function Layout() {
         </header>
 
         <main className="px-4 py-6 lg:px-8">
-          {user?.role === "Owner" && layoutStatus?.should_warn && accessAllowed && daysLeft !== undefined && daysLeft <= 10 && !isBannerDismissed ? (
+          {isOwnerLevelRole(user?.role) && layoutStatus?.should_warn && accessAllowed && daysLeft !== undefined && daysLeft <= 10 && !isBannerDismissed ? (
             <div
               className={`relative mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-semibold shadow-md transition-all duration-300 ${
                 daysLeft <= 3

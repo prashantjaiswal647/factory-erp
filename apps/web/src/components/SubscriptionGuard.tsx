@@ -5,7 +5,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { getBillingStatus } from "../lib/api";
 import type { BillingStatus } from "../lib/api";
 import LoadingState from "./LoadingState";
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 
 export default function SubscriptionGuard({ children }: { children: ReactNode }) {
   const { user, updateUser } = useAuth();
@@ -50,11 +50,11 @@ export default function SubscriptionGuard({ children }: { children: ReactNode })
     return <>{children}</>;
   }
 
-  if (location.pathname === "/billing" && user?.role === "Owner") {
+  if (location.pathname === "/billing" && isOwnerLevelRole(user?.role)) {
     return <>{children}</>;
   }
 
-  if (location.pathname === "/plans" && user?.role === "Owner") {
+  if (location.pathname === "/plans" && isOwnerLevelRole(user?.role)) {
     return <>{children}</>;
   }
 

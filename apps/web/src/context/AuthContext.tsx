@@ -232,7 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 function normalizeRole(role: string): UserRole {
   const value = role.trim().toUpperCase();
   if (value === "OWNER") return "Owner";
-  if (value === "SUB-OWNER" || value === "SUB_OWNER") return "Sub-Owner";
+  if (value === "SUB-OWNER" || value === "SUB_OWNER" || value === "SUB OWNER") return "Sub-Owner";
   if (value === "SUPERVISOR") return "Supervisor";
   return "Operator";
 }
