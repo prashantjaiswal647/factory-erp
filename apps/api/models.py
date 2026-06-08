@@ -74,6 +74,10 @@ class Factory(Base):
     telegram_token = Column(String(500), nullable=True)
     telegram_chat_id = Column(String(255), nullable=True)
     telegram_bot_username = Column(String(255), nullable=True)
+    telegram_username = Column(String(255), nullable=True)
+    telegram_connected_at = Column(DateTime(timezone=True), nullable=True)
+    telegram_last_message_at = Column(DateTime(timezone=True), nullable=True)
+    telegram_last_message_status = Column(String(30), nullable=True)
     subscription_override = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     plan_expires_at = Column(DateTime(timezone=True), nullable=True)
     override_plan = Column(String(255), nullable=True)
@@ -1658,6 +1662,21 @@ class TelegramActionSession(Base):
         ),
         Index("idx_tas_factory_chat", "factory_id", "chat_id", "status"),
         Index("idx_tas_expires", "expires_at", postgresql_where=text("status = 'pending'")),
+    )
+
+
+class TelegramConnectToken(TenantMixin, Base):
+    __tablename__ = "telegram_connect_tokens"
+
+    id = Column(Integer, primary_key=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_telegram_connect_factory_owner", "factory_id", "owner_id"),
     )
 
 

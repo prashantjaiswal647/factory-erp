@@ -2,8 +2,9 @@ import os
 import httpx
 import hashlib
 import hmac
+import secrets
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
@@ -13,8 +14,9 @@ from sqlalchemy.orm import Session
 from ai_agent import build_ai_tool_context, initialize_groq_llm
 from auth import check_permissions
 from db import get_db
-from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice
+from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken
 from telegram_crypto import encrypt_token, decrypt_token
+from services.telegram_delivery import TelegramDeliveryError, send_telegram_message
 
 router = APIRouter(tags=["integrations"])
 
@@ -41,6 +43,44 @@ class TelegramIntegrationResponse(BaseModel):
 
 class TelegramIntegrationRequest(BaseModel):
     telegram_bot_token: Optional[str] = Field(default=None, max_length=255)
+
+
+class TelegramConnectLinkResponse(BaseModel):
+    telegram_url: str
+    expires_at: str
+    status: str
+
+
+class TelegramStatusResponse(BaseModel):
+    connected: bool
+    telegram_username: Optional[str] = None
+    chat_id_verified: bool
+    last_message_at: Optional[str] = None
+    last_message_status: Optional[str] = None
+
+
+class TelegramActionResponse(BaseModel):
+    status: str
+    message: str
+
+
+class TelegramWebhookUser(BaseModel):
+    username: Optional[str] = None
+
+
+class TelegramWebhookChat(BaseModel):
+    id: int | str
+
+
+class TelegramWebhookMessage(BaseModel):
+    text: Optional[str] = None
+    chat: TelegramWebhookChat
+    from_user: Optional[TelegramWebhookUser] = Field(default=None, alias="from")
+
+
+class TelegramWebhookUpdate(BaseModel):
+    update_id: int | str
+    message: Optional[TelegramWebhookMessage] = None
 
 
 class N8NAIWebhookRequest(BaseModel):
@@ -102,6 +142,22 @@ def _normalize_token(token: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _telegram_bot_config() -> tuple[str, str]:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    username = (os.getenv("TELEGRAM_BOT_USERNAME") or "MunshiHermesAi_Bot").strip().lstrip("@")
+    if not token:
+        raise HTTPException(status_code=503, detail="Telegram connection is temporarily unavailable")
+    return token, username
+
+
+def _token_hash(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
 # Existing Endpoints for backward compatibility
 @router.get("/api/integrations/telegram", response_model=TelegramIntegrationResponse)
 def get_telegram_integration(
@@ -137,6 +193,211 @@ def save_telegram_integration(
         telegram_bot_token=factory.telegram_bot_token,
         is_configured=bool(factory.telegram_bot_token),
     )
+
+
+@router.post("/api/integrations/telegram/connect-link", response_model=TelegramConnectLinkResponse)
+def create_telegram_connect_link(
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    _, bot_username = _telegram_bot_config()
+    owner = (
+        db.query(User)
+        .filter(
+            User.id == current_user.id,
+            User.factory_id == current_user.factory_id,
+            User.role == "Owner",
+            User.is_active.is_(True),
+        )
+        .first()
+    )
+    if owner is None:
+        raise HTTPException(status_code=403, detail="Only an active factory owner can connect Telegram")
+
+    now = _utcnow()
+    db.query(TelegramConnectToken).filter(
+        TelegramConnectToken.factory_id == owner.factory_id,
+        TelegramConnectToken.owner_id == owner.id,
+        TelegramConnectToken.used_at.is_(None),
+    ).update({TelegramConnectToken.used_at: now}, synchronize_session=False)
+
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = now + timedelta(minutes=15)
+    db.add(
+        TelegramConnectToken(
+            factory_id=owner.factory_id,
+            owner_id=owner.id,
+            token_hash=_token_hash(raw_token),
+            expires_at=expires_at,
+        )
+    )
+    db.commit()
+    return TelegramConnectLinkResponse(
+        telegram_url=f"https://t.me/{bot_username}?start={raw_token}",
+        expires_at=expires_at.isoformat(),
+        status="pending",
+    )
+
+
+@router.get("/api/integrations/telegram/status", response_model=TelegramStatusResponse)
+def get_telegram_status(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    factory = _factory_for_user(db, current_user)
+    connected = bool((factory.telegram_chat_id or "").strip())
+    return TelegramStatusResponse(
+        connected=connected,
+        telegram_username=factory.telegram_username,
+        chat_id_verified=connected,
+        last_message_at=factory.telegram_last_message_at.isoformat() if factory.telegram_last_message_at else None,
+        last_message_status=factory.telegram_last_message_status,
+    )
+
+
+@router.post("/api/integrations/telegram/test-message", response_model=TelegramActionResponse)
+def send_telegram_test_message(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    factory = _factory_for_user(db, current_user)
+    if not factory.telegram_chat_id:
+        raise HTTPException(status_code=409, detail="Telegram is not connected")
+    try:
+        send_telegram_message(factory, "✅ Munshi AI test message successful. Telegram alerts are active.")
+    except TelegramDeliveryError as exc:
+        factory.telegram_last_message_at = _utcnow()
+        factory.telegram_last_message_status = "failed"
+        db.commit()
+        raise HTTPException(status_code=502, detail="Telegram test message could not be sent") from exc
+    factory.telegram_last_message_at = _utcnow()
+    factory.telegram_last_message_status = "sent"
+    db.commit()
+    return TelegramActionResponse(status="sent", message="Test message sent successfully")
+
+
+@router.post("/api/integrations/telegram/disconnect", response_model=TelegramActionResponse)
+def disconnect_telegram_integration(
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    factory = _factory_for_user(db, current_user)
+    chat_id = factory.telegram_chat_id
+    factory.telegram_chat_id = None
+    factory.telegram_username = None
+    factory.telegram_connected_at = None
+    factory.telegram_last_message_status = None
+    db.query(User).filter(
+        User.factory_id == current_user.factory_id,
+        User.telegram_chat_id == chat_id,
+    ).update(
+        {
+            User.telegram_chat_id: None,
+            User.telegram_id: None,
+            User.telegram_binding_code: None,
+            User.telegram_binding_expiry: None,
+        },
+        synchronize_session=False,
+    )
+    db.query(TelegramConnectToken).filter(
+        TelegramConnectToken.factory_id == current_user.factory_id,
+        TelegramConnectToken.used_at.is_(None),
+    ).update({TelegramConnectToken.used_at: _utcnow()}, synchronize_session=False)
+    db.commit()
+    return TelegramActionResponse(status="disconnected", message="Telegram disconnected")
+
+
+@router.post("/api/integrations/telegram/webhook", response_model=TelegramActionResponse)
+def telegram_self_service_webhook(
+    payload: TelegramWebhookUpdate,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(
+        None,
+        alias="X-Telegram-Bot-Api-Secret-Token",
+    ),
+    db: Session = Depends(get_db),
+):
+    expected_secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
+    if not expected_secret:
+        raise HTTPException(status_code=503, detail="Telegram webhook is not configured")
+    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(
+        x_telegram_bot_api_secret_token,
+        expected_secret,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
+
+    message = payload.message
+    if message is None or not (message.text or "").startswith("/start"):
+        return TelegramActionResponse(status="ignored", message="Update ignored")
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) != 2 or not parts[1].strip():
+        return TelegramActionResponse(status="invalid", message="Connection link is invalid or expired")
+
+    now = _utcnow()
+    connect_token = (
+        db.query(TelegramConnectToken)
+        .filter(TelegramConnectToken.token_hash == _token_hash(parts[1].strip()))
+        .with_for_update()
+        .first()
+    )
+    if connect_token is None or connect_token.used_at is not None:
+        return TelegramActionResponse(status="invalid", message="Connection link is invalid or already used")
+    expiry = connect_token.expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry <= now:
+        connect_token.used_at = now
+        db.commit()
+        return TelegramActionResponse(status="expired", message="Connection link has expired")
+
+    owner = (
+        db.query(User)
+        .filter(
+            User.id == connect_token.owner_id,
+            User.factory_id == connect_token.factory_id,
+            User.role == "Owner",
+            User.is_active.is_(True),
+        )
+        .first()
+    )
+    factory = db.query(Factory).filter(Factory.id == connect_token.factory_id).with_for_update().first()
+    if owner is None or factory is None:
+        connect_token.used_at = now
+        db.commit()
+        return TelegramActionResponse(status="invalid", message="Connection link is invalid")
+
+    chat_id = str(message.chat.id).strip()
+    conflicting_factory = db.query(Factory).filter(
+        Factory.telegram_chat_id == chat_id,
+        Factory.id != factory.id,
+    ).first()
+    if conflicting_factory is not None:
+        return TelegramActionResponse(status="conflict", message="This Telegram account is already connected")
+
+    bot_token, bot_username = _telegram_bot_config()
+    factory.telegram_chat_id = chat_id
+    factory.telegram_username = message.from_user.username if message.from_user else None
+    factory.telegram_connected_at = now
+    factory.telegram_bot_username = bot_username
+    factory.telegram_token = encrypt_token(bot_token)
+    factory.telegram_last_message_at = now
+    factory.telegram_last_message_status = "sent"
+    owner.telegram_chat_id = chat_id
+    owner.telegram_id = chat_id
+    owner.telegram_binding_code = None
+    owner.telegram_binding_expiry = None
+    connect_token.used_at = now
+    db.commit()
+
+    try:
+        send_telegram_message(
+            factory,
+            "✅ Munshi AI Telegram connected successfully. Ab aapko daily morning briefing yahin milegi.",
+        )
+    except TelegramDeliveryError:
+        factory.telegram_last_message_status = "failed"
+        db.commit()
+
+    return TelegramActionResponse(status="connected", message="Telegram connected successfully")
 
 
 # Existing LLM Webhook (Groq Llama3 fallback for n8n)
