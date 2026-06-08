@@ -59,7 +59,7 @@ def override_get_current_active_user():
 
 def override_require_owner():
     global mock_user
-    if mock_user and mock_user.role != "Owner":
+    if mock_user and mock_user.role not in {"Owner", "Sub-Owner"}:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Owner privileges required")
     return mock_user
@@ -212,6 +212,113 @@ def test_staff_edit_and_delete_with_multi_tenant_boundaries():
     mock_user = SimpleNamespace(id=1, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
     del_response = client.delete("/api/v1/staff/10/delete")
     assert del_response.status_code == 204
+
+
+def test_owner_can_create_and_delete_sub_owner():
+    global mock_user
+    client = build_client()
+    mock_user = SimpleNamespace(id=99, factory_id=1, username="owner1", full_name="Owner One", role="Owner")
+
+    create_response = client.post(
+        "/api/v1/staff/create",
+        json={
+            "name": "Second Owner",
+            "phone": "8888888801",
+            "password": "securePassword1",
+            "role": "sub_owner",
+        },
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["role"] == "Sub-Owner"
+
+    deactivate_response = client.put(
+        f"/api/v1/staff/{create_response.json()['id']}/update",
+        json={"status": "inactive"},
+    )
+    assert deactivate_response.status_code == 200
+    assert deactivate_response.json()["is_active"] is False
+
+    delete_response = client.delete(f"/api/v1/staff/{create_response.json()['id']}/delete")
+    assert delete_response.status_code == 204
+
+
+def test_sub_owner_can_manage_normal_staff_but_not_owner_or_sub_owner():
+    global mock_user
+    db = TestingSessionLocal()
+    owner = User(
+        id=1,
+        factory_id=1,
+        username="owner1",
+        full_name="Owner One",
+        role="Owner",
+        password_hash="hash",
+    )
+    sub_owner = User(
+        id=2,
+        factory_id=1,
+        username="subowner1",
+        full_name="Sub Owner One",
+        role="Sub-Owner",
+        password_hash="hash",
+    )
+    supervisor = User(
+        id=3,
+        factory_id=1,
+        username="supervisor1",
+        full_name="Supervisor One",
+        role="Supervisor",
+        password_hash="hash",
+    )
+    other_factory_staff = User(
+        id=4,
+        factory_id=2,
+        username="supervisor2",
+        full_name="Supervisor Two",
+        role="Supervisor",
+        password_hash="hash",
+    )
+    db.add_all([owner, sub_owner, supervisor, other_factory_staff])
+    db.commit()
+    db.close()
+
+    client = build_client()
+    mock_user = SimpleNamespace(
+        id=2,
+        factory_id=1,
+        username="subowner1",
+        full_name="Sub Owner One",
+        role="Sub-Owner",
+    )
+
+    list_response = client.get("/api/v1/staff/list")
+    assert list_response.status_code == 200
+    assert {item["id"] for item in list_response.json()} == {1, 2, 3}
+
+    owner_edit = client.put("/api/v1/staff/1/update", json={"name": "Changed Owner"})
+    assert owner_edit.status_code == 403
+
+    owner_delete = client.delete("/api/v1/staff/1/delete")
+    assert owner_delete.status_code == 403
+
+    create_owner = client.post(
+        "/api/v1/staff/create",
+        json={
+            "name": "Forbidden Owner",
+            "phone": "8888888802",
+            "password": "securePassword1",
+            "role": "sub_owner",
+        },
+    )
+    assert create_owner.status_code == 403
+
+    normal_staff_update = client.put("/api/v1/staff/3/update", json={"name": "Updated Supervisor"})
+    assert normal_staff_update.status_code == 200
+
+    cross_factory_update = client.put("/api/v1/staff/4/update", json={"name": "Cross Factory"})
+    assert cross_factory_update.status_code == 404
+
+    normal_staff_delete = client.delete("/api/v1/staff/3/delete")
+    assert normal_staff_delete.status_code == 204
 
 def test_otp_factory_id_extraction_gateway():
     global mock_user

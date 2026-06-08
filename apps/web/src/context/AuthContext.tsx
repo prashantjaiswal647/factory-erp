@@ -4,6 +4,11 @@ import type { ReactNode } from "react";
 import { api, getBillingStatus } from "../lib/api";
 
 export type UserRole = "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
+export const OWNER_LEVEL_ROLES: UserRole[] = ["Owner", "Sub-Owner"];
+
+export function isOwnerLevelRole(role?: string | null): boolean {
+  return role === "Owner" || role === "Sub-Owner" || role === "Sub Owner";
+}
 export type SubscriptionStatus = "trial_active" | "trial_expired" | "active" | "expired" | "cancelled" | "payment_pending" | "trial";
 
 type AuthUser = {

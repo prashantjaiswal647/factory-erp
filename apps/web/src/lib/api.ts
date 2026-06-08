@@ -372,7 +372,8 @@ export type StaffMember = {
   user_id?: string | null;
   full_name?: string | null;
   phone_number?: string | null;
-  role: "Sub-Owner" | "Supervisor" | "Operator";
+  role: "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
+  is_active?: boolean;
   factory_id?: number | null;
   last_login_at?: string | null;
   opening_attendance?: OpeningAttendanceResponse | null;

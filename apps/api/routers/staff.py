@@ -70,6 +70,7 @@ class SecureStaffResponse(BaseModel):
     full_name: str | None = None
     phone_number: str | None = None
     role: str
+    is_active: bool = True
     last_login_at: datetime | None = None
     opening_attendance: Optional[OpeningAttendanceResponse] = None
     worker_id: Optional[int] = None
@@ -158,6 +159,16 @@ def ensure_primary_owner(current_user: User) -> None:
         )
 
 
+def ensure_can_manage_staff_user(current_user: User, target_user: User) -> None:
+    if target_user.role == "Owner" and current_user.role != "Owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sub Owner cannot edit, deactivate, or remove an Owner",
+        )
+    if target_user.role == "Sub-Owner":
+        ensure_primary_owner(current_user)
+
+
 # Existing staff routers (preserved & secured)
 # ---------------------------------------------------------------------------
 
@@ -170,7 +181,7 @@ def list_staff(
         res = (
             db.query(User)
             .filter(User.factory_id == current_user.factory_id)
-            .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
+            .filter(User.role.in_(["Owner", "Sub-Owner", "Supervisor", "Operator"]))
             .order_by(User.full_name.asc().nullslast(), User.username.asc())
             .all()
         )
@@ -256,7 +267,6 @@ def delete_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    assert_owner_delete_permission(current_user)
     staff_user = (
         db.query(User)
         .filter(User.id == user_id)
@@ -269,11 +279,10 @@ def delete_staff(
     if staff_user.id == current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot delete your own account")
 
+    ensure_can_manage_staff_user(current_user, staff_user)
+
     if staff_user.role == "Owner":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Original Owner cannot be deleted")
-
-    if staff_user.role == "Sub-Owner":
-        ensure_primary_owner(current_user)
 
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
@@ -342,7 +351,7 @@ def secure_update_staff_std(
 
 @staff_v1_router.get("/list", response_model=list[SecureStaffResponse])
 def secure_list_staff(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
     try:
@@ -350,7 +359,7 @@ def secure_list_staff(
         res = (
             db.query(User)
             .filter(User.factory_id == current_user.factory_id)
-            .filter(User.role.in_(["Sub-Owner", "Supervisor", "Operator"]))
+            .filter(User.role.in_(["Owner", "Sub-Owner", "Supervisor", "Operator"]))
             .order_by(User.full_name.asc().nullslast(), User.username.asc())
             .all()
         )
@@ -456,7 +465,6 @@ def secure_delete_staff(
     current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    assert_owner_delete_permission(current_user)
     staff_user = (
         db.query(User)
         .filter(User.id == staff_id)
@@ -469,11 +477,10 @@ def secure_delete_staff(
     if staff_user.id == current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot delete your own account")
 
+    ensure_can_manage_staff_user(current_user, staff_user)
+
     if staff_user.role == "Owner":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Original Owner cannot be deleted")
-
-    if staff_user.role == "Sub-Owner":
-        ensure_primary_owner(current_user)
 
     if staff_user.role not in {"Sub-Owner", "Supervisor", "Operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This user cannot be deleted here")
@@ -618,6 +625,8 @@ def core_update_staff(staff_id: int, payload: SecureStaffUpdateRequest, current_
     if staff_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
 
+    ensure_can_manage_staff_user(current_user, staff_user)
+
     old_phone = staff_user.phone_number
     old_name = staff_user.full_name
     old_role = staff_user.role
@@ -648,6 +657,15 @@ def core_update_staff(staff_id: int, payload: SecureStaffUpdateRequest, current_
 
     if payload.role is not None:
         staff_user.role = normalize_staff_role(payload.role)
+
+    if payload.status is not None:
+        normalized_status = payload.status.strip().lower()
+        if normalized_status not in {"active", "inactive"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Status must be active or inactive",
+            )
+        staff_user.is_active = normalized_status == "active"
 
     # Sync corresponding Worker record if they are an Operator or were an Operator
     if staff_user.role == "Operator" or old_role == "Operator":

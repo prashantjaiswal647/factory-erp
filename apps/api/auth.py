@@ -672,8 +672,16 @@ def get_current_active_user(current_user: User = Depends(get_current_user)) -> U
     return current_user
 
 
+OWNER_LEVEL_ROLES = ["Owner", "Sub-Owner"]
+
+
 def normalize_role(role: str | None) -> str:
-    return (role or "").strip().lower()
+    normalized = (role or "").strip().lower().replace("_", "-").replace(" ", "-")
+    return "sub-owner" if normalized == "sub-owner" else normalized
+
+
+def is_owner_level_role(role: str | None) -> bool:
+    return normalize_role(role) in {normalize_role(item) for item in OWNER_LEVEL_ROLES}
 
 
 def check_permissions(allowed_roles: list[str]) -> Callable[[User], User]:
@@ -691,7 +699,7 @@ def check_permissions(allowed_roles: list[str]) -> Callable[[User], User]:
 
 
 def require_owner(current_user: User = Depends(get_current_user)) -> User:
-    return check_permissions(["Owner", "Sub-Owner"])(current_user)
+    return check_permissions(OWNER_LEVEL_ROLES)(current_user)
 
 
 def assert_owner_delete_permission(current_user: User) -> None:
