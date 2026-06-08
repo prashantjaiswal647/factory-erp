@@ -390,6 +390,9 @@ function InventoryGroupSection(props: {
 
 function InventoryTable(props: Parameters<typeof InventoryGroupSection>[0]) {
   const { group } = props;
+  if (group.key === "finished_goods") {
+    return <FinishedGoodsTable {...props} />;
+  }
   return (
     <table className="min-w-full text-xs">
       <thead className="bg-zinc-50 text-[11px] uppercase tracking-wider text-zinc-500">
@@ -424,6 +427,39 @@ function InventoryTable(props: Parameters<typeof InventoryGroupSection>[0]) {
   );
 }
 
+function FinishedGoodsTable(props: Parameters<typeof InventoryGroupSection>[0]) {
+  return (
+    <table className="min-w-full text-xs">
+      <thead className="bg-zinc-50 text-[11px] uppercase tracking-wider text-zinc-500">
+        <tr>
+          <SortableTh label="Size" sortKey="size" sort={props.sort} onSort={props.onSort} />
+          <SortableTh label="Item" sortKey="item" sort={props.sort} onSort={props.onSort} />
+          <Th>Details</Th>
+          <SortableTh label="Stock" sortKey="stock" sort={props.sort} onSort={props.onSort} />
+          <SortableTh label="Status" sortKey="status" sort={props.sort} onSort={props.onSort} />
+          <Th>Suggested Reorder</Th>
+          <Th><span className="sr-only">Actions</span></Th>
+        </tr>
+      </thead>
+      <tbody>
+        {props.group.rows.map((row) => (
+          <tr key={row.key} className="border-t border-zinc-100 align-top">
+            <td className={`whitespace-nowrap border-l-[3px] px-3 py-2 font-bold text-zinc-950 ${statusBar(row.status)}`}>{row.size || "-"}</td>
+            <td className="min-w-32 px-3 py-2 font-semibold text-zinc-950">{row.item || "-"}</td>
+            <td className="min-w-64 px-3 py-2 text-zinc-600">{finishedGoodsDetails(row)}</td>
+            <td className="min-w-36 px-3 py-2 font-semibold text-zinc-950">{finishedGoodsStock(row)}</td>
+            <td className="whitespace-nowrap px-3 py-2"><StatusBadge status={row.status} /></td>
+            <td className={`whitespace-nowrap px-3 py-2 font-bold ${reorderTone(row.status)}`} title="Estimated from the current low-stock threshold.">
+              {row.status === "In Stock" ? "-" : `${formatNumber(computeReorder(row.quantity, row.source.stock_type))} boxes`}
+            </td>
+            <td className="px-3 py-2"><RowActions {...props} row={row} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function MobileInventoryRow(props: {
   row: InventoryDisplayRow;
   expanded: boolean;
@@ -433,12 +469,14 @@ function MobileInventoryRow(props: {
   onDelete: (row: InventoryDisplayRow) => void;
   onImageUpload: (productId: number, file: File) => Promise<void>;
 }) {
+  const isFinishedGoods = bucketFor(props.row.source) === "finished_goods";
   return (
     <div className={`border-l-[3px] ${statusBar(props.row.status)}`}>
       <button className="w-full px-3 py-3 text-left" type="button" onClick={props.onToggle}>
         <span className="flex items-start justify-between gap-2">
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-zinc-950">{props.row.item}</span>
+            {isFinishedGoods ? <span className="block text-xs font-bold uppercase tracking-wide text-brand-700">{props.row.size || "-"}</span> : null}
+            <span className="block truncate text-sm font-semibold text-zinc-950">{props.row.item || "-"}</span>
             <span className="mt-1 block text-xs text-zinc-500">
               {formatNumber(props.row.quantity)} {props.row.unit}
               {props.row.status === "In Stock" ? "" : ` · suggested reorder ${computeReorder(props.row.quantity, props.row.source.stock_type)}`}
@@ -450,10 +488,10 @@ function MobileInventoryRow(props: {
       {props.expanded ? (
         <div className="bg-zinc-50 px-3 pb-3 pt-2">
           <dl className="grid grid-cols-2 gap-2 text-xs">
-            <Detail label="Category" value={groupLabel(props.row.source)} />
             <Detail label="Size" value={props.row.size} />
-            <Detail label="Details" value={detailSummary(props.row)} />
-            <Detail label="Unit" value={props.row.unit} />
+            <Detail label="Item" value={props.row.item || "-"} />
+            <Detail label="Details" value={isFinishedGoods ? finishedGoodsDetails(props.row) : detailSummary(props.row)} />
+            <Detail label="Stock" value={isFinishedGoods ? finishedGoodsStock(props.row) : `${formatNumber(props.row.quantity)} ${props.row.unit}`} />
           </dl>
           <div className="mt-3 flex gap-2">
             <Link className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700" to="/onboarding">
@@ -703,6 +741,39 @@ function detailSummary(row: InventoryDisplayRow) {
   if (bucket === "boxes") return source.price_per_box || source.price_per_unit ? `Rs ${source.price_per_box || source.price_per_unit}/box` : "-";
   if (bucket === "polybags_packing") return `${source.total_boras || 0} boras · ${source.weight_per_bora_kg || 0} kg/bora`;
   return source.variant_name || "-";
+}
+
+function finishedGoodsDetails(row: InventoryDisplayRow) {
+  const source = row.source;
+  const variety = source.variety || source.variant_name || "-";
+  const packaging = source.packaging_size_name || source.packaging_size || "-";
+  const piecesPerPacket = positiveNumberOrNull(source.pieces_per_packet);
+  const packetsPerBox = positiveNumberOrNull(source.packets_per_box_limit ?? source.packets_per_box);
+  const loosePackets = nonNegativeNumberOrNull(source.loose_packets);
+  const looseSummary = loosePackets ? ` · ${loosePackets} loose pkt` : "";
+  return `${variety} · ${packaging} · ${piecesPerPacket ?? "-"} pcs/pkt · ${packetsPerBox ?? "-"} pkt/box${looseSummary}`;
+}
+
+function finishedGoodsStock(row: InventoryDisplayRow) {
+  const source = row.source;
+  const boxes = nonNegativeNumberOrNull(source.total_boxes) ?? nonNegativeNumberOrNull(row.quantity);
+  const loosePackets = nonNegativeNumberOrNull(source.loose_packets) ?? 0;
+  const piecesPerPacket = positiveNumberOrNull(source.pieces_per_packet);
+  const packetsPerBox = positiveNumberOrNull(source.packets_per_box_limit ?? source.packets_per_box);
+  const totalPieces = boxes !== null && piecesPerPacket !== null && packetsPerBox !== null
+    ? (boxes * packetsPerBox + loosePackets) * piecesPerPacket
+    : null;
+  return `${boxes ?? "-"} boxes · ${loosePackets} loose pkt${totalPieces === null ? "" : ` · ${formatNumber(totalPieces)} pcs`}`;
+}
+
+function positiveNumberOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeNumberOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function statusFor(quantity: number, bucket: InventoryBucket): StockStatus {

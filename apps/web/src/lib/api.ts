@@ -572,6 +572,8 @@ export type LiveStockRow = {
   packets_per_box?: number | null;
   packets_per_box_limit?: number | null;
   current_quantity?: number | null;
+  total_boxes?: number | null;
+  loose_packets?: number | null;
   quantity: number;
   unit: string;
   price_per_unit?: number | null;
@@ -1650,6 +1652,32 @@ export function getTelegramIntegration() {
 
 export function saveTelegramIntegration(payload: { telegram_bot_token: string }) {
   return api.post<TelegramIntegration>("/api/integrations/telegram", payload);
+}
+
+export type TelegramConnectionStatus = {
+  connected: boolean;
+  telegram_username?: string | null;
+  chat_id_verified: boolean;
+  last_message_at?: string | null;
+  last_message_status?: "sent" | "failed" | null;
+};
+
+export function createTelegramConnectLink() {
+  return api.post<{ telegram_url: string; expires_at: string; status: "pending" }>(
+    "/api/integrations/telegram/connect-link"
+  );
+}
+
+export function getTelegramConnectionStatus() {
+  return api.get<TelegramConnectionStatus>("/api/integrations/telegram/status");
+}
+
+export function sendTelegramTestMessage() {
+  return api.post<{ status: string; message: string }>("/api/integrations/telegram/test-message");
+}
+
+export function disconnectTelegramIntegration() {
+  return api.post<{ status: string; message: string }>("/api/integrations/telegram/disconnect");
 }
 
 export function updateUserProfile(payload: {
