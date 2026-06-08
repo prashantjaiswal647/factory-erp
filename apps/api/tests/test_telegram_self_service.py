@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from auth import get_current_user
 from db import Base, get_db
-from models import Factory, TelegramConnectToken, User
+from models import Factory, TelegramConnectToken, TelegramUserBinding, User
 from routers.integrations import router
 
 
@@ -44,6 +44,8 @@ def telegram_app(monkeypatch):
     db.flush()
     db.add_all([
         User(id=11, factory_id=1, username="owner-a", password_hash="x", role="Owner", is_active=True),
+        User(id=12, factory_id=1, username="sub-owner-a", password_hash="x", role="Sub-Owner", is_active=True),
+        User(id=13, factory_id=1, username="supervisor-a", password_hash="x", role="Supervisor", is_active=True),
         User(id=22, factory_id=2, username="owner-b", password_hash="x", role="Owner", is_active=True),
     ])
     db.commit()
@@ -160,6 +162,9 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
         assert factory.telegram_username == "factory_owner"
         assert factory.telegram_connected_at is not None
         assert owner.telegram_chat_id == "10001"
+        binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.user_id == 11).one()
+        assert binding.role == "Owner"
+        assert binding.telegram_chat_id == "10001"
         assert token.used_at is not None
     finally:
         db.close()
@@ -215,3 +220,46 @@ def test_message_requires_connection_and_disconnect_is_factory_scoped(telegram_a
         assert db.query(Factory).filter(Factory.id == 2).one().telegram_chat_id == "chat-b"
     finally:
         db.close()
+
+
+def test_owner_and_sub_owner_bind_separate_chat_ids_and_status_is_user_scoped(telegram_app):
+    client, SessionLocal, active_user_id = telegram_app
+    owner_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        assert webhook(client, owner_token, chat_id="owner-chat", username="owner_user").json()["status"] == "connected"
+
+    active_user_id["value"] = 12
+    sub_owner_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        assert webhook(client, sub_owner_token, chat_id="sub-owner-chat", username="sub_owner_user").json()["status"] == "connected"
+
+    sub_status = client.get("/api/integrations/telegram/status")
+    assert sub_status.status_code == 200
+    assert sub_status.json()["role"] == "Sub-Owner"
+    assert sub_status.json()["telegram_username"] == "sub_owner_user"
+
+    active_user_id["value"] = 11
+    owner_status = client.get("/api/integrations/telegram/status")
+    assert owner_status.json()["role"] == "Owner"
+    assert owner_status.json()["telegram_username"] == "owner_user"
+
+    db = SessionLocal()
+    try:
+        bindings = db.query(TelegramUserBinding).filter(TelegramUserBinding.factory_id == 1).all()
+        assert {(row.user_id, row.telegram_chat_id) for row in bindings} == {
+            (11, "owner-chat"),
+            (12, "sub-owner-chat"),
+        }
+        assert db.query(Factory).filter(Factory.id == 1).one().telegram_chat_id == "owner-chat"
+    finally:
+        db.close()
+
+
+def test_supervisor_cannot_access_user_telegram_integration(telegram_app):
+    client, _, active_user_id = telegram_app
+    active_user_id["value"] = 13
+
+    assert client.post("/api/integrations/telegram/connect-link").status_code == 403
+    assert client.get("/api/integrations/telegram/status").status_code == 403
+    assert client.post("/api/integrations/telegram/test-message").status_code == 403
+    assert client.post("/api/integrations/telegram/disconnect").status_code == 403

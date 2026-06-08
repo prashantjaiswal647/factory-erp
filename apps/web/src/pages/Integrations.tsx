@@ -8,10 +8,12 @@ import {
   sendTelegramTestMessage,
 } from "../lib/api";
 import type { TelegramConnectionStatus } from "../lib/api";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 
 type ViewState = "loading" | "idle" | "connecting" | "connected" | "error";
 
 export default function Integrations() {
+  const { user } = useAuth();
   const [status, setStatus] = useState<TelegramConnectionStatus | null>(null);
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [message, setMessage] = useState("");
@@ -20,9 +22,21 @@ export default function Integrations() {
   const pollDeadline = useRef(0);
 
   useEffect(() => {
+    if (!isOwnerLevelRole(user?.role)) return;
     void refreshStatus();
     return stopPolling;
-  }, []);
+  }, [user?.role]);
+
+  if (!isOwnerLevelRole(user?.role)) {
+    return (
+      <div className="mx-auto w-full max-w-4xl">
+        <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <h1 className="text-xl font-semibold text-zinc-950">Telegram Integration</h1>
+          <p className="mt-2 text-sm text-zinc-600">Telegram integration is not available for your role.</p>
+        </section>
+      </div>
+    );
+  }
 
   function stopPolling() {
     if (pollTimer.current !== null) {

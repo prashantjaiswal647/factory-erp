@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from models import ActivityLog
+from models import ActivityLog, User
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,31 @@ def log_activity(
         )
         db.add(activity)
         db.commit()
+        if user_role in {"Sub-Owner", "Supervisor"}:
+            try:
+                from services.telegram_delivery import send_owner_action_alert
+
+                actor = db.query(User).filter(
+                    User.id == user_id,
+                    User.factory_id == factory_id,
+                ).first()
+                if actor is not None:
+                    send_owner_action_alert(
+                        db,
+                        int(factory_id),
+                        actor,
+                        activity.action_type,
+                        normalized_entity_type,
+                        entity_id,
+                        normalized_summary,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Telegram action alert failed and was suppressed factory_id=%s user_id=%s: %s",
+                    factory_id,
+                    user_id,
+                    type(exc).__name__,
+                )
     except Exception as exc:
         try:
             db.rollback()
