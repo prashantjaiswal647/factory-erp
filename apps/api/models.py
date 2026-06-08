@@ -1680,6 +1680,28 @@ class TelegramConnectToken(TenantMixin, Base):
     )
 
 
+class TelegramUserBinding(TenantMixin, Base):
+    __tablename__ = "telegram_user_bindings"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    role = Column(String(50), nullable=False, index=True)
+    telegram_chat_id = Column(String(255), nullable=False, unique=True, index=True)
+    telegram_username = Column(String(255), nullable=True)
+    telegram_first_name = Column(String(255), nullable=True)
+    telegram_connected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_message_at = Column(DateTime(timezone=True), nullable=True)
+    last_message_status = Column(String(30), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "user_id", name="uq_telegram_user_binding_factory_user"),
+        CheckConstraint("role IN ('Owner', 'Sub-Owner')", name="ck_telegram_user_binding_role"),
+    )
+
+
 class MorningBriefingLog(TenantMixin, Base):
     __tablename__ = "morning_briefing_log"
 

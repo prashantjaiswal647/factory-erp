@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ai_agent import build_ai_tool_context, initialize_groq_llm
 from auth import check_permissions
 from db import get_db
-from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken
+from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken, TelegramUserBinding
 from telegram_crypto import encrypt_token, decrypt_token
 from services.telegram_delivery import TelegramDeliveryError, send_telegram_message
 
@@ -53,6 +53,7 @@ class TelegramConnectLinkResponse(BaseModel):
 
 class TelegramStatusResponse(BaseModel):
     connected: bool
+    role: str
     telegram_username: Optional[str] = None
     chat_id_verified: bool
     last_message_at: Optional[str] = None
@@ -66,6 +67,7 @@ class TelegramActionResponse(BaseModel):
 
 class TelegramWebhookUser(BaseModel):
     username: Optional[str] = None
+    first_name: Optional[str] = None
 
 
 class TelegramWebhookChat(BaseModel):
@@ -197,7 +199,7 @@ def save_telegram_integration(
 
 @router.post("/api/integrations/telegram/connect-link", response_model=TelegramConnectLinkResponse)
 def create_telegram_connect_link(
-    current_user: User = Depends(check_permissions(["Owner"])),
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
     _, bot_username = _telegram_bot_config()
@@ -206,13 +208,13 @@ def create_telegram_connect_link(
         .filter(
             User.id == current_user.id,
             User.factory_id == current_user.factory_id,
-            User.role == "Owner",
+            User.role.in_(["Owner", "Sub-Owner"]),
             User.is_active.is_(True),
         )
         .first()
     )
     if owner is None:
-        raise HTTPException(status_code=403, detail="Only an active factory owner can connect Telegram")
+        raise HTTPException(status_code=403, detail="Only an active Owner or Sub Owner can connect Telegram")
 
     now = _utcnow()
     db.query(TelegramConnectToken).filter(
@@ -245,13 +247,26 @@ def get_telegram_status(
     db: Session = Depends(get_db),
 ):
     factory = _factory_for_user(db, current_user)
-    connected = bool((factory.telegram_chat_id or "").strip())
+    binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == current_user.factory_id,
+        TelegramUserBinding.user_id == current_user.id,
+        TelegramUserBinding.is_active.is_(True),
+    ).first()
+    legacy_owner_connected = current_user.role == "Owner" and bool((factory.telegram_chat_id or "").strip())
+    connected = binding is not None or legacy_owner_connected
     return TelegramStatusResponse(
         connected=connected,
-        telegram_username=factory.telegram_username,
+        role=current_user.role,
+        telegram_username=binding.telegram_username if binding else factory.telegram_username if legacy_owner_connected else None,
         chat_id_verified=connected,
-        last_message_at=factory.telegram_last_message_at.isoformat() if factory.telegram_last_message_at else None,
-        last_message_status=factory.telegram_last_message_status,
+        last_message_at=(
+            binding.last_message_at.isoformat()
+            if binding and binding.last_message_at
+            else factory.telegram_last_message_at.isoformat()
+            if legacy_owner_connected and factory.telegram_last_message_at
+            else None
+        ),
+        last_message_status=binding.last_message_status if binding else factory.telegram_last_message_status if legacy_owner_connected else None,
     )
 
 
@@ -261,46 +276,60 @@ def send_telegram_test_message(
     db: Session = Depends(get_db),
 ):
     factory = _factory_for_user(db, current_user)
-    if not factory.telegram_chat_id:
+    binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == current_user.factory_id,
+        TelegramUserBinding.user_id == current_user.id,
+        TelegramUserBinding.is_active.is_(True),
+    ).first()
+    target_chat_id = binding.telegram_chat_id if binding else factory.telegram_chat_id if current_user.role == "Owner" else None
+    if not target_chat_id:
         raise HTTPException(status_code=409, detail="Telegram is not connected")
+    factory._telegram_target_chat_id = target_chat_id
     try:
         send_telegram_message(factory, "✅ Munshi AI test message successful. Telegram alerts are active.")
     except TelegramDeliveryError as exc:
-        factory.telegram_last_message_at = _utcnow()
-        factory.telegram_last_message_status = "failed"
+        if binding:
+            binding.last_message_at = _utcnow()
+            binding.last_message_status = "failed"
+        else:
+            factory.telegram_last_message_at = _utcnow()
+            factory.telegram_last_message_status = "failed"
         db.commit()
         raise HTTPException(status_code=502, detail="Telegram test message could not be sent") from exc
-    factory.telegram_last_message_at = _utcnow()
-    factory.telegram_last_message_status = "sent"
+    if binding:
+        binding.last_message_at = _utcnow()
+        binding.last_message_status = "sent"
+    else:
+        factory.telegram_last_message_at = _utcnow()
+        factory.telegram_last_message_status = "sent"
     db.commit()
     return TelegramActionResponse(status="sent", message="Test message sent successfully")
 
 
 @router.post("/api/integrations/telegram/disconnect", response_model=TelegramActionResponse)
 def disconnect_telegram_integration(
-    current_user: User = Depends(check_permissions(["Owner"])),
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
     factory = _factory_for_user(db, current_user)
-    chat_id = factory.telegram_chat_id
-    factory.telegram_chat_id = None
-    factory.telegram_username = None
-    factory.telegram_connected_at = None
-    factory.telegram_last_message_status = None
-    db.query(User).filter(
-        User.factory_id == current_user.factory_id,
-        User.telegram_chat_id == chat_id,
-    ).update(
-        {
-            User.telegram_chat_id: None,
-            User.telegram_id: None,
-            User.telegram_binding_code: None,
-            User.telegram_binding_expiry: None,
-        },
-        synchronize_session=False,
-    )
+    binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == current_user.factory_id,
+        TelegramUserBinding.user_id == current_user.id,
+    ).first()
+    if binding:
+        binding.is_active = False
+    current_user.telegram_chat_id = None
+    current_user.telegram_id = None
+    current_user.telegram_binding_code = None
+    current_user.telegram_binding_expiry = None
+    if current_user.role == "Owner":
+        factory.telegram_chat_id = None
+        factory.telegram_username = None
+        factory.telegram_connected_at = None
+        factory.telegram_last_message_status = None
     db.query(TelegramConnectToken).filter(
         TelegramConnectToken.factory_id == current_user.factory_id,
+        TelegramConnectToken.owner_id == current_user.id,
         TelegramConnectToken.used_at.is_(None),
     ).update({TelegramConnectToken.used_at: _utcnow()}, synchronize_session=False)
     db.commit()
@@ -354,7 +383,7 @@ def telegram_self_service_webhook(
         .filter(
             User.id == connect_token.owner_id,
             User.factory_id == connect_token.factory_id,
-            User.role == "Owner",
+            User.role.in_(["Owner", "Sub-Owner"]),
             User.is_active.is_(True),
         )
         .first()
@@ -366,21 +395,42 @@ def telegram_self_service_webhook(
         return TelegramActionResponse(status="invalid", message="Connection link is invalid")
 
     chat_id = str(message.chat.id).strip()
+    conflicting_binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.telegram_chat_id == chat_id,
+        TelegramUserBinding.user_id != owner.id,
+        TelegramUserBinding.is_active.is_(True),
+    ).first()
     conflicting_factory = db.query(Factory).filter(
         Factory.telegram_chat_id == chat_id,
         Factory.id != factory.id,
     ).first()
-    if conflicting_factory is not None:
+    if conflicting_binding is not None or conflicting_factory is not None:
         return TelegramActionResponse(status="conflict", message="This Telegram account is already connected")
 
     bot_token, bot_username = _telegram_bot_config()
-    factory.telegram_chat_id = chat_id
-    factory.telegram_username = message.from_user.username if message.from_user else None
-    factory.telegram_connected_at = now
+    binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == factory.id,
+        TelegramUserBinding.user_id == owner.id,
+    ).first()
+    if binding is None:
+        binding = TelegramUserBinding(factory_id=factory.id, user_id=owner.id)
+        db.add(binding)
+    binding.role = owner.role
+    binding.telegram_chat_id = chat_id
+    binding.telegram_username = message.from_user.username if message.from_user else None
+    binding.telegram_first_name = message.from_user.first_name if message.from_user else None
+    binding.telegram_connected_at = now
+    binding.last_message_at = now
+    binding.last_message_status = "sent"
+    binding.is_active = True
+    if owner.role == "Owner":
+        factory.telegram_chat_id = chat_id
+        factory.telegram_username = binding.telegram_username
+        factory.telegram_connected_at = now
+        factory.telegram_last_message_at = now
+        factory.telegram_last_message_status = "sent"
     factory.telegram_bot_username = bot_username
     factory.telegram_token = encrypt_token(bot_token)
-    factory.telegram_last_message_at = now
-    factory.telegram_last_message_status = "sent"
     owner.telegram_chat_id = chat_id
     owner.telegram_id = chat_id
     owner.telegram_binding_code = None
@@ -388,13 +438,16 @@ def telegram_self_service_webhook(
     connect_token.used_at = now
     db.commit()
 
+    factory._telegram_target_chat_id = chat_id
     try:
         send_telegram_message(
             factory,
             "✅ Munshi AI Telegram connected successfully. Ab aapko daily morning briefing yahin milegi.",
         )
     except TelegramDeliveryError:
-        factory.telegram_last_message_status = "failed"
+        binding.last_message_status = "failed"
+        if owner.role == "Owner":
+            factory.telegram_last_message_status = "failed"
         db.commit()
 
     return TelegramActionResponse(status="connected", message="Telegram connected successfully")

@@ -1657,6 +1657,7 @@ export function saveTelegramIntegration(payload: { telegram_bot_token: string })
 
 export type TelegramConnectionStatus = {
   connected: boolean;
+  role: "Owner" | "Sub-Owner";
   telegram_username?: string | null;
   chat_id_verified: boolean;
   last_message_at?: string | null;
