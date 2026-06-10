@@ -14,6 +14,7 @@ from models import (
     BottomStock,
     Customer,
     DailyProduction,
+    FactoryExpense,
     Machine,
     OutstandingBill,
     Payment,
@@ -100,6 +101,16 @@ def collect_yesterday_factory_snapshot(db: Session, factory_id: int, briefing_da
         )
         .scalar()
     )
+    
+    expenses = _positive_or_none(
+        db.query(func.sum(FactoryExpense.amount))
+        .filter(
+            FactoryExpense.factory_id == factory_id,
+            func.date(FactoryExpense.timestamp) == briefing_date
+        )
+        .scalar()
+    )
+
     invoice_count = (
         db.query(func.count(SalesInvoice.id))
         .filter(
@@ -181,6 +192,9 @@ def collect_yesterday_factory_snapshot(db: Session, factory_id: int, briefing_da
             "amount": sales,
             "collections_received": collections,
             "outstanding_amount": outstanding,
+        },
+        "expenses": {
+            "total": expenses,
         },
         "risk_summary": {
             "bottom_days_left": bottom_days_left,

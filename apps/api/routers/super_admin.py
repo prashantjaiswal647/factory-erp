@@ -794,7 +794,7 @@ def login(
     # 1. Rate Limiting Check
     from main import is_rate_limited
     if any(
-        is_rate_limited(f"rate_limit:super_admin_login:{ip_key}", limit=10, window_seconds=60)
+        is_rate_limited(f"rate_limit:super_admin_login:{ip_key}", limit=5, window_seconds=60)
         for ip_key in client_ip_keys
     ):
         # Log failure due to rate limit

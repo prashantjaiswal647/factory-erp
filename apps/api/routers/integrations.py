@@ -2,12 +2,13 @@ import os
 import httpx
 import hashlib
 import hmac
+import logging
 import secrets
 from typing import Optional
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Header, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -17,8 +18,26 @@ from db import get_db
 from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken, TelegramUserBinding
 from telegram_crypto import encrypt_token, decrypt_token
 from services.telegram_delivery import TelegramDeliveryError, send_telegram_message
+from services.telegram_onboarding import inline_keyboard, render_callback_response, render_welcome_message
 
 router = APIRouter(tags=["integrations"])
+logger = logging.getLogger(__name__)
+
+
+def enforce_webhook_rate_limit(request: Request, webhook_name: str) -> None:
+    from main import is_rate_limited
+
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"rate_limit:webhook:{webhook_name}:{client_ip}"
+    if is_rate_limited(key, limit=60, window_seconds=60):
+        logger.warning(
+            "Webhook rate limit exceeded",
+            extra={"webhook": webhook_name, "client_ip": client_ip},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Webhook rate limit exceeded. Please retry after one minute.",
+        )
 
 
 def require_n8n_api_key(x_n8n_api_key: Optional[str] = Header(None, alias="X-N8N-API-KEY")) -> None:
@@ -55,9 +74,102 @@ class TelegramStatusResponse(BaseModel):
     connected: bool
     role: str
     telegram_username: Optional[str] = None
+    telegram_first_name: Optional[str] = None
     chat_id_verified: bool
+    connected_at: Optional[str] = None
+    welcome_sent_at: Optional[str] = None
     last_message_at: Optional[str] = None
     last_message_status: Optional[str] = None
+
+
+class TelegramConnectCodeResponse(BaseModel):
+    code: str
+    deep_link: str
+    bot_username: str
+    expires_at: str
+
+
+# Auto-sent test message after a successful binding. Kept in one place so the
+# same text is used for manual "Send Test Message" and the post-bind auto ping.
+_TELEGRAM_TEST_MESSAGE_TEXT = (
+    "✅ Munshi AI test message successful. Telegram alerts are active."
+)
+
+
+def _finalize_binding(
+    db: Session,
+    factory: Factory,
+    owner: User,
+    binding: TelegramUserBinding,
+    chat_id: str,
+    from_user_payload: Optional["TelegramWebhookUser"],
+    bot_token: str,
+    bot_username: str,
+) -> tuple[str, Optional[str]]:
+    """Persist the binding and send the welcome + auto test message.
+
+    Returns (status, error_detail). The caller is responsible for committing
+    the surrounding transaction and clearing the connect token / binding code.
+    """
+    now = _utcnow()
+    binding.role = owner.role
+    binding.telegram_chat_id = chat_id
+    binding.telegram_username = from_user_payload.username if from_user_payload else None
+    binding.telegram_first_name = from_user_payload.first_name if from_user_payload else None
+    binding.telegram_connected_at = now
+    binding.last_message_at = now
+    binding.last_message_status = "sent"
+    binding.is_active = True
+
+    if owner.role == "Owner":
+        factory.telegram_chat_id = chat_id
+        factory.telegram_username = binding.telegram_username
+        factory.telegram_connected_at = now
+        factory.telegram_last_message_at = now
+        factory.telegram_last_message_status = "sent"
+    factory.telegram_bot_username = bot_username
+    factory.telegram_token = encrypt_token(bot_token)
+
+    owner.telegram_chat_id = chat_id
+    owner.telegram_id = chat_id
+    owner.telegram_binding_code = None
+    owner.telegram_binding_expiry = None
+
+    factory._telegram_target_chat_id = chat_id
+
+    welcome_status = "sent"
+    welcome_error: Optional[str] = None
+    try:
+        send_telegram_message(
+            factory,
+            render_welcome_message(factory, owner, binding),
+            reply_markup=inline_keyboard(owner.role),
+        )
+    except TelegramDeliveryError as exc:
+        welcome_status = "failed"
+        welcome_error = str(exc)[:200]
+
+    binding.welcome_sent_at = _utcnow() if welcome_status == "sent" else None
+    binding.last_message_at = binding.welcome_sent_at or _utcnow()
+    binding.last_message_status = welcome_status
+
+    # Auto test message — only attempted when the welcome actually delivered,
+    # otherwise the owner would see two failures and no clear success signal.
+    if welcome_status == "sent":
+        try:
+            send_telegram_message(factory, _TELEGRAM_TEST_MESSAGE_TEXT)
+            binding.last_message_status = "sent"
+            binding.last_message_at = _utcnow()
+        except TelegramDeliveryError:
+            binding.last_message_status = "failed"
+    else:
+        binding.last_message_status = "failed"
+
+    if owner.role == "Owner":
+        factory.telegram_last_message_at = binding.last_message_at
+        factory.telegram_last_message_status = binding.last_message_status
+
+    return welcome_status, welcome_error
 
 
 class TelegramActionResponse(BaseModel):
@@ -83,6 +195,7 @@ class TelegramWebhookMessage(BaseModel):
 class TelegramWebhookUpdate(BaseModel):
     update_id: int | str
     message: Optional[TelegramWebhookMessage] = None
+    callback_query: Optional[dict] = None
 
 
 class N8NAIWebhookRequest(BaseModel):
@@ -241,6 +354,44 @@ def create_telegram_connect_link(
     )
 
 
+@router.post("/api/integrations/telegram/connect-code", response_model=TelegramConnectCodeResponse)
+def create_telegram_connect_code(
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    """Generate a one-time 6-character code that the owner types in the bot.
+
+    Preferred path for the 30-second self-service flow: the frontend shows
+    the code, opens `https://t.me/<bot>?start=bind_<code>` automatically, and
+    the webhook completes the binding as soon as the user lands in the bot.
+
+    The code is stored on User.telegram_binding_code and expires in 10 minutes.
+    A fresh code overwrites any previous unused code for the same user.
+    """
+    bot_token, bot_username = _telegram_bot_config()
+
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    import random
+    import string
+
+    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    expires_at = _utcnow() + timedelta(minutes=10)
+    user.telegram_binding_code = code
+    user.telegram_binding_expiry = expires_at
+    db.commit()
+    db.refresh(user)
+
+    return TelegramConnectCodeResponse(
+        code=code,
+        deep_link=f"https://t.me/{bot_username}?start=bind_{code}",
+        bot_username=bot_username,
+        expires_at=expires_at.isoformat(),
+    )
+
+
 @router.get("/api/integrations/telegram/status", response_model=TelegramStatusResponse)
 def get_telegram_status(
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
@@ -258,7 +409,16 @@ def get_telegram_status(
         connected=connected,
         role=current_user.role,
         telegram_username=binding.telegram_username if binding else factory.telegram_username if legacy_owner_connected else None,
+        telegram_first_name=binding.telegram_first_name if binding else None,
         chat_id_verified=connected,
+        connected_at=(
+            binding.telegram_connected_at.isoformat()
+            if binding and binding.telegram_connected_at
+            else factory.telegram_connected_at.isoformat()
+            if legacy_owner_connected and factory.telegram_connected_at
+            else None
+        ),
+        welcome_sent_at=binding.welcome_sent_at.isoformat() if binding and binding.welcome_sent_at else None,
         last_message_at=(
             binding.last_message_at.isoformat()
             if binding and binding.last_message_at
@@ -286,7 +446,7 @@ def send_telegram_test_message(
         raise HTTPException(status_code=409, detail="Telegram is not connected")
     factory._telegram_target_chat_id = target_chat_id
     try:
-        send_telegram_message(factory, "✅ Munshi AI test message successful. Telegram alerts are active.")
+        send_telegram_message(factory, _TELEGRAM_TEST_MESSAGE_TEXT)
     except TelegramDeliveryError as exc:
         if binding:
             binding.last_message_at = _utcnow()
@@ -339,12 +499,14 @@ def disconnect_telegram_integration(
 @router.post("/api/integrations/telegram/webhook", response_model=TelegramActionResponse)
 def telegram_self_service_webhook(
     payload: TelegramWebhookUpdate,
+    request: Request,
     x_telegram_bot_api_secret_token: Optional[str] = Header(
         None,
         alias="X-Telegram-Bot-Api-Secret-Token",
     ),
     db: Session = Depends(get_db),
 ):
+    enforce_webhook_rate_limit(request, "telegram")
     expected_secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
     if not expected_secret:
         raise HTTPException(status_code=503, detail="Telegram webhook is not configured")
@@ -354,17 +516,171 @@ def telegram_self_service_webhook(
     ):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
 
+    if payload.callback_query:
+        callback = payload.callback_query
+        callback_data = str(callback.get("data") or "")
+        callback_message = callback.get("message") or {}
+        chat_id = str((callback_message.get("chat") or {}).get("id") or "")
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True),
+        ).first()
+        if binding is None:
+            return TelegramActionResponse(status="invalid", message="Telegram account is not connected")
+        user = db.query(User).filter(
+            User.id == binding.user_id,
+            User.factory_id == binding.factory_id,
+            User.is_active.is_(True),
+        ).first()
+        factory = db.query(Factory).filter(Factory.id == binding.factory_id, Factory.is_active.is_(True)).first()
+        if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
+            return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
+        allowed = {button["callback_data"] for row in inline_keyboard(binding.role)["inline_keyboard"] for button in row}
+        if callback_data not in allowed:
+            return TelegramActionResponse(status="invalid", message="This action is not available for your role")
+        factory._telegram_target_chat_id = chat_id
+        response_text = render_callback_response(db, binding, callback_data)
+        try:
+            send_telegram_message(factory, response_text, reply_markup=inline_keyboard(binding.role))
+            binding.last_message_at = _utcnow()
+            binding.last_message_status = "sent"
+            db.commit()
+        except TelegramDeliveryError:
+            binding.last_message_status = "failed"
+            db.commit()
+        return TelegramActionResponse(status="ok", message=response_text)
+
     message = payload.message
+    if message is not None and (message.text or "").strip() == "/menu":
+        chat_id = str(message.chat.id).strip()
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True),
+        ).first()
+        if binding is None:
+            return TelegramActionResponse(status="invalid", message="Telegram account is not connected")
+        user = db.query(User).filter(User.id == binding.user_id, User.factory_id == binding.factory_id).first()
+        factory = db.query(Factory).filter(Factory.id == binding.factory_id).first()
+        if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
+            return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
+        factory._telegram_target_chat_id = chat_id
+        send_telegram_message(factory, "Munshi AI menu", reply_markup=inline_keyboard(binding.role))
+        binding.last_message_at = _utcnow()
+        binding.last_message_status = "sent"
+        db.commit()
+        return TelegramActionResponse(status="ok", message="Menu sent")
     if message is None or not (message.text or "").startswith("/start"):
         return TelegramActionResponse(status="ignored", message="Update ignored")
     parts = (message.text or "").strip().split(maxsplit=1)
     if len(parts) != 2 or not parts[1].strip():
         return TelegramActionResponse(status="invalid", message="Connection link is invalid or expired")
 
+    chat_id = str(message.chat.id).strip()
+    payload_arg = parts[1].strip()
+
+    # Branch on binding flavour:
+    #   bind_<6char> -> 6-digit code path (User.telegram_binding_code)
+    #   <opaque>     -> legacy URL token path (TelegramConnectToken.token_hash)
+    if payload_arg.lower().startswith("bind_"):
+        return _handle_bind_code(db, payload_arg[5:].strip(), chat_id, message.from_user)
+    return _handle_connect_token(db, payload_arg, chat_id, message.from_user)
+
+
+def _handle_bind_code(
+    db: Session,
+    code: str,
+    chat_id: str,
+    from_user_payload: Optional[TelegramWebhookUser],
+) -> TelegramActionResponse:
+    """6-digit code binding flow.
+
+    The user types the code in the bot as `/start bind_<code>` (either by hand
+    or via a prefilled deep-link). We look the code up on User, validate
+    expiry, then call `_finalize_binding` to do the rest.
+    """
+    now = _utcnow()
+    normalised = (code or "").strip().upper()
+    if not normalised:
+        return TelegramActionResponse(status="invalid", message="Connection code is invalid or expired")
+
+    user = (
+        db.query(User)
+        .filter(
+            User.telegram_binding_code == normalised,
+            User.role.in_(["Owner", "Sub-Owner"]),
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+        .first()
+    )
+    if user is None:
+        return TelegramActionResponse(status="invalid", message="Connection code is invalid or already used")
+    if user.telegram_binding_expiry is None:
+        return TelegramActionResponse(status="invalid", message="Connection code is invalid or already used")
+    expiry = user.telegram_binding_expiry
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry <= now:
+        user.telegram_binding_code = None
+        user.telegram_binding_expiry = None
+        db.commit()
+        return TelegramActionResponse(status="expired", message="Connection code has expired")
+
+    factory = db.query(Factory).filter(Factory.id == user.factory_id, Factory.is_active.is_(True)).with_for_update().first()
+    if factory is None:
+        user.telegram_binding_code = None
+        user.telegram_binding_expiry = None
+        db.commit()
+        return TelegramActionResponse(status="invalid", message="Factory is not active")
+
+    if user.telegram_chat_id and user.telegram_chat_id == chat_id and user.telegram_binding_code is None:
+        return TelegramActionResponse(status="ignored", message="Already connected")
+    if user.telegram_chat_id and user.telegram_chat_id != chat_id:
+        return TelegramActionResponse(status="conflict", message="This account is already bound to a different Telegram chat")
+
+    conflicting_binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.telegram_chat_id == chat_id,
+        TelegramUserBinding.user_id != user.id,
+        TelegramUserBinding.is_active.is_(True),
+    ).first()
+    conflicting_factory = db.query(Factory).filter(
+        Factory.telegram_chat_id == chat_id,
+        Factory.id != factory.id,
+        Factory.is_active.is_(True),
+    ).first()
+    if conflicting_binding is not None or conflicting_factory is not None:
+        return TelegramActionResponse(status="conflict", message="This Telegram account is already connected")
+
+    bot_token, bot_username = _telegram_bot_config()
+    binding = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == factory.id,
+        TelegramUserBinding.user_id == user.id,
+    ).first()
+    if binding is None:
+        binding = TelegramUserBinding(factory_id=factory.id, user_id=user.id)
+        db.add(binding)
+
+    _finalize_binding(db, factory, user, binding, chat_id, from_user_payload, bot_token, bot_username)
+    db.commit()
+    return TelegramActionResponse(status="connected", message="Telegram connected successfully")
+
+
+def _handle_connect_token(
+    db: Session,
+    raw_token: str,
+    chat_id: str,
+    from_user_payload: Optional[TelegramWebhookUser],
+) -> TelegramActionResponse:
+    """Legacy URL token binding flow.
+
+    The connect link is `https://t.me/<bot>?start=<raw_token>`. We hash the
+    token, look it up in TelegramConnectToken, validate expiry, then call
+    `_finalize_binding` to do the rest.
+    """
     now = _utcnow()
     connect_token = (
         db.query(TelegramConnectToken)
-        .filter(TelegramConnectToken.token_hash == _token_hash(parts[1].strip()))
+        .filter(TelegramConnectToken.token_hash == _token_hash(raw_token))
         .with_for_update()
         .first()
     )
@@ -394,7 +710,6 @@ def telegram_self_service_webhook(
         db.commit()
         return TelegramActionResponse(status="invalid", message="Connection link is invalid")
 
-    chat_id = str(message.chat.id).strip()
     conflicting_binding = db.query(TelegramUserBinding).filter(
         TelegramUserBinding.telegram_chat_id == chat_id,
         TelegramUserBinding.user_id != owner.id,
@@ -415,41 +730,10 @@ def telegram_self_service_webhook(
     if binding is None:
         binding = TelegramUserBinding(factory_id=factory.id, user_id=owner.id)
         db.add(binding)
-    binding.role = owner.role
-    binding.telegram_chat_id = chat_id
-    binding.telegram_username = message.from_user.username if message.from_user else None
-    binding.telegram_first_name = message.from_user.first_name if message.from_user else None
-    binding.telegram_connected_at = now
-    binding.last_message_at = now
-    binding.last_message_status = "sent"
-    binding.is_active = True
-    if owner.role == "Owner":
-        factory.telegram_chat_id = chat_id
-        factory.telegram_username = binding.telegram_username
-        factory.telegram_connected_at = now
-        factory.telegram_last_message_at = now
-        factory.telegram_last_message_status = "sent"
-    factory.telegram_bot_username = bot_username
-    factory.telegram_token = encrypt_token(bot_token)
-    owner.telegram_chat_id = chat_id
-    owner.telegram_id = chat_id
-    owner.telegram_binding_code = None
-    owner.telegram_binding_expiry = None
+
+    _finalize_binding(db, factory, owner, binding, chat_id, from_user_payload, bot_token, bot_username)
     connect_token.used_at = now
     db.commit()
-
-    factory._telegram_target_chat_id = chat_id
-    try:
-        send_telegram_message(
-            factory,
-            "✅ Munshi AI Telegram connected successfully. Ab aapko daily morning briefing yahin milegi.",
-        )
-    except TelegramDeliveryError:
-        binding.last_message_status = "failed"
-        if owner.role == "Owner":
-            factory.telegram_last_message_status = "failed"
-        db.commit()
-
     return TelegramActionResponse(status="connected", message="Telegram connected successfully")
 
 
@@ -457,9 +741,11 @@ def telegram_self_service_webhook(
 @router.post("/api/ai/n8n-webhook", response_model=N8NAIWebhookResponse)
 def telegram_ai_n8n_webhook(
     payload: N8NAIWebhookRequest,
+    request: Request,
     _: None = Depends(require_n8n_api_key),
     db: Session = Depends(get_db),
 ):
+    enforce_webhook_rate_limit(request, "ai_n8n")
     try:
         factory_id = int(payload.factory_id)
     except (TypeError, ValueError) as exc:

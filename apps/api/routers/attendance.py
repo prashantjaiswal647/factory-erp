@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from dependencies import PAYMENT_ROLES, check_permissions
 from db import get_db
-from models import AdvancePayment, AttendanceLog, HisabSettlement, User, Worker, WorkerOpeningAttendance, ActivityLog
+from models import AdvancePayment, AttendanceLog, Factory, HisabSettlement, User, Worker, WorkerOpeningAttendance, ActivityLog
 from schemas import OpeningAttendanceResponse
 from services.activity_logger import log_activity
+from services.telegram_action_alerts import notify_worker_advance
 
 
 router = APIRouter(prefix="/api/workers", tags=["attendance-ledger"])
@@ -371,6 +372,19 @@ def add_worker_advance(
 
     db.commit()
     db.refresh(advance)
+
+    # Telegram action alert: notify Owner about worker advance
+    try:
+        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        if factory:
+            notify_worker_advance(
+                db, factory, current_user,
+                worker_name=worker.name,
+                amount_paise=int(Decimal(str(payload.amount)) * 100),
+            )
+    except Exception:
+        pass
+
     return {"id": advance.id, "worker_id": worker.id, "date": advance.date, "amount": advance.amount}
 
 

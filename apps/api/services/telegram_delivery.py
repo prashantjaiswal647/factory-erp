@@ -16,16 +16,24 @@ class TelegramDeliveryError(RuntimeError):
         self.retryable = retryable
 
 
-def send_telegram_message(factory: Factory, message_text: str, timeout_seconds: float = 15.0) -> None:
+def send_telegram_message(
+    factory: Factory,
+    message_text: str,
+    timeout_seconds: float = 15.0,
+    reply_markup: dict | None = None,
+) -> None:
     token = decrypt_token(factory.telegram_token) if factory.telegram_token else (factory.telegram_bot_token or "")
     chat_id = (getattr(factory, "_telegram_target_chat_id", None) or factory.telegram_chat_id or "").strip()
     if not token or not chat_id:
         raise TelegramDeliveryError("Telegram bot token or chat ID is not configured")
 
     try:
+        payload = {"chat_id": chat_id, "text": message_text}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         response = httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message_text},
+            json=payload,
             timeout=timeout_seconds,
         )
         payload = response.json()

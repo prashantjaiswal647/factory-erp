@@ -135,3 +135,13 @@ apps/web/playwright-output.txt
 apps/web/ux-errors.txt
 *errors.txt
 *output.txt
+
+
+storage/backups/
+*.dump
+*.bak
+
+
+apps/web/screenshots/
+apps/web/api-logs/
+apps/web/console-errors.json

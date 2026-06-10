@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import logging
 import os
+import re
 
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
@@ -20,18 +21,26 @@ from sqlalchemy.orm import Session, joinedload
 
 from dependencies import OWNER_ROLES, SALES_ROLES, check_permissions
 from db import get_db
-from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile, FactorySettings
+from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDeliveryLog, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, TelegramUserBinding, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile, FactorySettings
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
 from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
 from services.activity_logger import log_activity
 from services.invoice_pdf import build_invoice_pdf_bytes
 from services.n8n_sync import sync_data_to_n8n_bg
+from services.telegram_action_alerts import (
+    notify_customer_created,
+    notify_outstanding_threshold_crossed,
+    notify_sale_created,
+)
+from telegram_crypto import decrypt_token
 
 
 router = APIRouter()
 MONEY_QUANT = Decimal("0.01")
 logger = logging.getLogger(__name__)
+GSTIN_PATTERN = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+ALLOWED_GST_RATES = {0.0, 0.1, 0.25, 1.0, 1.5, 3.0, 5.0, 6.0, 7.5, 12.0, 18.0, 28.0}
 
 
 def to_money(value) -> Decimal:
@@ -84,6 +93,18 @@ def gst_state_code(value: str | None) -> str | None:
     if not cleaned or len(cleaned) < 2:
         return None
     return cleaned[:2].upper()
+
+
+def validate_gst_invoice(invoice_type: str, buyer_gstin: str | None, tax_rates: list[float]) -> None:
+    if invoice_type != "tax_invoice":
+        return
+    cleaned_gstin = (buyer_gstin or "").strip().upper()
+    if cleaned_gstin and not GSTIN_PATTERN.fullmatch(cleaned_gstin):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid buyer GSTIN format")
+    for rate in tax_rates:
+        normalized = round(float(rate or 0), 2)
+        if normalized not in ALLOWED_GST_RATES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unsupported GST rate: {normalized:g}%")
 
 
 def same_place_text(left: str | None, right: str | None) -> bool:
@@ -497,6 +518,29 @@ class InvoiceFromSaleResponse(BaseModel):
     pdf_url: str
 
 
+class InvoiceTelegramDeliveryRequest(BaseModel):
+    destination: str = "customer"
+
+
+class InvoiceEmailDeliveryRequest(BaseModel):
+    email: str
+
+
+class InvoiceDeliveryResponse(BaseModel):
+    status: str
+    channel: str
+    destination: str
+
+
+class InvoiceDeliveryHistoryItem(BaseModel):
+    id: int
+    channel: str
+    destination_masked: str | None = None
+    status: str
+    error_message: str | None = None
+    created_at: str
+
+
 def build_invoice_details(payload: DailySaleCreate) -> str:
     details = []
     for item in payload.items:
@@ -821,6 +865,11 @@ def add_sale_invoice(
     db: Session = Depends(get_db),
 ):
     factory_id = factory_id_text(current_user.factory_id)
+    validate_gst_invoice(
+        payload.legal_invoice_type,
+        payload.buyer_gstin,
+        [float(getattr(item, "tax_rate", 0) or 0) for item in payload.items],
+    )
 
     try:
         factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
@@ -1135,6 +1184,23 @@ def add_sale_invoice(
             },
         )
 
+        # P4.5 D1: action alert to Owner (best-effort, never raises)
+        notify_sale_created(
+            db,
+            factory=factory,
+            actor=current_user,
+            customer_name=customer.name,
+            amount_paise=int(to_money(payload.amount_paid) * 100),
+        )
+        # P4.5 D1: high-risk customer alert (best-effort, never raises)
+        notify_outstanding_threshold_crossed(
+            db,
+            factory=factory,
+            actor=current_user,
+            customer_name=customer.name,
+            new_total_paise=int(to_money(customer_due_after_payment) * 100),
+        )
+
         return DailySaleResponse(
             sale_ids=sale_ids,
             customer_id=customer.id,
@@ -1315,7 +1381,10 @@ def create_sales_customer(
     )
     phone_number = payload.phone_number.strip()
     try:
-        with db.begin():
+        with db.begin_nested() if db.in_transaction() else db.begin():
+            factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+            if not factory:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
             existing = (
                 db.query(Customer)
                 .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
@@ -1355,7 +1424,16 @@ def create_sales_customer(
                     amount_paid=Decimal("0.00"),
                 )
                 sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+        db.commit()
         db.refresh(customer)
+        # P4.5 D1: customer created alert (best-effort, never raises)
+        notify_customer_created(
+            db,
+            factory=factory,
+            actor=current_user,
+            customer_name=customer.name,
+            place=(payload.place or "").strip() or "—",
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -1684,6 +1762,7 @@ def create_invoice_from_sale(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
     invoice_type = payload.invoice_type if payload.invoice_type in {"tax_invoice", "bill_of_supply"} else "tax_invoice"
+    validate_gst_invoice(invoice_type, customer.gst_number, [float(payload.tax_rate or 0)])
     invoice_number = allocate_invoice_number(db, factory, invoice_type)
     subtotal = to_money(sale.total_amount or sale.total_bill)
     tax_rate = max(0.0, float(payload.tax_rate or 0.0)) if invoice_type == "tax_invoice" else 0.0
@@ -1779,6 +1858,15 @@ def download_invoice_pdf(
     pdf_bytes = build_invoice_pdf_bytes(payload)
     invoice.pdf_generated_count = (invoice.pdf_generated_count or 0) + 1
     invoice.last_pdf_generated_at = datetime.now(timezone.utc)
+    db.add(
+        InvoiceDeliveryLog(
+            factory_id=current_user.factory_id,
+            invoice_document_id=invoice.id,
+            channel="DOWNLOAD",
+            status="COMPLETED",
+            created_by_user_id=current_user.id,
+        )
+    )
     db.commit()
 
     filename = f"invoice_{factory_id}_{invoice.invoice_number}.pdf".replace("/", "_").replace("\\", "_")
@@ -1788,6 +1876,190 @@ def download_invoice_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
     )
+
+
+def _invoice_for_factory(db: Session, factory_id: int, invoice_document_id: int) -> InvoiceDocument:
+    invoice = db.query(InvoiceDocument).filter(
+        factory_id_filter(InvoiceDocument.factory_id, factory_id),
+        InvoiceDocument.id == invoice_document_id,
+    ).first()
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    return invoice
+
+
+def _invoice_pdf_snapshot(db: Session, invoice: InvoiceDocument) -> bytes:
+    bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice.id).first()
+    payload = dict(invoice.payload_json or {})
+    payload["id"] = invoice.id
+    invoice_payload = dict(payload.get("invoice") or {})
+    invoice_payload["amount_paid"] = float(bill.amount_paid if bill else invoice.amount_paid)
+    invoice_payload["customer_total_due"] = float(bill.balance_amount if bill else invoice.customer_total_due)
+    payload["invoice"] = invoice_payload
+    return build_invoice_pdf_bytes(payload)
+
+
+def _record_invoice_delivery(
+    db: Session,
+    *,
+    current_user: User,
+    invoice: InvoiceDocument,
+    channel: str,
+    destination: str | None,
+    delivery_status: str,
+    error: str | None = None,
+) -> None:
+    db.add(
+        InvoiceDeliveryLog(
+            factory_id=current_user.factory_id,
+            invoice_document_id=invoice.id,
+            channel=channel,
+            destination_masked=destination,
+            status=delivery_status,
+            error_message=error[:500] if error else None,
+            created_by_user_id=current_user.id,
+        )
+    )
+    db.commit()
+
+
+def _mask_email(email: str) -> str:
+    local, domain = email.split("@", 1)
+    return f"{local[:2]}***@{domain}"
+
+
+@router.post("/invoices/{invoice_document_id}/reprint", response_model=InvoiceDeliveryResponse)
+def reprint_invoice(
+    invoice_document_id: int,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    invoice = _invoice_for_factory(db, current_user.factory_id, invoice_document_id)
+    _record_invoice_delivery(
+        db, current_user=current_user, invoice=invoice, channel="REPRINT",
+        destination=None, delivery_status="COMPLETED",
+    )
+    return InvoiceDeliveryResponse(status="completed", channel="REPRINT", destination="")
+
+
+@router.post("/invoices/{invoice_document_id}/telegram", response_model=InvoiceDeliveryResponse)
+def deliver_invoice_telegram(
+    invoice_document_id: int,
+    payload: InvoiceTelegramDeliveryRequest,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    invoice = _invoice_for_factory(db, current_user.factory_id, invoice_document_id)
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+    destination = payload.destination.strip().lower()
+    if destination == "customer":
+        customer = db.query(Customer).filter(
+            Customer.id == invoice.customer_id,
+            factory_id_filter(Customer.factory_id, current_user.factory_id),
+        ).first()
+        targets = [customer.telegram_id] if customer and customer.telegram_id else []
+    elif destination == "owner":
+        targets = [
+            row.telegram_chat_id
+            for row in db.query(TelegramUserBinding).filter(
+                TelegramUserBinding.factory_id == current_user.factory_id,
+                TelegramUserBinding.role == "Owner",
+                TelegramUserBinding.is_active.is_(True),
+            ).all()
+        ]
+        if not targets and factory and factory.telegram_chat_id:
+            targets = [factory.telegram_chat_id]
+    else:
+        raise HTTPException(status_code=422, detail="Telegram destination must be customer or owner")
+    if not targets:
+        raise HTTPException(status_code=409, detail=f"Telegram is not connected for {destination}")
+    token = decrypt_token(factory.telegram_token) if factory and factory.telegram_token else (factory.telegram_bot_token if factory else "")
+    if not token:
+        raise HTTPException(status_code=409, detail="Factory Telegram bot is not configured")
+
+    pdf_bytes = _invoice_pdf_snapshot(db, invoice)
+    filename = f"{invoice.invoice_number}.pdf".replace("/", "_").replace("\\", "_")
+    try:
+        for chat_id in dict.fromkeys(targets):
+            response = httpx.post(
+                f"https://api.telegram.org/bot{token}/sendDocument",
+                data={"chat_id": chat_id, "caption": f"Invoice {invoice.invoice_number} - {invoice.customer_name}"},
+                files={"document": (filename, pdf_bytes, "application/pdf")},
+                timeout=20,
+            )
+            response.raise_for_status()
+            if not response.json().get("ok"):
+                raise RuntimeError("Telegram rejected the invoice")
+        _record_invoice_delivery(
+            db, current_user=current_user, invoice=invoice, channel="TELEGRAM",
+            destination=destination, delivery_status="SENT",
+        )
+    except Exception as exc:
+        _record_invoice_delivery(
+            db, current_user=current_user, invoice=invoice, channel="TELEGRAM",
+            destination=destination, delivery_status="FAILED", error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="Invoice could not be delivered on Telegram") from exc
+    return InvoiceDeliveryResponse(status="sent", channel="TELEGRAM", destination=destination)
+
+
+@router.post("/invoices/{invoice_document_id}/email", response_model=InvoiceDeliveryResponse)
+async def deliver_invoice_email(
+    invoice_document_id: int,
+    payload: InvoiceEmailDeliveryRequest,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    invoice = _invoice_for_factory(db, current_user.factory_id, invoice_document_id)
+    recipient = payload.email.strip().lower()
+    if not is_email_address(recipient):
+        raise HTTPException(status_code=422, detail="Valid email address is required")
+    mail_config = build_mail_config()
+    if mail_config is None:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured")
+    pdf_bytes = _invoice_pdf_snapshot(db, invoice)
+    filename = f"{invoice.invoice_number}.pdf".replace("/", "_").replace("\\", "_")
+    message = MessageSchema(
+        subject=f"Invoice {invoice.invoice_number} from {factory_display_name(current_user)}",
+        recipients=[recipient],
+        body=f"Please find attached invoice {invoice.invoice_number} for {invoice.customer_name}.",
+        subtype=MessageType.plain,
+        attachments=[{"file": BytesIO(pdf_bytes), "filename": filename, "content_type": "application/pdf"}],
+    )
+    try:
+        await FastMail(mail_config).send_message(message)
+        _record_invoice_delivery(
+            db, current_user=current_user, invoice=invoice, channel="EMAIL",
+            destination=_mask_email(recipient), delivery_status="SENT",
+        )
+    except Exception as exc:
+        _record_invoice_delivery(
+            db, current_user=current_user, invoice=invoice, channel="EMAIL",
+            destination=_mask_email(recipient), delivery_status="FAILED", error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="Invoice could not be delivered by email") from exc
+    return InvoiceDeliveryResponse(status="sent", channel="EMAIL", destination=_mask_email(recipient))
+
+
+@router.get("/invoices/{invoice_document_id}/history", response_model=list[InvoiceDeliveryHistoryItem])
+def invoice_delivery_history(
+    invoice_document_id: int,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    invoice = _invoice_for_factory(db, current_user.factory_id, invoice_document_id)
+    rows = db.query(InvoiceDeliveryLog).filter(
+        InvoiceDeliveryLog.factory_id == current_user.factory_id,
+        InvoiceDeliveryLog.invoice_document_id == invoice.id,
+    ).order_by(InvoiceDeliveryLog.created_at.desc(), InvoiceDeliveryLog.id.desc()).limit(100).all()
+    return [
+        InvoiceDeliveryHistoryItem(
+            id=row.id, channel=row.channel, destination_masked=row.destination_masked,
+            status=row.status, error_message=row.error_message,
+            created_at=row.created_at.isoformat() if row.created_at else "",
+        )
+        for row in rows
+    ]
 
 
 @router.get("/pending", response_model=list[PendingSaleResponse])

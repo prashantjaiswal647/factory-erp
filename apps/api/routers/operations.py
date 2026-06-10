@@ -34,6 +34,10 @@ from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.activity_logger import log_activity
 from services.n8n_sync import sync_data_to_n8n_bg
+from services.telegram_action_alerts import (
+    notify_production_created,
+    notify_production_deleted,
+)
 
 
 router = APIRouter(prefix="/api", tags=["operations"])
@@ -332,6 +336,7 @@ def create_daily_production(
             )
         variety = (payload.variety or (selected_final_stock.variety if selected_final_stock is not None else "") or "Standard/White").strip()
 
+        machine_bottom_size_mm = machine.bottom_size_mm or 68
         blank_stock = (
             db.query(BlankStock)
             .filter(BlankStock.factory_id == factory_id)
@@ -341,11 +346,22 @@ def create_daily_production(
             .first()
         )
         if blank_stock is None:
+            # Copy weight_per_bora_kg from an existing same-size blank stock if available
+            existing_same_size = (
+                db.query(BlankStock)
+                .filter(BlankStock.factory_id == factory_id)
+                .filter(BlankStock.blank_size_ml == product_size_ml)
+                .filter(BlankStock.weight_per_bora_kg > 0)
+                .first()
+            )
+            fallback_weight = existing_same_size.weight_per_bora_kg if existing_same_size else Decimal("20.000")
             blank_stock = BlankStock(
                 factory_id=factory_id,
                 blank_size_ml=product_size_ml,
                 variety=variety,
-                linked_bottom_size_mm=machine.bottom_size_mm,
+                linked_bottom_size_mm=machine_bottom_size_mm,
+                weight_per_bora_kg=fallback_weight,
+                total_boras=Decimal("0.000"),
                 total_qty_kg=Decimal("0.000"),
             )
             db.add(blank_stock)
@@ -354,7 +370,7 @@ def create_daily_production(
         bottom_stock = (
             db.query(BottomStock)
             .filter(BottomStock.factory_id == factory_id)
-            .filter(BottomStock.bottom_size_mm == machine.bottom_size_mm)
+            .filter(BottomStock.bottom_size_mm == machine_bottom_size_mm)
             .filter(sql_func.lower(BottomStock.variety) == to_lower(variety))
             .with_for_update()
             .first()
@@ -362,7 +378,7 @@ def create_daily_production(
         if bottom_stock is None:
             bottom_stock = BottomStock(
                 factory_id=factory_id,
-                bottom_size_mm=machine.bottom_size_mm,
+                bottom_size_mm=machine_bottom_size_mm,
                 variety=variety,
                 total_qty_kg=Decimal("0.000"),
             )
@@ -587,6 +603,22 @@ def create_daily_production(
             action="insert",
             data=payload,
         )
+
+        # P4.5 D1: action alert to Owner (best-effort, never raises)
+        try:
+            from models import Machine as _Machine, Factory as _Factory
+            _f = db.query(_Factory).filter(_Factory.id == current_user.factory_id).first()
+            _m = db.query(_Machine).filter(_Machine.id == production.machine_id).first() if hasattr(production, "machine_id") else None
+            if _f is not None:
+                notify_production_created(
+                    db,
+                    factory=_f,
+                    actor=current_user,
+                    machine_name=getattr(_m, "machine_name", None) or getattr(_m, "name", None) or "—",
+                    boxes=int(production.total_boxes or production.boxes_produced or 0),
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
         return DailyProductionResponse(
             production_id=production.id,
@@ -900,6 +932,22 @@ def delete_daily_production(
         )
         
         db.commit()
+
+        # P4.5 D1: action alert to Owner (best-effort, never raises)
+        try:
+            from models import Machine as _Machine, Factory as _Factory
+            _f = db.query(_Factory).filter(_Factory.id == current_user.factory_id).first()
+            _m = db.query(_Machine).filter(_Machine.id == production.machine_id).first() if hasattr(production, "machine_id") else None
+            if _f is not None:
+                notify_production_deleted(
+                    db,
+                    factory=_f,
+                    actor=current_user,
+                    machine_name=getattr(_m, "machine_name", None) or getattr(_m, "name", None) or "—",
+                    boxes=int(production.total_boxes or production.boxes_produced or 0),
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
         background_tasks.add_task(
             sync_data_to_n8n_bg,

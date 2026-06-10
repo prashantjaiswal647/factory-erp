@@ -1,8 +1,8 @@
-import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X } from "lucide-react";
+import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X, Mail, Send, Printer } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { downloadInvoicePdf, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, api } from "../lib/api";
-import type { InvoiceDashboardResponse, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
+import { downloadInvoicePdf, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
+import type { InvoiceDashboardResponse, InvoiceDeliveryHistoryItem, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
 
 function money(value: string | number) {
   return `Rs ${Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -76,6 +76,8 @@ export default function InvoicesPage() {
   const [viewingId, setViewingId] = useState<number | null>(null);
   const [selectedInvoiceDetails, setSelectedInvoiceDetails] = useState<InvoiceDocumentSummary | null>(null);
   const [message, setMessage] = useState("");
+  const [deliveryHistory, setDeliveryHistory] = useState<InvoiceDeliveryHistoryItem[]>([]);
+  const [deliveryId, setDeliveryId] = useState<number | null>(null);
   
   // Custom Invoice Form state
   const [showCreateInvoice, setShowCreateInvoice] = useState(false);
@@ -174,6 +176,62 @@ export default function InvoicesPage() {
       setMessage(apiErrorMessage(error));
     } finally {
       setViewingId(null);
+    }
+  }
+
+  async function loadDeliveryHistory(invoiceId: number) {
+    try {
+      const response = await getInvoiceDeliveryHistory(invoiceId);
+      setDeliveryHistory(response.data);
+    } catch {
+      setDeliveryHistory([]);
+    }
+  }
+
+  async function openDetails(invoice: InvoiceDocumentSummary) {
+    setSelectedInvoiceDetails(invoice);
+    await loadDeliveryHistory(invoice.id);
+  }
+
+  async function reprint(invoice: InvoiceDocumentSummary) {
+    setDeliveryId(invoice.id);
+    try {
+      await reprintInvoice(invoice.id);
+      await download(invoice);
+      setMessage("Reprint PDF prepared.");
+      await loadDeliveryHistory(invoice.id);
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setDeliveryId(null);
+    }
+  }
+
+  async function sendTelegram(invoice: InvoiceDocumentSummary) {
+    setDeliveryId(invoice.id);
+    try {
+      await sendInvoiceTelegram(invoice.id, "owner");
+      setMessage("Invoice sent to Owner Telegram.");
+      await loadDeliveryHistory(invoice.id);
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setDeliveryId(null);
+    }
+  }
+
+  async function sendEmail(invoice: InvoiceDocumentSummary) {
+    const email = window.prompt("Customer email address");
+    if (!email) return;
+    setDeliveryId(invoice.id);
+    try {
+      await sendInvoiceEmail(invoice.id, email);
+      setMessage("Invoice email sent.");
+      await loadDeliveryHistory(invoice.id);
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setDeliveryId(null);
     }
   }
 
@@ -540,7 +598,7 @@ export default function InvoicesPage() {
                           <button 
                             className="inline-flex h-9 items-center gap-2 rounded-md bg-zinc-100 px-3 text-xs font-semibold text-zinc-700 hover:bg-zinc-200 shadow-sm transition" 
                             type="button" 
-                            onClick={() => setSelectedInvoiceDetails(invoice)}
+                            onClick={() => void openDetails(invoice)}
                           >
                             <Info className="h-4 w-4 text-zinc-500" />
                             Details
@@ -555,13 +613,23 @@ export default function InvoicesPage() {
                             {viewingId === invoice.id ? "Opening" : "View"}
                           </button>
                           <button 
-                            className="inline-flex h-9 items-center gap-2 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300 shadow-sm transition" 
+                            className="inline-flex h-9 items-center gap-2 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300 shadow-sm transition"
+                            data-test-id="download-invoice-button"
                             type="button" 
                             disabled={downloadingId === invoice.id} 
                             onClick={() => download(invoice)}
                           >
                             <Download className="h-4 w-4" />
                             {downloadingId === invoice.id ? "Preparing" : "Download"}
+                          </button>
+                          <button className="inline-flex h-9 items-center gap-1 rounded-md border px-2 text-xs font-semibold" disabled={deliveryId === invoice.id} onClick={() => void reprint(invoice)}>
+                            <Printer className="h-4 w-4" /> Reprint
+                          </button>
+                          <button className="inline-flex h-9 items-center gap-1 rounded-md border px-2 text-xs font-semibold text-sky-700" disabled={deliveryId === invoice.id} onClick={() => void sendTelegram(invoice)}>
+                            <Send className="h-4 w-4" /> Telegram
+                          </button>
+                          <button className="inline-flex h-9 items-center gap-1 rounded-md border px-2 text-xs font-semibold text-violet-700" disabled={deliveryId === invoice.id} onClick={() => void sendEmail(invoice)}>
+                            <Mail className="h-4 w-4" /> Email
                           </button>
                         </div>
                       </td>
@@ -687,6 +755,24 @@ export default function InvoicesPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <span className="block text-xs font-bold uppercase tracking-wider text-zinc-500">Download & Delivery History</span>
+              {deliveryHistory.length === 0 ? (
+                <p className="rounded-lg border border-dashed p-3 text-center text-xs text-zinc-500">No delivery activity recorded yet.</p>
+              ) : (
+                <div className="divide-y rounded-lg border">
+                  {deliveryHistory.map((entry) => (
+                    <div key={entry.id} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                      <span className="font-semibold">{entry.channel}</span>
+                      <span className="text-zinc-500">{entry.destination_masked || "Local PDF"}</span>
+                      <span className={entry.status === "FAILED" ? "font-semibold text-red-700" : "font-semibold text-emerald-700"}>{entry.status}</span>
+                      <span className="text-zinc-500">{dateLabel(entry.created_at)}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

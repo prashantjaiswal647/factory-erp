@@ -29,7 +29,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import Factory, User
+from datetime import date
+
+from models import Customer, Factory, OutstandingBill, User
 from routers.integrations import require_n8n_api_key
 from services.telegram_callback_dedupe import dedupe_check
 from services.telegram_actions import (
@@ -266,6 +268,60 @@ def telegram_action_callback(
 
         elif action == "A6":
             result = handle_ask_start(db, factory_id, chat_id, {})
+
+        elif action == "R1":
+            sub_action = parts[1] if len(parts) > 1 else ""
+            customer_id = int(parts[2]) if len(parts) > 2 else 0
+
+            if sub_action == "send_reminder":
+                from services.recovery_automation import action_copy_reminder
+                from services.recovery_automation import render_reminder_text
+                customer = db.query(Customer).filter(Customer.id == customer_id, Customer.factory_id == factory_id).first()
+                if customer:
+                    action_copy_reminder(db, factory_id, customer_id, owner.id if owner else 0)
+                    factory_obj = db.query(Factory).filter(Factory.id == factory_id).first()
+                    factory_name = factory_obj.name if factory_obj else "Factory"
+                    # Get outstanding total
+                    from sqlalchemy import func
+                    total = db.query(func.coalesce(func.sum(OutstandingBill.balance_amount), 0)).filter(
+                        OutstandingBill.customer_id == customer_id,
+                        OutstandingBill.factory_id == factory_id,
+                        OutstandingBill.status.in_(["active", "partial"]),
+                        OutstandingBill.balance_amount > 0
+                    ).scalar()
+                    amount_paise = int(float(total or 0) * 100)
+                    days = (date.today() - db.query(func.min(OutstandingBill.bill_date)).filter(
+                        OutstandingBill.customer_id == customer_id,
+                        OutstandingBill.factory_id == factory_id,
+                        OutstandingBill.status.in_(["active", "partial"])
+                    ).scalar()).days if db.query(func.min(OutstandingBill.bill_date)).filter(
+                        OutstandingBill.customer_id == customer_id,
+                        OutstandingBill.factory_id == factory_id,
+                        OutstandingBill.status.in_(["active", "partial"])
+                    ).scalar() else 0
+                    reminder_text = render_reminder_text(customer.name, amount_paise, days, factory_name)
+                    result = TelegramActionResult(
+                        message=f"📋 Copy this reminder:\n\n{reminder_text}\n\nOwner can copy and send manually.",
+                        buttons=[]
+                    )
+
+            elif sub_action == "skip":
+                from services.recovery_automation import action_skip
+                action_skip(db, factory_id, customer_id, owner.id if owner else 0)
+                result = TelegramActionResult(message="✅ Skipped. No reminder sent.", buttons=[])
+
+            elif sub_action == "done":
+                from services.recovery_automation import action_mark_done
+                action_mark_done(db, factory_id, customer_id, owner.id if owner else 0)
+                result = TelegramActionResult(message="✅ Marked follow-up done.", buttons=[])
+
+            elif sub_action == "snooze":
+                from services.recovery_automation import action_snooze
+                action_snooze(db, factory_id, customer_id, owner.id if owner else 0, days=3)
+                result = TelegramActionResult(message="🔇 Snoozed for 3 days.", buttons=[])
+
+            else:
+                result = TelegramActionResult(message="⚠️ Unknown recovery action.", buttons=[])
 
         else:
             result = TelegramActionResult(

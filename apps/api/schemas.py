@@ -683,6 +683,8 @@ class CustomerCreate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     previous_due: Decimal = Field(default=Decimal("0.00"), ge=0)
     total_due: Decimal = Field(default=Decimal("0.00"), ge=0)
+    opening_balance: Decimal = Field(default=Decimal("0.00"), ge=0)
+    legacy_dues: Decimal = Field(default=Decimal("0.00"), ge=0)
 
 
 class CustomerResponse(BaseModel):
@@ -963,3 +965,57 @@ class AnalyticsSummaryResponse(BaseModel):
     total_wastage_weight: float = 0.0
     active_worker_count: float = 0.0
     ledger_net_receivables: float = 0.0
+
+
+class SupplierCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    address: Optional[str] = None
+    gst_number: Optional[str] = Field(default=None, max_length=50)
+
+
+class SupplierResponse(BaseModel):
+    id: int
+    name: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    gst_number: Optional[str] = None
+    outstanding_amount: Decimal
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PurchaseEntryCreate(BaseModel):
+    supplier_id: int
+    item_category: str = Field(..., pattern="^(Blank|Bottom|Box|Plastic|Polybag)$")
+    product_size_ml: Optional[int] = None
+    variety_design: Optional[str] = Field(default=None, max_length=100)
+    packaging_size_name: Optional[str] = Field(default=None, max_length=100)
+    bottom_size_mm: Optional[int] = None
+    quantity: Decimal = Field(..., gt=0)
+    rate: Decimal = Field(..., gt=0)
+    bill_number: Optional[str] = Field(default=None, max_length=100)
+    expected_delivery_date: Optional[date] = None
+    received_status: str = "Pending"
+    received_date: Optional[date] = None
+
+
+class PurchaseEntryResponse(BaseModel):
+    id: int
+    supplier_id: int
+    item_category: str
+    product_size_ml: Optional[int] = None
+    variety_design: Optional[str] = None
+    packaging_size_name: Optional[str] = None
+    bottom_size_mm: Optional[int] = None
+    quantity: Decimal
+    rate: Decimal
+    total_amount: Decimal
+    bill_number: Optional[str] = None
+    expected_delivery_date: Optional[date] = None
+    received_status: str
+    received_date: Optional[date] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

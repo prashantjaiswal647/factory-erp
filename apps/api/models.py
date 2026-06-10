@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -746,6 +747,8 @@ class FactoryExpense(TenantMixin, Base):
     amount = Column(Numeric(14, 2), nullable=False)
     category = Column(String(100), nullable=False, default="General", server_default="General", index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    machine_id = Column(Integer, ForeignKey("machines.id"), nullable=True, index=True)
+
 
     __table_args__ = (
         CheckConstraint("amount >= 0", name="ck_factory_expenses_amount_non_negative"),
@@ -1112,6 +1115,27 @@ class InvoiceDocument(TenantMixin, Base):
     )
 
 
+class InvoiceDeliveryLog(TenantMixin, Base):
+    __tablename__ = "invoice_delivery_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_document_id = Column(Integer, ForeignKey("invoice_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(String(20), nullable=False, index=True)
+    destination_masked = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, index=True)
+    error_message = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    invoice_document = relationship("InvoiceDocument")
+
+    __table_args__ = (
+        CheckConstraint("channel IN ('DOWNLOAD', 'REPRINT', 'TELEGRAM', 'EMAIL')", name="ck_invoice_delivery_channel"),
+        CheckConstraint("status IN ('SENT', 'FAILED', 'COMPLETED')", name="ck_invoice_delivery_status"),
+        Index("idx_invoice_delivery_factory_invoice", "factory_id", "invoice_document_id", "created_at"),
+    )
+
+
 class OutstandingBill(TenantMixin, Base):
     __tablename__ = "outstanding_bills"
 
@@ -1397,6 +1421,38 @@ class ActivityLog(TenantMixin, Base):
     metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
 
 
+class UnifiedAlert(TenantMixin, Base):
+    __tablename__ = "unified_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    dedupe_key = Column(String(255), nullable=False)
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    severity = Column(String(20), nullable=False, default="INFO", server_default="INFO", index=True)
+    status = Column(String(20), nullable=False, default="OPEN", server_default="OPEN", index=True)
+    source_module = Column(String(50), nullable=False, index=True)
+    related_entity_type = Column(String(100), nullable=True)
+    related_entity_id = Column(String(100), nullable=True)
+    related_route = Column(String(255), nullable=True)
+    suggested_action = Column(Text, nullable=True)
+    assigned_role = Column(String(50), nullable=False, default="Owner", server_default="Owner", index=True)
+    first_detected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_detected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    telegram_sent_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "dedupe_key", name="uq_unified_alert_factory_dedupe"),
+        CheckConstraint("severity IN ('INFO', 'WARNING', 'CRITICAL')", name="ck_unified_alert_severity"),
+        CheckConstraint("status IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED')", name="ck_unified_alert_status"),
+        Index("idx_unified_alert_factory_status_severity", "factory_id", "status", "severity"),
+    )
+
+
 class BillPayment(TenantMixin, Base):
     __tablename__ = "bill_payments"
 
@@ -1530,6 +1586,50 @@ def before_session_flush(session, flush_context, instances):
                         packets_per_box_limit=profile.polys_per_box or 1
                     )
                     session.add(fp)
+        elif isinstance(obj, DailySale):
+            profile = session.query(PackagingProfile).filter(
+                PackagingProfile.factory_id == obj.factory_id,
+                PackagingProfile.profile_name == obj.packaging_size_name,
+                PackagingProfile.cup_size_ml == obj.product_size_ml
+            ).first()
+            if not profile:
+                profile = session.query(PackagingProfile).filter(
+                    PackagingProfile.factory_id == obj.factory_id
+                ).first()
+            if profile:
+                existing = session.query(SalesInvoice).filter(
+                    SalesInvoice.factory_id == obj.factory_id,
+                    SalesInvoice.customer_id == obj.customer_id,
+                    SalesInvoice.date == obj.date,
+                    SalesInvoice.cup_size_ml == obj.product_size_ml,
+                    SalesInvoice.packaging_profile_id == profile.id
+                ).first()
+                if not existing:
+                    for new_obj in session.new:
+                        if isinstance(new_obj, SalesInvoice):
+                            if (new_obj.factory_id == obj.factory_id and
+                                new_obj.customer_id == obj.customer_id and
+                                new_obj.date == obj.date and
+                                new_obj.cup_size_ml == obj.product_size_ml and
+                                new_obj.packaging_profile_id == profile.id):
+                                existing = new_obj
+                                break
+                if existing:
+                    existing.boxes_sold = obj.boxes_sold
+                    existing.total_amount = obj.total_amount
+                    existing.amount_paid = obj.amount_paid
+                else:
+                    sales_invoice = SalesInvoice(
+                        factory_id=obj.factory_id,
+                        customer_id=obj.customer_id,
+                        date=obj.date,
+                        cup_size_ml=obj.product_size_ml,
+                        packaging_profile_id=profile.id,
+                        boxes_sold=obj.boxes_sold,
+                        total_amount=obj.total_amount,
+                        amount_paid=obj.amount_paid
+                    )
+                    session.add(sales_invoice)
 
     # 2. Handle updates (session.dirty)
     for obj in list(session.dirty):
@@ -1690,6 +1790,7 @@ class TelegramUserBinding(TenantMixin, Base):
     telegram_username = Column(String(255), nullable=True)
     telegram_first_name = Column(String(255), nullable=True)
     telegram_connected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    welcome_sent_at = Column(DateTime(timezone=True), nullable=True)
     last_message_at = Column(DateTime(timezone=True), nullable=True)
     last_message_status = Column(String(30), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
@@ -1699,6 +1800,34 @@ class TelegramUserBinding(TenantMixin, Base):
     __table_args__ = (
         UniqueConstraint("factory_id", "user_id", name="uq_telegram_user_binding_factory_user"),
         CheckConstraint("role IN ('Owner', 'Sub-Owner')", name="ck_telegram_user_binding_role"),
+    )
+
+
+class TelegramActionAlertThrottle(TenantMixin, Base):
+    """Per-actor per-hour throttle for telegram action alerts (P4.5 D1).
+
+    One row per (factory_id, actor_user_id, action_type, hour_bucket).
+    Insert-on-conflict-increment gives an atomic counter without row churn.
+    """
+
+    __tablename__ = "telegram_action_alert_throttle"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    factory_id = Column(BigInteger, nullable=False, index=True)
+    actor_user_id = Column(BigInteger, nullable=False, index=True)
+    action_type = Column(String(40), nullable=False, index=True)
+    hour_bucket = Column(String(13), nullable=False)
+    count = Column(Integer, nullable=False, default=0, server_default="0")
+    last_sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "actor_user_id",
+            "action_type",
+            "hour_bucket",
+            name="uq_telegram_action_alert_throttle_bucket",
+        ),
     )
 
 
@@ -1728,8 +1857,29 @@ class MorningBriefingLog(TenantMixin, Base):
         ),
         CheckConstraint("retry_count >= 0", name="ck_morning_briefing_retry_count"),
     )
+class BriefingSnapshot(TenantMixin, Base):
+    __tablename__ = "briefing_snapshots"
 
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    role = Column(String(50), nullable=False, index=True)
+    briefing_date = Column(Date, nullable=False, index=True)
+    message_text = Column(Text, nullable=False)
+    snapshot_json = Column(JSON, nullable=False)
+    health_score = Column(Numeric(5, 2), nullable=True)
+    status = Column(String(30), nullable=False, default="generated", server_default="generated")
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    __table_args__ = (
+        UniqueConstraint(
+            "factory_id",
+            "briefing_date",
+            "role",
+            "user_id",
+            name="uq_briefing_snapshots_factory_date_role_user",
+        ),
+    )
 class CostPerCupDaily(TenantMixin, Base):
     __tablename__ = "cost_per_cup_daily"
 
@@ -2025,4 +2175,87 @@ class ExplanationCache(TenantMixin, Base):
             name="ck_explanation_cache_token_usage_non_negative",
         ),
         CheckConstraint("hit_count >= 0", name="ck_explanation_cache_hit_count_non_negative"),
+    )
+
+
+class Supplier(TenantMixin, Base):
+    __tablename__ = "suppliers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=True)
+    address = Column(Text, nullable=True)
+    gst_number = Column(String(50), nullable=True)
+    outstanding_amount = Column(Numeric(14, 2), nullable=False, default=0.0, server_default="0")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "name", name="uq_suppliers_factory_name"),
+    )
+
+
+class PurchaseEntry(TenantMixin, Base):
+    __tablename__ = "purchase_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_category = Column(String(50), nullable=False)  # Blank, Bottom, Box, Plastic, Polybag
+    product_size_ml = Column(Integer, nullable=True)
+    variety_design = Column(String(100), nullable=True)
+    packaging_size_name = Column(String(100), nullable=True)
+    bottom_size_mm = Column(Integer, nullable=True)
+    quantity = Column(Numeric(14, 3), nullable=False, default=0.0, server_default="0")
+    rate = Column(Numeric(14, 2), nullable=False, default=0.0, server_default="0")
+    total_amount = Column(Numeric(14, 2), nullable=False, default=0.0, server_default="0")
+    bill_number = Column(String(100), nullable=True)
+    expected_delivery_date = Column(Date, nullable=True)
+    received_status = Column(String(50), nullable=False, default="Pending", server_default="Pending")  # Pending, Received
+    received_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    supplier = relationship("Supplier", backref="purchases")
+
+
+class PurchaseRateHistory(TenantMixin, Base):
+    __tablename__ = "purchase_rate_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_category = Column(String(50), nullable=False)
+    identifier = Column(String(255), nullable=False)  # size or packaging name
+    rate = Column(Numeric(14, 2), nullable=False)
+    purchase_date = Column(Date, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RecoveryFollowup(TenantMixin, Base):
+    """P4.11: Track recovery follow-up actions per customer.
+
+    One row per customer action attempt. Owner/Sub-Owner can view suggestions;
+    only Owner can mark final follow-up action for financially sensitive data.
+
+    Status lifecycle:
+      suggested (default) -> copied / skipped / followup_done / snoozed
+    """
+    __tablename__ = "recovery_followups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    outstanding_bill_id = Column(Integer, ForeignKey("outstanding_bills.id"), nullable=True)
+    suggested_amount_paise = Column(BigInteger, nullable=False, default=0)
+    due_days = Column(Integer, nullable=False, default=0)
+    status = Column(String(30), nullable=False, default="suggested", server_default="suggested",
+                    index=True)  # suggested, copied, skipped, followup_done, snoozed
+    snoozed_until = Column(DateTime(timezone=True), nullable=True)
+    last_action_at = Column(DateTime(timezone=True), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    customer = relationship("Customer", backref="recovery_followups")
+    created_by = relationship("User", backref="recovery_followups")
+
+    __table_args__ = (
+        Index("ix_recovery_followups_factory_status", "factory_id", "status"),
     )

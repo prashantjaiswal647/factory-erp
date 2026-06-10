@@ -6,6 +6,7 @@ import SubscriptionGuard from "./components/SubscriptionGuard";
 import { useAuth } from "./context/AuthContext";
 import AiChatPage from "./pages/AiChatPage";
 import AttendancePage from "./pages/AttendancePage";
+import AlertsPage from "./pages/AlertsPage";
 import BillingPage from "./pages/BillingPage";
 import CalculatorPage from "./pages/CalculatorPage";
 import CostIntelligencePage from "./pages/CostIntelligencePage";
@@ -23,6 +24,7 @@ import OnboardingPage from "./pages/OnboardingPage";
 import OperationsPage from "./pages/OperationsPage";
 import DailySequencePage from "./pages/DailySequencePage";
 import OutstandingPage from "./pages/OutstandingPage";
+import CollectionWarRoomPage from "./pages/CollectionWarRoomPage";
 import PaymentCollectionPage from "./pages/PaymentCollectionPage";
 import ProductionPage from "./pages/ProductionPage";
 import ProfilePage from "./pages/ProfilePage";
@@ -31,6 +33,7 @@ import StaffManagement from "./pages/StaffManagement";
 import StorefrontPage from "./pages/StorefrontPage";
 import StorefrontSuccessPage from "./pages/StorefrontSuccessPage";
 import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
+import BriefingHistoryPage from "./pages/BriefingHistoryPage";
 import {
   SuperAdminAuditLogsPage,
   SuperAdminBriefingsPage,
@@ -98,6 +101,14 @@ export default function App() {
         <Route path="plans" element={<BillingPage />} />
         <Route path="subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="dashboard" element={<RoleLanding />} />
+        <Route
+          path="alerts"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <AlertsPage />
+            </PrivateRoute>
+          }
+        />
         <Route path="profile" element={<ProfilePage />} />
         <Route
           path="staff"
@@ -188,6 +199,14 @@ export default function App() {
           }
         />
         <Route
+          path="collection-war-room"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <CollectionWarRoomPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
           path="payments"
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
@@ -248,6 +267,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <CostIntelligencePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="briefing-history"
+          element={
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+              <BriefingHistoryPage />
             </PrivateRoute>
           }
         />

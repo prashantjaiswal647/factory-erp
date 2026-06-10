@@ -171,6 +171,12 @@ Security no-go rules:
 - Do not log sensitive data.
 - Do not bypass Super Admin controls for normal users.
 
+Security hardening status:
+- Authentication diagnostics use structured logging; production auth code must not use `AUTH DEBUG` or `print(...)`.
+- `/api/super-admin/login` is limited to 5 requests per client IP per 60 seconds.
+- n8n, Telegram, and AI webhook ingress is limited to 60 requests per client IP per 60 seconds.
+- Rate-limit overflow returns HTTP 429 before webhook business processing.
+
 ## 9. Bulk Upload Rules
 
 - Bulk upload same-file re-upload must never create a duplicate crash.
@@ -322,6 +328,50 @@ Follow this sequence unless a P0 incident overrides it.
 - Health history APIs read `daily_factory_health_snapshot` only and remain factory scoped.
 - Trend direction compares the current score with the available 7-day average using deterministic ±3 thresholds.
 - Risk drilldown routes are Production `/production`, Attendance `/attendance`, Collections `/outstanding`, Inventory `/inventory`, and Cost `/cost-intelligence`.
+
+## 22. Unified Alert Center
+
+- `unified_alerts` is the canonical factory-scoped alert inbox.
+- Dedupe is enforced by `(factory_id, dedupe_key)`; tenant IDs must never come from request payloads.
+- Severity values are `INFO`, `WARNING`, and `CRITICAL`; status values are `OPEN`, `ACKNOWLEDGED`, and `RESOLVED`.
+- Owner and Sub Owner may view and resolve alerts at `/alerts`.
+- Critical alerts are sent immediately to active Owner Telegram bindings once per alert escalation.
+- Morning briefings include the top three unresolved alerts; dashboards show the top five.
+
+## 23. Invoice Intelligence
+
+- Invoice numbers are allocated under factory/settings row locks and remain unique by `(factory_id, invoice_number)`.
+- `InvoiceDocument` generation from a sale is idempotent; reprint and delivery actions never create a second invoice.
+- GST invoices validate GSTIN shape and supported GST rates before any stock, ledger, or invoice write.
+- Owner branding uses factory name, address, GSTIN, invoice prefix, and digital signature configuration.
+- `invoice_delivery_logs` records download, reprint, Telegram, and email activity without changing invoice accounting data.
+- Invoice PDFs and delivery/history endpoints must always verify `factory_id`.
+
+## 24. AI Feature Vetting Rules
+
+Before building any AI feature ask:
+
+1. Will this help owner collect money?
+2. Will this save owner time?
+3. Will this prevent daily mistakes?
+
+If all answers are NO:
+Move feature to backlog.
+
+Owner Value > Technical Complexity
+Business Impact > Engineering Interest
+
+## 25. Future Revenue Stream - WhatsApp Premium Add-on
+
+- **Status**: Planned
+- **Trigger**: After 5 active factories OR 30 days successful Telegram usage
+- **Features**:
+  - WhatsApp Daily Briefing
+  - WhatsApp Invoice Delivery
+  - WhatsApp Recovery Alerts
+  - WhatsApp Collection Reminders
+- **Pricing**: ₹299 + GST / month
+- **Business Rule**: Telegram remains the default channel. WhatsApp is a paid convenience layer.
 
 ---
 Referenced by `opencode.jsonc` instructions array.

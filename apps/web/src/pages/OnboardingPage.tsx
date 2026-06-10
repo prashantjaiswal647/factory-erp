@@ -716,6 +716,7 @@ export default function OnboardingPage() {
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700"
                 type="button"
                 onClick={() => setMachine({ ...machine, raw_materials_mapped: [...(machine.raw_materials_mapped || []), ""] })}
+                data-test-id="add-material-button"
               >
                 <Plus className="h-3.5 w-3.5" />
                 Add Material
@@ -1290,9 +1291,9 @@ function SelectInput({ label, value, options, onChange }: { label: string; value
   );
 }
 
-function SaveButton({ label, isSaving, disabled = false, onClick }: { label: string; isSaving: boolean; disabled?: boolean; onClick: () => void }) {
+function SaveButton({ label, isSaving, disabled = false, onClick, dataTestId }: { label: string; isSaving: boolean; disabled?: boolean; onClick: () => void; dataTestId?: string }) {
   return (
-    <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving || disabled} type="button" onClick={onClick}>
+    <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving || disabled} type="button" onClick={onClick} data-test-id={dataTestId}>
       <Check className="h-4 w-4" />
       {isSaving ? "Saving..." : label}
     </button>

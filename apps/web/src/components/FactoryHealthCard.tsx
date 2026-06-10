@@ -34,7 +34,7 @@ export default function FactoryHealthCard() {
   const status = health.health_status || "GOOD";
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm" aria-label="Factory health score">
+    <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm" aria-label="Factory health score" data-test-id="factory-health-card">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="flex min-w-[190px] items-center gap-3">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-brand-50 text-brand-700">
@@ -42,7 +42,7 @@ export default function FactoryHealthCard() {
           </div>
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Factory Health</p>
-            <p className="text-3xl font-black text-zinc-950">{Math.round(health.overall_score ?? 0)}<span className="text-base text-zinc-500">/100</span></p>
+            <p className="text-3xl font-black text-zinc-950" data-test-id="health-score">{Math.round(health.overall_score ?? 0)}<span className="text-base text-zinc-500">/100</span></p>
           </div>
         </div>
         <div className="min-w-[150px]">

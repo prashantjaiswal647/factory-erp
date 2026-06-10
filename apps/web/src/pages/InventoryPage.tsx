@@ -218,7 +218,7 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700" to="/onboarding">
+          <Link className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700" data-test-id="add-stock-button" to="/onboarding">
             <PackagePlus className="h-4 w-4" /> Add Item
           </Link>
           <div className="relative">

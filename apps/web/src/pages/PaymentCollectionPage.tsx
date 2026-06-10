@@ -205,6 +205,7 @@ export default function PaymentCollectionPage() {
                 autoFocus
                 inputMode="decimal"
                 className="h-12 rounded-md border border-zinc-200 px-3 text-base font-semibold outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                data-test-id="payment-amount-input"
                 type="number"
                 value={payment.amount_paid}
                 onFocus={(event) => event.target.select()}
@@ -214,7 +215,7 @@ export default function PaymentCollectionPage() {
           </div>
 
           <div className="mt-5 flex justify-end">
-            <button className="h-11 rounded-md bg-brand-600 px-5 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" type="button" disabled={isSaving || !selectedCustomer} onClick={savePayment}>
+            <button className="h-11 rounded-md bg-brand-600 px-5 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" data-test-id="record-payment-button" type="button" disabled={isSaving || !selectedCustomer} onClick={savePayment}>
               {isSaving ? "Saving..." : "Save Payment"}
             </button>
           </div>

@@ -480,6 +480,15 @@ export type InvoiceDocumentSummary = {
   payment_collections?: InvoicePaymentSummary[];
 };
 
+export type InvoiceDeliveryHistoryItem = {
+  id: number;
+  channel: "DOWNLOAD" | "REPRINT" | "TELEGRAM" | "EMAIL";
+  destination_masked?: string | null;
+  status: "SENT" | "FAILED" | "COMPLETED";
+  error_message?: string | null;
+  created_at: string;
+};
+
 export type InvoiceDashboardResponse = {
   total_invoices: number;
   total_billed: string;
@@ -990,6 +999,22 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
   });
 }
 
+export function reprintInvoice(invoiceId: number) {
+  return api.post(`/api/invoices/${invoiceId}/reprint`);
+}
+
+export function sendInvoiceTelegram(invoiceId: number, destination: "owner" | "customer" = "owner") {
+  return api.post(`/api/invoices/${invoiceId}/telegram`, { destination });
+}
+
+export function sendInvoiceEmail(invoiceId: number, email: string) {
+  return api.post(`/api/invoices/${invoiceId}/email`, { email });
+}
+
+export function getInvoiceDeliveryHistory(invoiceId: number) {
+  return api.get<InvoiceDeliveryHistoryItem[]>(`/api/invoices/${invoiceId}/history`);
+}
+
 export function createPendingSaleOrder(payload: DailySaleCreate) {
   return api.post<DailySaleResponse>("/api/sales/order", payload);
 }
@@ -1104,6 +1129,73 @@ export function clearOutstandingBill(billId: number, reason?: string) {
 
 export function sendOutstandingReminder(customerId: number) {
   return api.post(`/api/accounts/reminders/${customerId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Collection War Room (P4.5 D2)
+// ---------------------------------------------------------------------------
+
+export interface CollectionWarRoomAgingBucket {
+  "0_7_days": number;
+  "8_15_days": number;
+  "16_30_days": number;
+  "31_60_days": number;
+  "60_plus_days": number;
+}
+
+export interface CollectionWarRoomTopCustomer {
+  customer_id: number;
+  customer_name: string;
+  total_due: number;
+  days_old: number;
+}
+
+export interface CollectionWarRoomDueTrendPoint {
+  date: string;
+  outstanding: number;
+}
+
+export interface CollectionWarRoomResponse {
+  total_outstanding: number;
+  overdue_amount: number;
+  top_customers: CollectionWarRoomTopCustomer[];
+  aging_buckets: CollectionWarRoomAgingBucket;
+  high_risk_customers: number;
+  due_trend: CollectionWarRoomDueTrendPoint[];
+}
+
+export function getCollectionWarRoom() {
+  return api.get<CollectionWarRoomResponse>("/api/dashboard/collection-war-room");
+}
+
+export function sendCollectionWarRoomTelegramAlert() {
+  return api.post<{ status: string; message?: string }>(
+    "/api/dashboard/collection-war-room/telegram-alert"
+  );
+}
+
+// Collection War Room action helpers
+export function getRecoverySuggestions() {
+  return api.get<{ suggestions: string[] }>("/api/dashboard/collection-war-room/suggestions");
+}
+
+export function copyReminder(customerId: number) {
+  return api.post<{ message: string }>(
+    `/api/dashboard/collection-war-room/actions/copy-reminder/${customerId}`
+  );
+}
+
+export function markDone(customerId: number) {
+  return api.post<{ message: string }>(
+    `/api/dashboard/collection-war-room/actions/mark-done/${customerId}`
+  );
+}
+
+export function snoozeCustomer(customerId: number, days = 3) {
+  return api.post<{ message: string }>(
+    `/api/dashboard/collection-war-room/actions/snooze/${customerId}`,
+    { days }
+  );
 }
 
 export function getAttendanceSummary(month: string) {
@@ -1659,15 +1751,29 @@ export type TelegramConnectionStatus = {
   connected: boolean;
   role: "Owner" | "Sub-Owner";
   telegram_username?: string | null;
+  telegram_first_name?: string | null;
   chat_id_verified: boolean;
+  connected_at?: string | null;
+  welcome_sent_at?: string | null;
   last_message_at?: string | null;
   last_message_status?: "sent" | "failed" | null;
+};
+
+export type TelegramConnectCode = {
+  code: string;
+  deep_link: string;
+  bot_username: string;
+  expires_at: string;
 };
 
 export function createTelegramConnectLink() {
   return api.post<{ telegram_url: string; expires_at: string; status: "pending" }>(
     "/api/integrations/telegram/connect-link"
   );
+}
+
+export function createTelegramConnectCode() {
+  return api.post<TelegramConnectCode>("/api/integrations/telegram/connect-code");
 }
 
 export function getTelegramConnectionStatus() {
@@ -2093,7 +2199,7 @@ export type FactoryHealthResponse = {
 };
 
 export async function getTodayFactoryHealth() {
-  const response = await api.get<FactoryHealthResponse>("/factory-health/today");
+  const response = await api.get<FactoryHealthResponse>("/api/factory-health/today");
   return response.data;
 }
 
@@ -2125,7 +2231,43 @@ export type FactoryHealthHistoryResponse = {
 };
 
 export async function getFactoryHealthHistory(days = 30) {
-  const response = await api.get<FactoryHealthHistoryResponse>("/factory-health/history", { params: { days } });
+  const response = await api.get<FactoryHealthHistoryResponse>("/api/factory-health/history", { params: { days } });
+  return response.data;
+}
+
+export type UnifiedAlert = {
+  id: number;
+  title: string;
+  message: string;
+  severity: "INFO" | "WARNING" | "CRITICAL";
+  status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+  source_module: string;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  related_route: string | null;
+  suggested_action: string | null;
+  assigned_role: string;
+  first_detected_at: string;
+  last_detected_at: string;
+};
+
+export async function getAlerts(params?: { severity?: string; module?: string; status?: string }) {
+  const response = await api.get<{ items: UnifiedAlert[] }>("/api/alerts", { params });
+  return response.data;
+}
+
+export async function getTopAlerts(limit = 5) {
+  const response = await api.get<{ items: UnifiedAlert[] }>("/api/alerts/top", { params: { limit } });
+  return response.data;
+}
+
+export async function acknowledgeAlert(alertId: number) {
+  const response = await api.patch<UnifiedAlert>(`/api/alerts/${alertId}/acknowledge`);
+  return response.data;
+}
+
+export async function resolveAlert(alertId: number) {
+  const response = await api.patch<UnifiedAlert>(`/api/alerts/${alertId}/resolve`);
   return response.data;
 }
 

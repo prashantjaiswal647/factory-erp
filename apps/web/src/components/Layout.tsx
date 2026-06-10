@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, IndianRupee, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, UserCog, UserRound, UsersRound, X } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Calculator, CalendarDays, ChevronDown, ClipboardList, CreditCard, Factory, FileText, Gauge, IndianRupee, LockKeyhole, LogOut, Menu, PlugZap, ReceiptText, RotateCw, Search, Settings2, ShieldAlert, TrendingDown, UserCog, UserRound, UsersRound, Wallet, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -18,6 +18,7 @@ type NavigationItem = {
 
 const navigation: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: Gauge, roles: ["Owner", "Sub-Owner"] },
+  { label: "Alerts", href: "/alerts", icon: ShieldAlert, roles: ["Owner", "Sub-Owner"] },
   { label: "Manual Operations", href: "/operations", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
   { label: "Daily Sequence", href: "/daily-sequence", icon: CalendarDays, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
   { label: "Inventory", href: "/inventory", icon: Boxes, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
@@ -25,12 +26,15 @@ const navigation: NavigationItem[] = [
   { label: "Machine Setup", href: "/machine-onboarding", icon: Settings2, roles: ["Owner", "Sub-Owner"] },
   { label: "Calculator", href: "/calculator", icon: Calculator, roles: ["Owner", "Sub-Owner"] },
   { label: "Cost Intelligence", href: "/cost-intelligence", icon: IndianRupee, roles: ["Owner", "Sub-Owner"] },
+  { label: "Briefing History", href: "/briefing-history", icon: ClipboardList, roles: ["Owner", "Sub-Owner"] },
   { label: "Production", href: "/production", icon: Factory, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] },
   { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["Owner", "Sub-Owner", "Supervisor"] },
   { label: "Customers", href: "/customers", icon: UsersRound, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
   { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Invoices", href: "/invoices", icon: FileText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
+  { label: "Collection War Room", href: "/collection-war-room", icon: TrendingDown, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Outstanding", href: "/outstanding", icon: Wallet, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner", "Sub-Owner"], section: "Admin" },
   { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },

@@ -9,8 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db import SessionLocal
-from models import ActivityLog, Factory, MorningBriefingLog, User
+from models import ActivityLog, Factory, MorningBriefingLog, TelegramUserBinding, User
 from services.briefing_service import audit_briefing, build_briefing
+from services.unified_alerts import sync_factory_alerts
 from services.telegram_delivery import send_telegram_message
 from services.timezone_utils import KOLKATA_ZONE, get_kolkata_now
 
@@ -161,6 +162,7 @@ def deliver_factory_briefing(
     max_retries: int = DEFAULT_RETRIES,
     sender=send_telegram_message,
 ) -> tuple[MorningBriefingLog, bool]:
+    sync_factory_alerts(db, factory.id, today=briefing_date, send_critical=True)
     row, _ = _claim_log(db, factory, owner, briefing_date)
     if row.status == "sent":
         db.commit()
@@ -242,6 +244,92 @@ def run_daily_briefing_batch(
                 db.rollback()
                 metrics["failed"] += 1
                 logger.exception("Morning briefing failed factory_id=%s date=%s", factory.id, target_date)
+
+            # P4.5 D3: Sub-Owner operational briefing (separate channel,
+            # separate row in MorningBriefingLog keyed by recipient).
+            try:
+                from services.briefing_recovery_merge import (
+                    compose_daily_briefing_with_recovery,
+                )
+                from services.telegram_delivery import send_telegram_message as _sender
+
+                subowner_bindings = (
+                    db.query(TelegramUserBinding)
+                    .filter(
+                        TelegramUserBinding.factory_id == factory.id,
+                        TelegramUserBinding.role == "Sub-Owner",
+                        TelegramUserBinding.is_active.is_(True),
+                    )
+                    .all()
+                )
+                for binding in subowner_bindings:
+                    subowner = (
+                        db.query(User).filter(User.id == binding.user_id).first()
+                    )
+                    if subowner is None or not subowner.is_active:
+                        continue
+                    result = compose_daily_briefing_with_recovery(
+                        db,
+                        factory.id,
+                        target_date,
+                        subowner,
+                    )
+                    # Use a per-recipient log key to avoid dedup collision
+                    # with the Owner's morning_briefing_log row.
+                    sub_log = (
+                        db.query(MorningBriefingLog)
+                        .filter(
+                            MorningBriefingLog.factory_id == factory.id,
+                            MorningBriefingLog.briefing_date == target_date,
+                            MorningBriefingLog.channel == "telegram_subowner",
+                        )
+                        .with_for_update()
+                        .first()
+                    )
+                    if sub_log is not None and sub_log.status == "sent":
+                        continue
+                    if sub_log is None:
+                        sub_log = MorningBriefingLog(
+                            factory_id=factory.id,
+                            briefing_date=target_date,
+                            message_text=result["message_text"],
+                            status="generated",
+                            channel="telegram_subowner",
+                        )
+                        db.add(sub_log)
+                    else:
+                        sub_log.message_text = result["message_text"]
+                    db.commit()
+                    # Direct send to the Sub-Owner's chat_id. Use the
+                    # existing sender with a one-off chat_id override.
+                    class _FactoryProxy:
+                        pass
+                    proxy = _FactoryProxy()
+                    proxy.id = factory.id
+                    proxy.telegram_chat_id = binding.telegram_chat_id
+                    try:
+                        _sender(proxy, result["message_text"])
+                        sub_log.status = "sent"
+                        sub_log.sent_at = datetime.now(KOLKATA_ZONE)
+                        sub_log.retry_count = 0
+                        db.commit()
+                        metrics["sent"] += 1
+                    except Exception:
+                        sub_log.status = "failed"
+                        sub_log.retry_count = 1
+                        db.commit()
+                        logger.warning(
+                            "sub-owner briefing send failed factory_id=%s subowner_id=%s",
+                            factory.id,
+                            subowner.id,
+                        )
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Sub-owner briefing dispatch failed factory_id=%s",
+                    factory.id,
+                )
+
         logger.info("Morning briefing batch metrics=%s date=%s", metrics, target_date)
         return metrics
     finally:

@@ -3,7 +3,21 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+TEST_FILE = Path(__file__).resolve()
+REPOSITORY_ROOT = next(
+    (
+        parent
+        for parent in TEST_FILE.parents
+        if (parent / "scripts" / "check_backend_policies.py").is_file()
+    ),
+    None,
+)
+if REPOSITORY_ROOT is None:
+    pytest.skip(
+        "Repository-level policy script is not included in the API-only image",
+        allow_module_level=True,
+    )
+sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from scripts.check_backend_policies import run_checks
 

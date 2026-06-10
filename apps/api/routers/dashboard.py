@@ -4,7 +4,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Body, Depends, Response
 from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy import func as sql_func
@@ -14,7 +14,7 @@ from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import DASHBOARD_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog
+from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog, OutstandingBill
 from schemas import AnalyticsSummaryResponse
 
 
@@ -481,4 +481,175 @@ def get_analytics_summary(
 
     return AnalyticsSummaryResponse(**stats)
 
+
+@router.get("/collection-war-room")
+def get_collection_war_room(current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    today = date.today()
+
+    # Query active outstanding bills
+    bills = db.query(OutstandingBill).filter(
+        OutstandingBill.factory_id == factory_id,
+        OutstandingBill.status.in_(["active", "partial"]),
+        OutstandingBill.balance_amount > 0
+    ).all()
+
+    total_outstanding = Decimal("0.00")
+    overdue_amount = Decimal("0.00")
+    
+    # Buckets initialization
+    aging_buckets = {
+        "0_7_days": Decimal("0.00"),
+        "8_15_days": Decimal("0.00"),
+        "16_30_days": Decimal("0.00"),
+        "31_60_days": Decimal("0.00"),
+        "60_plus_days": Decimal("0.00")
+    }
+
+    # Group by customer to calculate top dues
+    customer_dues = {}
+
+    for bill in bills:
+        total_outstanding += bill.balance_amount
+        days_old = (today - bill.bill_date).days
+
+        # Overdue logic (older than standard 15 days credit term)
+        if days_old > 15:
+            overdue_amount += bill.balance_amount
+
+        # Aging logic
+        if days_old <= 7:
+            aging_buckets["0_7_days"] += bill.balance_amount
+        elif days_old <= 15:
+            aging_buckets["8_15_days"] += bill.balance_amount
+        elif days_old <= 30:
+            aging_buckets["16_30_days"] += bill.balance_amount
+        elif days_old <= 60:
+            aging_buckets["31_60_days"] += bill.balance_amount
+        else:
+            aging_buckets["60_plus_days"] += bill.balance_amount
+
+        # Customer grouping
+        c_id = bill.customer_id
+        if c_id not in customer_dues:
+            customer_dues[c_id] = {
+                "customer_id": c_id,
+                "customer_name": bill.customer.name,
+                "total_due": Decimal("0.00"),
+                "oldest_bill_days": 0
+            }
+        customer_dues[c_id]["total_due"] += bill.balance_amount
+        customer_dues[c_id]["oldest_bill_days"] = max(customer_dues[c_id]["oldest_bill_days"], days_old)
+
+    # Sort customers and get top 10
+    top_customers = sorted(customer_dues.values(), key=lambda x: x["total_due"], reverse=True)[:10]
+
+    # High Risk Customers count (outstanding balance with age > 30 days)
+    high_risk_count = sum(1 for c in customer_dues.values() if c["oldest_bill_days"] > 30)
+
+    # Reconstruct last 30 days due trend
+    due_trend = []
+    # Generate daily outstanding values for the last 7 days
+    for i in range(6, -1, -1):
+        target_date = today - timedelta(days=i)
+        # Outstanding balance up to target_date
+        historical_total = db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0)).filter(
+            OutstandingBill.factory_id == factory_id,
+            OutstandingBill.status.in_(["active", "partial"]),
+            OutstandingBill.bill_date <= target_date
+        ).scalar()
+        due_trend.append({
+            "date": target_date.strftime("%Y-%m-%d"),
+            "outstanding": float(historical_total)
+        })
+
+    return {
+        "total_outstanding": float(total_outstanding),
+        "overdue_amount": float(overdue_amount),
+        "top_customers": [
+            {
+                "customer_id": c["customer_id"],
+                "customer_name": c["customer_name"],
+                "total_due": float(c["total_due"]),
+                "days_old": c["oldest_bill_days"]
+            }
+            for c in top_customers
+        ],
+        "aging_buckets": {k: float(v) for k, v in aging_buckets.items()},
+        "high_risk_customers": high_risk_count,
+        "due_trend": due_trend
+    }
+
+
+@router.post("/collection-war-room/telegram-alert")
+def send_collection_war_room_telegram_alert(current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.telegram_delivery import send_role_briefing
+
+    stats = get_collection_war_room(current_user, db)
+    
+    top_due_str = ""
+    for c in stats["top_customers"][:2]:
+        top_due_str += f"\n{c['customer_name']}\n₹{c['total_due']:,.2f}\n{c['days_old']} Days\n"
+
+    alert_text = (
+        "💰 *Collection War Room*\n\n"
+        "Outstanding:\n"
+        f"₹{stats['total_outstanding']:,.2f}\n\n"
+        "Top Due:\n"
+        f"{top_due_str}\n"
+        f"High Risk Customers:\n"
+        f"{stats['high_risk_customers']}"
+    )
+
+    try:
+        send_role_briefing(db, factory_id, "Owner", alert_text)
+        return {"status": "ok", "message": "Telegram alert sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send Telegram alert: {str(e)}")
+
+
+@router.get("/collection-war-room/suggestions")
+def get_recovery_suggestions(current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.recovery_automation import generate_recovery_suggestions
+    suggestions = generate_recovery_suggestions(db, factory_id, current_user)
+    return suggestions
+
+
+@router.post("/collection-war-room/actions/copy-reminder/{customer_id}")
+def action_copy_reminder(customer_id: int, current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.recovery_automation import action_copy_reminder
+    action_copy_reminder(db, factory_id, customer_id, current_user.id)
+    return {"status": "ok", "action": "copied"}
+
+
+@router.post("/collection-war-room/actions/skip/{customer_id}")
+def action_skip(customer_id: int, current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.recovery_automation import action_skip
+    action_skip(db, factory_id, customer_id, current_user.id)
+    return {"status": "ok", "action": "skipped"}
+
+
+@router.post("/collection-war-room/actions/mark-done/{customer_id}")
+def action_mark_done(customer_id: int, current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.recovery_automation import action_mark_done
+    action_mark_done(db, factory_id, customer_id, current_user.id)
+    return {"status": "ok", "action": "followup_done"}
+
+
+class SnoozeRequest(BaseModel):
+    days: int = 3
+
+
+@router.post("/collection-war-room/actions/snooze/{customer_id}")
+def action_snooze(customer_id: int, body: SnoozeRequest = Body(default=SnoozeRequest()), current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    factory_id = current_user.factory_id
+    from services.recovery_automation import action_snooze
+    result = action_snooze(db, factory_id, customer_id, current_user.id, days=body.days)
+    snoozed_until = result.get("snoozed_until") if isinstance(result, dict) else None
+    return {"status": "ok", "action": "snoozed", "snoozed_until": snoozed_until}
 

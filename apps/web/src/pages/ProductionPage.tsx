@@ -460,7 +460,7 @@ export default function ProductionPage() {
 
         {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
-        <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving} type="button" onClick={submit}>
+        <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" data-test-id="save-production-button" disabled={isSaving} type="button" onClick={submit}>
           <Check className="h-4 w-4" />
           {isSaving ? "Saving..." : "Save Production"}
         </button>
