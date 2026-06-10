@@ -137,15 +137,22 @@ def register_webhook() -> tuple[bool, str]:
                     }
                 )
                 data = response.json()
-                
+
                 if not data.get("ok"):
                     return False, f"setWebhook failed: {data.get('description', 'Unknown error')}"
-                
+
                 logger.info(f"Webhook successfully registered: {expected_url}")
                 return True, f"Webhook registered successfully at {expected_url}"
-        
-        success, message = asyncio.run(register())
+
+        loop = asyncio.get_event_loop()
+
+        if loop.is_running():
+            loop.create_task(register())
+            return True, "Webhook registration scheduled"
+
+        success, message = loop.run_until_complete(register())
         return success, message
+
         
     except httpx.RequestError as exc:
         logger.error(f"Failed to register webhook: {exc}")
