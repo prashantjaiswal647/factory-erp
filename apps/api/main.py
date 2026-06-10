@@ -967,6 +967,10 @@ def on_startup():
     db = next(get_db())
     try: seed_default_users(db)
     finally: db.close()
+    
+    # Auto-register Telegram webhook on startup
+    from services.telegram_webhook_manager import auto_register_webhook
+    auto_register_webhook()
 
 @app.get("/health")
 def health_check():

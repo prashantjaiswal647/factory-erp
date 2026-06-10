@@ -1757,6 +1757,7 @@ export type TelegramConnectionStatus = {
   welcome_sent_at?: string | null;
   last_message_at?: string | null;
   last_message_status?: "sent" | "failed" | null;
+  last_webhook_event_at?: string | null;
 };
 
 export type TelegramConnectCode = {
@@ -1779,6 +1780,33 @@ export function createTelegramConnectCode() {
 export function getTelegramConnectionStatus() {
   return api.get<TelegramConnectionStatus>("/api/integrations/telegram/status");
 }
+export function getTelegramDiagnostics() {
+  return api.get<{
+  bot_token_configured: boolean;
+  bot_username_configured: boolean;
+  telegram_bot_username?: string | null;
+  webhook_secret_configured: boolean;
+  expected_webhook_url?: string;
+  pending_bind_count: number;
+  last_binding_success_count: number;
+  last_binding_failure_count: number;
+  last_binding_success_at?: string | null;
+  last_binding_failure_at?: string | null;
+}
+
+export function registerTelegramWebhook(useDefault: boolean = true, botToken?: string, webhookSecret?: string) {
+  return api.post<{
+  success: boolean;
+  message: string;
+  webhook_url: string;
+}>("/api/integrations/telegram/register-webhook", {
+    use_default: useDefault,
+    bot_token: botToken,
+    webhook_secret: webhookSecret,
+  });
+}>("/api/integrations/telegram/diagnostics");
+}
+
 
 export function sendTelegramTestMessage() {
   return api.post<{ status: string; message: string }>("/api/integrations/telegram/test-message");
