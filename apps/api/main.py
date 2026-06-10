@@ -13,6 +13,7 @@ from urllib.error import URLError
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -97,6 +98,8 @@ from routers import factory_health
 from routers import wastage
 from routers import profit
 from routers import weekly_digest
+from routers import purchases
+from routers import alerts
 from routers.daily_sequence import router as daily_sequence_router
 from routers.briefings import router as briefings_router
 from routers.briefing_admin import router as briefing_admin_router
@@ -236,6 +239,8 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(briefing_admin_router)
     application.include_router(explanation_admin_router)
     application.include_router(telegram_actions_router)
+    application.include_router(purchases.router)
+    application.include_router(alerts.router)
     #application.include_router(ai_invoice_router)
     #application.include_router(internal_automation_router)
 
@@ -246,18 +251,43 @@ os.makedirs("./volumes/media", exist_ok=True)
 app.mount("/media", StaticFiles(directory="./volumes/media"), name="media")
 
 # ==================== EXCEPTION TELEMETRY TRACER ====================
+def _request_id(request: Request) -> str:
+    return (
+        request.headers.get("x-request-id")
+        or getattr(request.state, "request_id", None)
+        or str(uuid4())
+    )
+
+
+@app.exception_handler(HTTPException)
+async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
+    """Keep established API contracts while hiding explicit HTTP 500 details."""
+    if exc.status_code != status.HTTP_500_INTERNAL_SERVER_ERROR:
+        return await http_exception_handler(request, exc)
+
+    request_id = _request_id(request)
+    logging.getLogger(__name__).error(
+        "Sanitized HTTP %s response [Request ID: %s]",
+        exc.status_code,
+        request_id,
+        exc_info=exc.__cause__ is not None,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": "An internal server error occurred.",
+            "request_id": request_id,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """
     Sanitized trace system to print real errors to docker console logs 
     and return a generic error response with a request ID to prevent detail leakage.
     """
-    import uuid
-    request_id = request.headers.get("x-request-id")
-    if not request_id:
-        request_id = getattr(request.state, "request_id", None)
-    if not request_id:
-        request_id = str(uuid.uuid4())
+    request_id = _request_id(request)
 
     logging.getLogger(__name__).exception(
         "Critical script runtime error [Request ID: %s]", request_id
@@ -269,10 +299,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "detail": "An internal server error occurred.",
             "request_id": request_id
         },
-        headers={
-            "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:5173"),
-            "Access-Control-Allow-Credentials": "true"
-        }
     )
 
 # ==================== DATA CONFIG MODELS SEGMENT ====================
@@ -654,7 +680,8 @@ def extract_cup_size_ml(message: str) -> Optional[int]:
 def extract_packing_profile_name(message: str, cup_size_ml: Optional[int]) -> Optional[str]:
     match = re.search(r"\b\d+\s*ml\b\s*(?:ke|ki|ka|mein|me)?\s*([a-zA-Z ]*packing)\b", message, flags=re.IGNORECASE)
     if not match or cup_size_ml is None: return None
-    return f"{cup_size_ml}ml {re.sub(r'\s+', ' ', match.group(1)).strip().title()}"
+    packing_name = re.sub(r"\s+", " ", match.group(1)).strip().title()
+    return f"{cup_size_ml}ml {packing_name}"
 
 def extract_customer_name(message: str) -> Optional[str]:
     match = re.search(r"(?:customer|party|client)\s+([a-zA-Z][a-zA-Z ]{1,80}?)(?:\s+ko|\s+ne|\s+for|$)", message, flags=re.IGNORECASE)
@@ -784,7 +811,17 @@ def get_n8n_factory_id(x_factory_id: Optional[int] = Header(default=None), db: S
     return x_factory_id
 
 @app.post("/api/n8n/test")
-async def test_n8n_webhook(payload: N8NTestRequest):
+async def test_n8n_webhook(payload: N8NTestRequest, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if is_rate_limited(
+        f"rate_limit:webhook:n8n:{client_ip}",
+        limit=60,
+        window_seconds=60,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Webhook rate limit exceeded. Please retry after one minute.",
+        )
     return {"status": "success", "message": "FastAPI and n8n are securely linked"}
 
 def ensure_runtime_schema():

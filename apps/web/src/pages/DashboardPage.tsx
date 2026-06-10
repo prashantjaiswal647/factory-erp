@@ -7,13 +7,14 @@ import {
   IndianRupee,
   PackageCheck,
   RefreshCw,
+  Send,
   UserRound,
   Wrench
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../context/AuthContext";
+import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import BriefingCard from "../components/BriefingCard";
 import FactoryHealthCard from "../components/FactoryHealthCard";
 import FactoryHealthHistoryCard from "../components/FactoryHealthHistoryCard";
@@ -28,8 +29,10 @@ import {
   getDashboardMachines,
   getDashboardWorkers,
   getInventory,
+  getTopAlerts,
   getPendingSales,
   getProductionAlerts,
+  getTelegramConnectionStatus,
   rejectSalesOrder
 } from "../lib/api";
 import type {
@@ -38,7 +41,9 @@ import type {
   DashboardWorker,
   LiveStockRow,
   PendingSale,
-  ProductionAlertsResponse
+  ProductionAlertsResponse,
+  TelegramConnectionStatus,
+  UnifiedAlert
 } from "../lib/api";
 
 type StockRisk = {
@@ -72,12 +77,36 @@ export default function DashboardPage() {
   const [processingOrderId, setProcessingOrderId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [telegramStatus, setTelegramStatus] = useState<TelegramConnectionStatus | null>(null);
+  const [unifiedAlerts, setUnifiedAlerts] = useState<UnifiedAlert[]>([]);
+  const [isTelegramDismissed, setIsTelegramDismissed] = useState(false);
   const { user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!isOwnerLevelRole(user?.role)) return;
+    let cancelled = false;
+    void getTelegramConnectionStatus()
+      .then((response) => {
+        if (!cancelled) setTelegramStatus(response.data);
+      })
+      .catch(() => {
+        if (!cancelled) setTelegramStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.role, user?.telegram_chat_id]);
+
+  const showTelegramBanner =
+    isOwnerLevelRole(user?.role) &&
+    telegramStatus !== null &&
+    !telegramStatus.connected &&
+    !isTelegramDismissed;
 
   async function load() {
     setIsLoading(true);
@@ -103,11 +132,12 @@ export default function DashboardPage() {
       if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
 
       if (user?.role === "Owner" || user?.role === "Sub-Owner") {
-        const ownerResults = await Promise.allSettled([getPendingSales(), getDashboardAnalytics()]);
+        const ownerResults = await Promise.allSettled([getPendingSales(), getDashboardAnalytics(), getTopAlerts(5)]);
         if (ownerResults[0].status === "fulfilled") {
           setPendingSales(Array.isArray(ownerResults[0].value.data) ? ownerResults[0].value.data : []);
         }
         if (ownerResults[1].status === "fulfilled") setAnalyticsData(ownerResults[1].value.data);
+        if (ownerResults[2].status === "fulfilled") setUnifiedAlerts(ownerResults[2].value.items);
       }
 
       if (rejected) setError("Some dashboard data could not be refreshed. Showing available data.");
@@ -168,7 +198,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-w-0 space-y-3 overflow-x-hidden">
+    <div className="min-w-0 space-y-3 overflow-x-hidden" data-test-id="dashboard-loaded">
       <header className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Factory owner dashboard</p>
@@ -191,8 +221,62 @@ export default function DashboardPage() {
 
       {error ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">{error}</div> : null}
 
+      {showTelegramBanner ? (
+        <section
+          className="flex flex-col gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+          data-testid="telegram-connect-banner"
+        >
+          <div className="flex items-start gap-2">
+            <Send className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+            <div>
+              <p className="font-semibold">Telegram connect nahi hai. Morning briefing yahan aayegi.</p>
+              <p className="text-xs text-sky-800">
+                30 second mein setup ho jata hai — sirf ek code Telegram bot par bhejna hai.
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-700"
+              to="/integrations"
+            >
+              <Send className="h-4 w-4" /> Connect Telegram
+            </Link>
+            <button
+              aria-label="Dismiss Telegram connect banner"
+              className="rounded-md p-1 text-sky-700 hover:bg-sky-100"
+              type="button"
+              onClick={() => setIsTelegramDismissed(true)}
+            >
+              ×
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {(user?.role === "Owner" || user?.role === "Sub-Owner") && (
         <>
+          <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-bold text-zinc-950">Top alerts</h2>
+              <Link className="text-xs font-semibold text-brand-700" to="/alerts">View all</Link>
+            </div>
+            {unifiedAlerts.length ? (
+              <div className="space-y-2">
+                {unifiedAlerts.map((alert) => (
+                  <Link key={alert.id} className="flex items-center justify-between gap-3 rounded-lg border p-3 hover:bg-zinc-50" to={alert.related_route || "/alerts"}>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-zinc-900">{alert.title}</p>
+                      <p className="text-xs text-zinc-500">{alert.source_module.replace(/_/g, " ")}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-xs font-bold ${alert.severity === "CRITICAL" ? "bg-red-100 text-red-800" : alert.severity === "WARNING" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>
+                      {alert.severity}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            ) : <p className="text-sm text-zinc-500">No open alerts.</p>}
+          </section>
           <WidgetErrorBoundary name="Morning Briefing">
             <BriefingCard />
           </WidgetErrorBoundary>

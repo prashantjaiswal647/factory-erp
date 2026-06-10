@@ -22,13 +22,16 @@ from models import (
 
 
 OWNER_MENU = [
-    [("📊 Today Summary", "owner_today_summary"), ("🏭 Production Status", "owner_production_status")],
-    [("📦 Inventory Alert", "owner_inventory_alert"), ("💰 Due Payments", "owner_due_payments")],
-    [("👥 Staff Actions", "owner_staff_actions"), ("🧪 Test Message", "telegram_test_message")],
+    [("📊 Today Summary", "owner_today_summary"), ("💰 Collection War Room", "owner_collection_war_room")],
+    [("📦 Inventory Risk", "owner_inventory_risk"), ("🏭 Production Status", "owner_production_status")],
+    [("📄 Last Invoice", "owner_last_invoice"), ("👥 Staff Today", "owner_staff_today")],
+    [("🔄 Refresh Briefing", "owner_refresh_briefing"), ("📜 Briefing History", "owner_briefing_history")],
+    [("🧪 Test Message", "telegram_test_message")],
 ]
 SUB_OWNER_MENU = [
-    [("📊 Today Summary", "subowner_today_summary"), ("🏭 Production Status", "subowner_production_status")],
-    [("📦 Inventory Alert", "subowner_inventory_alert"), ("💰 Payment Summary", "subowner_payment_summary")],
+    [("📊 Today Summary", "subowner_today_summary"), ("📦 Inventory Risk", "subowner_inventory_risk")],
+    [("🏭 Production Status", "subowner_production_status"), ("👥 Staff Today", "subowner_staff_today")],
+    [("🔄 Refresh Briefing", "subowner_refresh_briefing"), ("📜 Briefing History", "subowner_briefing_history")],
     [("🧪 Test Message", "telegram_test_message")],
 ]
 
@@ -83,69 +86,258 @@ def _money(value) -> str:
 
 
 def render_callback_response(db: Session, binding: TelegramUserBinding, callback_data: str) -> str:
+    from models import User as DbUser, OutstandingBill, InvoiceDocument, AdvancePayment, FinalProductStock
+    from datetime import timedelta
+
+    # 1. Resolve user and enforce role/factory mapping
+    user = db.query(DbUser).filter(
+        DbUser.id == binding.user_id,
+        DbUser.factory_id == binding.factory_id,
+        DbUser.is_active.is_(True),
+    ).first()
+    if user is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
+        return "Telegram updates abhi aapke role ke liye enabled nahi hain."
+
+    # 2. Prevent role bypass or mismatched data requests
+    if callback_data.startswith("owner_") and user.role != "Owner":
+        return "This action is not available for your role"
+
     factory_id = binding.factory_id
     today = date.today()
+
     if callback_data == "telegram_test_message":
         return "✅ Telegram test successful.\n\nMunshi AI alerts are active."
 
     if callback_data.endswith("today_summary"):
-        production = db.query(func.sum(DailyProduction.total_boxes_made)).filter(
+        yesterday = today - timedelta(days=1)
+        
+        prod_today = db.query(func.sum(DailyProduction.total_boxes_made)).filter(
             DailyProduction.factory_id == factory_id, DailyProduction.date == today
         ).scalar()
-        sales = db.query(func.sum(DailySale.total_amount)).filter(
+        sales_today = db.query(func.sum(DailySale.total_amount)).filter(
             DailySale.factory_id == factory_id, DailySale.date == today
         ).scalar()
-        collections = db.query(func.sum(Payment.amount_paid)).filter(
+        col_today = db.query(func.sum(Payment.amount_paid)).filter(
             Payment.factory_id == factory_id, Payment.date == today
         ).scalar()
-        expenses = db.query(func.sum(FactoryExpense.amount)).filter(
+        exp_today = db.query(func.sum(FactoryExpense.amount)).filter(
             FactoryExpense.factory_id == factory_id, func.date(FactoryExpense.timestamp) == today
         ).scalar()
-        if all(value is None for value in (production, sales, collections, expenses)):
-            return "📊 Today Summary\n\nअभी इस section का data available नहीं है."
-        return (
-            "📊 Today Summary\n\n"
-            f"Production: {int(production or 0):,}\nSales: {_money(sales)}\n"
-            f"Collection: {_money(collections)}\nExpenses: {_money(expenses)}\n"
-            f"Net Snapshot: {_money(Decimal(str(sales or 0)) - Decimal(str(expenses or 0)))}"
-        )
+
+        prod_yest = db.query(func.sum(DailyProduction.total_boxes_made)).filter(
+            DailyProduction.factory_id == factory_id, DailyProduction.date == yesterday
+        ).scalar()
+        sales_yest = db.query(func.sum(DailySale.total_amount)).filter(
+            DailySale.factory_id == factory_id, DailySale.date == yesterday
+        ).scalar()
+        col_yest = db.query(func.sum(Payment.amount_paid)).filter(
+            Payment.factory_id == factory_id, Payment.date == yesterday
+        ).scalar()
+
+        if all(v is None for v in (prod_today, sales_today, col_today, exp_today, prod_yest, sales_yest, col_yest)):
+            return "📊 Today Summary\n\nAbhi is section ka data available nahi hai."
+
+        lines = [
+            "📊 Today Summary",
+            f"Date: {today.strftime('%d %b %Y')}",
+            "",
+            "Aaj Ka Summary:",
+            f"• Production: {int(prod_today or 0)} Boxes",
+        ]
+        if user.role == "Owner":
+            lines.extend([
+                f"• Sales: {_money(sales_today)}",
+                f"• Collection: {_money(col_today)}",
+                f"• Expenses: {_money(exp_today)}"
+            ])
+        lines.append("")
+        lines.append("Yesterday Summary:")
+        lines.append(f"• Production: {int(prod_yest or 0)} Boxes")
+        if user.role == "Owner":
+            lines.extend([
+                f"• Sales: {_money(sales_yest)}",
+                f"• Collection: {_money(col_yest)}"
+            ])
+
+        return "\n".join(lines).strip()
+
+    if callback_data == "owner_collection_war_room":
+        bills = db.query(OutstandingBill).filter(
+            OutstandingBill.factory_id == factory_id,
+            OutstandingBill.status.in_(["active", "partial"]),
+            OutstandingBill.balance_amount > 0
+        ).all()
+        if not bills:
+            return "💰 Collection War Room\n\nAbhi is section ka data available nahi hai."
+
+        total_outstanding = sum(bill.balance_amount for bill in bills)
+        overdue_amount = sum(bill.balance_amount for bill in bills if (today - bill.bill_date).days > 15)
+
+        customer_dues = {}
+        for bill in bills:
+            c_id = bill.customer_id
+            if c_id not in customer_dues:
+                customer_dues[c_id] = {
+                    "name": bill.customer.name,
+                    "due": Decimal("0.00")
+                }
+            customer_dues[c_id]["due"] += bill.balance_amount
+
+        top_customers = sorted(customer_dues.values(), key=lambda x: x["due"], reverse=True)[:5]
+
+        lines = [
+            "💰 Collection War Room",
+            "",
+            f"Total Outstanding: {_money(total_outstanding)}",
+            f"Overdue Amount: {_money(overdue_amount)}",
+            "",
+            "Top Due Customers:"
+        ]
+        for idx, tc in enumerate(top_customers, 1):
+            lines.append(f"{idx}. {tc['name']}: {_money(tc['due'])}")
+
+        return "\n".join(lines).strip()
+
+    if callback_data.endswith("inventory_risk"):
+        low_rm = db.query(Inventory).filter(
+            Inventory.factory_id == factory_id, Inventory.quantity <= 0
+        ).limit(3).all()
+        low_fg = db.query(FinalProductStock).filter(
+            FinalProductStock.factory_id == factory_id, FinalProductStock.current_quantity <= 0
+        ).limit(3).all()
+
+        if not low_rm and not low_fg:
+            return "📦 Inventory Risk\n\nAbhi is section ka data available nahi hai."
+
+        lines = ["📦 Inventory Risk", ""]
+        if low_rm:
+            lines.append("Raw Materials Risk:")
+            lines.extend(f"• {item.item_name}: 0 {item.unit or ''}" for item in low_rm)
+            lines.append("")
+        if low_fg:
+            lines.append("Finished Goods Shortage:")
+            lines.extend(f"• {item.product_size_ml}ml {item.variety}: 0 boxes" for item in low_fg)
+
+        return "\n".join(lines).strip()
 
     if callback_data.endswith("production_status"):
-        active = db.query(Machine).filter(Machine.factory_id == factory_id, Machine.is_active.is_(True)).count()
-        inactive = db.query(Machine).filter(Machine.factory_id == factory_id, Machine.is_active.is_(False)).count()
-        production = db.query(func.sum(DailyProduction.total_boxes_made)).filter(
+        prod_boxes = db.query(func.sum(DailyProduction.total_boxes_made)).filter(
             DailyProduction.factory_id == factory_id, DailyProduction.date == today
-        ).scalar()
-        return f"🏭 Production Status\n\nActive Machines: {active}\nInactive Machines: {inactive}\nToday's Production: {int(production or 0):,}"
-
-    if callback_data.endswith("inventory_alert"):
-        low_items = db.query(Inventory).filter(
-            Inventory.factory_id == factory_id, Inventory.quantity <= 0
-        ).limit(5).all()
-        if not low_items:
-            return "📦 Inventory Alert\n\nअभी कोई low-stock alert नहीं है."
-        lines = ["📦 Inventory Alert", "", "Low Stock Items:"]
-        lines.extend(f"• {item.item_name}: {item.quantity or 0} {item.unit or ''}" for item in low_items)
-        return "\n".join(lines)
-
-    if callback_data.endswith("due_payments") or callback_data.endswith("payment_summary"):
-        customers = db.query(Customer).filter(Customer.factory_id == factory_id).order_by(Customer.total_due.desc()).limit(5).all()
-        outstanding = sum(Decimal(str(customer.total_due or 0)) for customer in customers)
-        collections = db.query(func.sum(Payment.amount_paid)).filter(
-            Payment.factory_id == factory_id, Payment.date == today
-        ).scalar()
-        if not customers and collections is None:
-            return "💰 Payment Summary\n\nअभी this section का data available नहीं है."
-        lines = ["💰 Payment Summary", "", f"Total Outstanding: {_money(outstanding)}", f"Today's Collection: {_money(collections)}"]
-        if customers:
-            lines.append("\nTop Due Customers:")
-            lines.extend(f"• {customer.name}: {_money(customer.total_due)}" for customer in customers)
-        return "\n".join(lines)
-
-    if callback_data == "owner_staff_actions":
-        attendance = db.query(AttendanceLog).filter(
-            AttendanceLog.factory_id == factory_id, AttendanceLog.date == today
+        ).scalar() or 0
+        wastage_kg = db.query(func.sum(DailyProduction.wastage_kg)).filter(
+            DailyProduction.factory_id == factory_id, DailyProduction.date == today
+        ).scalar() or 0.0
+        active_machines = db.query(Machine).filter(
+            Machine.factory_id == factory_id, Machine.is_active.is_(True)
         ).count()
-        return f"👥 Staff Actions\n\nAttendance entries today: {attendance}\nRecent role actions dashboard Activity Log में available हैं."
+        total_machines = db.query(Machine).filter(Machine.factory_id == factory_id).count()
 
-    return "अभी इस section का data available नहीं है."
+        if total_machines == 0 and prod_boxes == 0:
+            return "🏭 Production Status\n\nAbhi is section ka data available nahi hai."
+
+        return (
+            "🏭 Production Status\n\n"
+            f"Today Production: {int(prod_boxes)} Boxes\n"
+            f"Active Machines: {active_machines}/{total_machines}\n"
+            f"Wastage Today: {float(wastage_kg):.2f} kg"
+        ).strip()
+
+    if callback_data == "owner_last_invoice":
+        last_inv = db.query(InvoiceDocument).filter(
+            InvoiceDocument.factory_id == factory_id
+        ).order_by(InvoiceDocument.id.desc()).first()
+        if last_inv is None:
+            return "📄 Last Invoice\n\nAbhi is section ka data available nahi hai."
+
+        return (
+            "📄 Last Invoice\n\n"
+            f"Invoice Number: #{last_inv.invoice_number}\n"
+            f"Date: {last_inv.invoice_date.strftime('%d %b %Y')}\n"
+            f"Customer: {last_inv.customer_name}\n"
+            f"Total Amount: {_money(last_inv.bill_total)}\n\n"
+            "Download Link:\n"
+            f"https://munshiai.co.in/api/invoices/{last_inv.id}/pdf"
+        ).strip()
+
+    if callback_data.endswith("staff_today"):
+        present_count = db.query(AttendanceLog).filter(
+            AttendanceLog.factory_id == factory_id,
+            AttendanceLog.date == today,
+            AttendanceLog.status == "Present"
+        ).count()
+        total_attendance = db.query(AttendanceLog).filter(
+            AttendanceLog.factory_id == factory_id,
+            AttendanceLog.date == today
+        ).count()
+        advances_today = db.query(func.sum(AdvancePayment.amount)).filter(
+            AdvancePayment.factory_id == factory_id,
+            AdvancePayment.date == today
+        ).scalar() or 0.0
+
+        if total_attendance == 0 and advances_today == 0:
+            return "👥 Staff Today\n\nAbhi is section ka data available nahi hai."
+
+        lines = [
+            "👥 Staff Today",
+            "",
+            f"• Present Workers: {present_count}",
+            f"• Total Attendance Entries: {total_attendance}"
+        ]
+        if user.role == "Owner":
+            lines.append(f"• Today's Advance: {_money(advances_today)}")
+
+        return "\n".join(lines).strip()
+
+    if callback_data.endswith("refresh_briefing"):
+        from services.briefing_recovery_merge import compose_daily_briefing_with_recovery
+        res = compose_daily_briefing_with_recovery(db, factory_id, today, user)
+        return res["message_text"]
+
+    if callback_data.endswith("briefing_history"):
+        from models import BriefingSnapshot
+        from datetime import timedelta
+        cutoff = today - timedelta(days=7)
+        # Fetch last 7 briefings for this factory & user's role
+        query = db.query(BriefingSnapshot).filter(
+            BriefingSnapshot.factory_id == factory_id,
+            BriefingSnapshot.role == user.role,
+            BriefingSnapshot.briefing_date >= cutoff
+        )
+        if user.role == "Sub-Owner":
+            query = query.filter(BriefingSnapshot.user_id == user.id)
+            
+        snapshots = query.order_by(BriefingSnapshot.briefing_date.desc()).all()
+        if not snapshots:
+            return "📜 Briefing History\n\nAbhi is section ka data available nahi hai."
+            
+        lines = ["📜 Last 7 briefings summary:", ""]
+        for s in snapshots:
+            date_str = s.briefing_date.strftime("%d %b")
+            score_str = f"Health {int(s.health_score)}" if s.health_score is not None else "Health --"
+            
+            # Extract metrics
+            js = s.snapshot_json or {}
+            snap = js.get("snapshot") or {}
+            rec = js.get("recovery_snapshot") or {}
+            
+            if user.role == "Owner":
+                col_val = float(rec.get("yesterday_collections_paise", 0)) / 100.0
+                out_val = snap.get("sales", {}).get("outstanding_amount", 0) or 0
+                
+                # Format to short compact currency
+                def short_money(v):
+                    if v >= 100000:
+                        return f"₹{v/100000:.1f}L"
+                    if v >= 1000:
+                        return f"₹{v/1000:.0f}k"
+                    return f"₹{v}"
+                    
+                lines.append(f"{date_str} — {score_str} — Collection {short_money(col_val)} — Outstanding {short_money(out_val)}")
+            else:
+                # Sub-Owner variant: Operational metrics only (no financial details)
+                prod_val = snap.get("production", {}).get("total_boxes", 0) or 0
+                lines.append(f"{date_str} — {score_str} — Production {prod_val} boxes")
+                
+        return "\n".join(lines).strip()
+
+    return "Abhi is section ka data available nahi hai."

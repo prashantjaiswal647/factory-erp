@@ -3,6 +3,8 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from models import DailyFactoryHealthSnapshot, Factory
 from routers.factory_health import admin_history, history
 from services.factory_health import factory_health_history
@@ -119,7 +121,17 @@ def test_health_history_routes_are_registered():
 
 
 def test_risk_route_mapping_targets_existing_routes():
-    repo_root = Path(__file__).resolve().parents[3]
+    test_file = Path(__file__).resolve()
+    repo_root = next(
+        (
+            parent
+            for parent in test_file.parents
+            if (parent / "apps/web/src/App.tsx").is_file()
+        ),
+        None,
+    )
+    if repo_root is None:
+        pytest.skip("Frontend source is not included in the API-only image")
     mapping = (repo_root / "apps/web/src/lib/factoryHealthRoutes.ts").read_text(encoding="utf-8")
     app_routes = (repo_root / "apps/web/src/App.tsx").read_text(encoding="utf-8")
     expected = {

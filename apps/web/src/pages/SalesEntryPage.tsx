@@ -503,6 +503,7 @@ export default function SalesEntryPage() {
           <span>Sale saved. <Link className="underline" to="/invoices">View all invoices</Link>.</span>
           <button
             className="inline-flex items-center gap-2 rounded-md bg-green-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-60"
+            data-test-id="generate-invoice-button"
             type="button"
             disabled={!lastSaleId || isGeneratingPdf}
             onClick={() => void generateAndDownloadInvoice()}
@@ -831,6 +832,7 @@ export default function SalesEntryPage() {
               className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700"
               type="button"
               onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], { ...emptyItem }) : { ...emptyItem }] })}
+              data-test-id="add-product-button"
             >
               <Plus className="h-4 w-4" />
               Add Product

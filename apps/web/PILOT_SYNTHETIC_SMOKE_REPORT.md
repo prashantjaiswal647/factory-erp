@@ -1,0 +1,164 @@
+# PILOT_SYNTHETIC_SMOKE_REPORT.md
+
+**Generated**: 2026-06-09  
+**Test Suite**: Pilot Factory Synthetic Smoke Test  
+**Seed**: 42 (deterministic)  
+**Base URL**: http://localhost:5173
+
+---
+
+## Executive Summary
+
+✅ **Status**: TEST INFRASTRUCTURE CREATED  
+⚠️ **Next Step**: Wire up actual UI selectors and API endpoints
+
+This report documents the creation of a Playwright-based synthetic smoke test suite for Munshi AI's full factory lifecycle. The test infrastructure is in place but requires UI selector mapping to be fully functional.
+
+---
+
+## Test Coverage (16 Steps)
+
+| # | Step | Status | Screenshot |
+|---|------|--------|------------|
+| 1 | Signup/Login Test Factory | ⚠️ Needs selectors | 01-login.png |
+| 2 | Create Master Data | ⚠️ Needs selectors | 02-master-data.png |
+| 3 | Add Opening Inventory | ⚠️ Needs selectors | 03-inventory.png |
+| 4 | Add Production (7 days) | ⚠️ Needs selectors | 04-production.png |
+| 5 | Create Sale | ⚠️ Needs selectors | 05-sales.png |
+| 6 | Generate Invoice PDF | ⚠️ Needs selectors | 06-invoice.png |
+| 7 | Record Partial Payment | ⚠️ Needs selectors | 07-payment.png |
+| 8 | Verify Outstanding Remains | ⚠️ Needs selectors | 08-outstanding.png |
+| 9 | Open Collection War Room | ⚠️ Needs selectors | 09-war-room.png |
+| 10 | Copy Recovery Reminder | ⚠️ Needs selectors | 10-recovery.png |
+| 11 | Trigger Telegram (Mock) | ⚠️ Needs selectors | 11-telegram.png |
+| 12 | Generate Daily Briefing | ⚠️ Needs selectors | 12-briefing.png |
+| 13 | Open Briefing History | ⚠️ Needs selectors | 13-history.png |
+| 14 | Record Full Payment | ⚠️ Needs selectors | 14-full-payment.png |
+| 15 | Verify Outstanding Resolved | ⚠️ Needs selectors | 15-resolved.png |
+| 16 | Verify Dashboard Health | ⚠️ Needs selectors | 16-health.png |
+
+---
+
+## Files Created
+
+### 1. Test Fixtures
+**Path**: `apps/web/e2e/fixtures/seed-factory.ts`
+
+Creates deterministic test data with seed=42:
+- Factory: TEST-FACTORY-42
+- Products: Paper Cup 100ML, 150ML, Paper Glass 200ML
+- Raw Materials: Paper Roll, Plastic Lid, Ink
+- 7 days of production data
+- 2 sample sales
+
+### 2. Playwright Test
+**Path**: `apps/web/e2e/tests/pilot-smoke.spec.ts`
+
+16-step test covering full factory lifecycle. Currently uses placeholder selectors that need to be mapped to actual UI elements.
+
+### 3. Test Runner
+**Path**: `apps/web/e2e/run-pilot-smoke.js`
+
+Node.js script that:
+- Creates required directories
+- Runs Playwright tests
+- Captures API logs to `api-logs/pilot-smoke.json`
+- Captures console errors to `console-errors.json`
+- Generates this report
+
+---
+
+## How to Run
+
+### Prerequisites
+```bash
+cd apps/web
+npm install
+npx playwright install chromium
+```
+
+### Run Tests
+```bash
+cd apps/web
+node e2e/run-pilot-smoke.js
+```
+
+Or directly:
+```bash
+cd apps/web
+npx playwright test e2e/tests/pilot-smoke.spec.ts --reporter=list
+```
+
+---
+
+## Assertions (To Be Implemented)
+
+| Assertion | Expected | Status |
+|-----------|-----------|--------|
+| No 500 errors | 0 | ⚠️ Pending |
+| No 502 errors | 0 | ⚠️ Pending |
+| No console crashes | 0 errors | ⚠️ Pending |
+| Inventory math correct | Verified | ⚠️ Pending |
+| Outstanding math correct | Verified | ⚠️ Pending |
+| Invoice generated | Yes | ⚠️ Pending |
+| Recovery suggestion generated | Yes | ⚠️ Pending |
+| Briefing snapshot saved | Yes | ⚠️ Pending |
+| Role masking works | Yes | ⚠️ Pending |
+
+---
+
+## Next Steps
+
+### Critical (Before Pilot)
+1. **Map UI Selectors**: Replace placeholder selectors in `pilot-smoke.spec.ts` with actual selectors from Munshi AI UI
+   - Login form: `[name="email"]`, `[name="password"]`
+   - Master data: `text=Add Product`, `button:has-text("Save")`
+   - etc.
+
+2. **Wire API Endpoints**: Ensure test captures `/api/*` responses correctly
+
+3. **Add Assertions**: Implement actual checks for:
+   - Outstanding calculations
+   - Inventory deductions
+   - Invoice PDF generation
+   - Health score improvements
+
+### Recommended
+4. **Add Sub Owner Role Test**: Verify role-based access masking
+5. **Add Performance Benchmarks**: Measure page load times
+6. **CI/CD Integration**: Add to GitHub Actions workflow
+
+---
+
+## Known Limitations
+
+1. **Selector Mapping**: Test uses generic selectors that may not match actual UI
+2. **API Mocking**: Currently expects real backend; consider mocking for faster tests
+3. **Telegram Mock**: Step 11 only verifies UI exists, doesn't test actual Telegram integration
+4. **Deterministic Data**: Seed=42 ensures repeatability, but may not catch edge cases
+
+---
+
+## Security Notes
+
+✅ Uses test factory only (TEST-FACTORY-42)  
+✅ No production customer data  
+✅ No real API keys or secrets  
+✅ Repeatable with seed  
+
+---
+
+## Conclusion
+
+The test infrastructure is ready. To complete:
+1. Map actual UI selectors
+2. Run against local dev server
+3. Verify all 16 steps pass
+4. Integrate into CI/CD pipeline
+
+**Estimated Time to Complete**: 2-3 hours (selector mapping + debugging)
+
+---
+
+**Report Generated By**: Playwright Synthetic Smoke Test Suite  
+**Contact**: Prashant (Munshi AI Founder)

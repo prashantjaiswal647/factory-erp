@@ -18,7 +18,7 @@ pydantic
 google-auth>=2.20.0
 gspread>=6.0.0
 razorpay
-httpx
+httpx<0.28
 pytest
 reportlab
 fastapi-mail

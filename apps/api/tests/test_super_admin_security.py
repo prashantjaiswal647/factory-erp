@@ -82,31 +82,13 @@ def setup_super_admin_env_and_db(monkeypatch):
     _rate_limit_store.clear()
 
 def test_super_admin_login_rate_limiting():
-    """Verify that more than 10 requests in a minute trigger 429 rate limiting."""
+    """Verify that the sixth request in a minute triggers 429 rate limiting."""
     client = TestClient(main_app)
     payload = {"email": "admin@munshiai.com", "password": "wrong_password"}
     
-    # Send 10 requests from same client IP (should not trigger 429 rate limit immediately)
-    for _ in range(10):
-        # We might trigger lockout before rate limit if we fail credentials.
-        # But wait! Rate limit is checked before credentials lockout, so we assert
-        # we can hit up to 10 rate-limit checks without 429 rate limit.
+    for _ in range(5):
         response = client.post("/api/super-admin/login", json=payload)
-        # Verify it does not fail with 429 rate limit yet
-        if response.status_code == 429:
-            # It could be lockout (since 5 failed attempts trigger lockout!)
-            assert "locked out" in response.json()["detail"].lower()
-        else:
-            assert response.status_code == 401
-
-    # Clear lockout so we only test rate limits
-    _super_admin_lockouts.clear()
-    _super_admin_failed_attempts.clear()
-    
-    # Populate rate limit store manually to trigger 429
-    client_ip = "127.0.0.1"
-    rate_limit_key = f"rate_limit:super_admin_login:{client_ip}"
-    _rate_limit_store[rate_limit_key] = [time.time()] * 11
+        assert response.status_code in (401, 429)
     
     response = client.post("/api/super-admin/login", json=payload)
     assert response.status_code == 429
@@ -121,7 +103,9 @@ def test_super_admin_lockout_after_failures(monkeypatch):
     for _ in range(5):
         response = client.post("/api/super-admin/login", json=payload)
         assert response.status_code in (401, 429)
-        
+
+    _rate_limit_store.clear()
+
     # 6th attempt must trigger 429 lockout
     response = client.post("/api/super-admin/login", json=payload)
     assert response.status_code == 429

@@ -22,9 +22,9 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
 }
 
-function Summary({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+function Summary({ label, value, strong = false, dataTestId }: { label: string; value: string; strong?: boolean; dataTestId?: string }) {
   return (
-    <span className="text-sm md:text-right">
+    <span className="text-sm md:text-right" data-test-id={dataTestId}>
       <span className="block text-xs font-medium uppercase text-zinc-400">{label}</span>
       <span className={strong ? "font-semibold text-red-700" : "font-medium text-zinc-700"}>{value}</span>
     </span>
@@ -226,7 +226,7 @@ export default function OutstandingPage() {
                       </div>
                       <Summary label="Total Bill" value={money(row.total_bill_amount)} />
                       <Summary label="Total Paid" value={money(row.total_paid)} />
-                      <Summary label="Pending" value={money(row.current_pending_balance)} strong />
+                      <Summary label="Pending" value={money(row.current_pending_balance)} strong dataTestId="outstanding-amount-display" />
                       <span className="flex items-center justify-end gap-2 text-sm font-semibold text-brand-700">
                         {(row.bills || []).length} bills
                         <ChevronDown className={`h-4 w-4 transition ${isExpanded ? "rotate-180" : ""}`} />

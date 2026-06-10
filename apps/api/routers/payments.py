@@ -17,6 +17,7 @@ from db import get_db
 from models import Customer, DailySale, Order, OutstandingBill, Payment, PaymentCollection, User
 from services.accounting import apply_payment_to_outstanding_bills, sync_customer_balance_from_bills
 from services.activity_logger import log_activity
+from services.telegram_action_alerts import notify_payment_received
 
 
 router = APIRouter(tags=["payments"])
@@ -405,6 +406,17 @@ def record_payment(
 
         db.commit()
         db.refresh(payment)
+        # P4.5 D1: action alert to Owner (best-effort, never raises)
+        from models import Factory as _Factory
+        _factory = db.query(_Factory).filter(_Factory.id == factory_id).first()
+        if _factory is not None:
+            notify_payment_received(
+                db,
+                factory=_factory,
+                actor=current_user,
+                customer_name=customer.name,
+                amount_paise=int(to_money(payment.amount_paid) * 100),
+            )
     except HTTPException:
         db.rollback()
         raise

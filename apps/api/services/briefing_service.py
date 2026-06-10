@@ -15,6 +15,7 @@ from services.wastage_intelligence import compute_wastage_snapshot
 from services.profit_intelligence import compute_per_size_profit, compute_profit_snapshot
 from typing import Callable
 from services.llm_explain import explain_briefing, run_default_llm_provider
+from services.unified_alerts import render_briefing_alerts, top_alerts
 from schemas import BriefingExplanation
 
 
@@ -268,6 +269,17 @@ def build_briefing(
     snapshot["wastage"] = compute_wastage_snapshot(db, factory_id, briefing_date)
     snapshot["profit"] = compute_profit_snapshot(db, factory_id, briefing_date)
     snapshot["per_size_profit"] = compute_per_size_profit(db, factory_id, briefing_date)
+    unified_alert_rows = top_alerts(db, factory_id, 3)
+    snapshot["unified_alerts"] = [
+        {
+            "id": row.id,
+            "title": row.title,
+            "severity": row.severity,
+            "source_module": row.source_module,
+            "suggested_action": row.suggested_action,
+        }
+        for row in unified_alert_rows
+    ]
     resolved_language, _ = translations_for(language)
 
     import time
@@ -290,6 +302,9 @@ def build_briefing(
         summary_mode=summary_mode,
         explanation=outcome.explanation,
     )
+    alert_section = render_briefing_alerts(unified_alert_rows)
+    if alert_section:
+        message = message.replace("\n* Munshi AI", f"{alert_section}\n\n* Munshi AI")
     return {
         "snapshot": snapshot,
         "message_text": message,

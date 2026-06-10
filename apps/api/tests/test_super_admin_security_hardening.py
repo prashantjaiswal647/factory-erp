@@ -165,7 +165,7 @@ def _totp_code(secret: str) -> str:
 
 
 def test_rate_limit_triggers_after_threshold():
-    """More than 10 bad requests in a minute must trigger 429 rate limiting.
+    """More than 5 requests in a minute must trigger 429 rate limiting.
     
     Mirrors the same strategy as the existing passing test: make real requests
     to seed the rate-limit store, then manually top it up past the threshold.
@@ -181,15 +181,15 @@ def test_rate_limit_triggers_after_threshold():
     _super_admin_lockouts.clear()
     _super_admin_failed_attempts.clear()
 
-    # Find which IP key got seeded and top it up past 10
+    # Find which IP key got seeded and set it to the configured threshold.
     for key in list(_rate_limit_store.keys()):
         if "super_admin_login" in key:
-            _rate_limit_store[key] = [time.time()] * 11  # exceed limit of 10
+            _rate_limit_store[key] = [time.time()] * 5
             break
     else:
         # Fallback: seed both possible IPs
-        _rate_limit_store["rate_limit:super_admin_login:127.0.0.1"] = [time.time()] * 11
-        _rate_limit_store["rate_limit:super_admin_login:testclient"] = [time.time()] * 11
+        _rate_limit_store["rate_limit:super_admin_login:127.0.0.1"] = [time.time()] * 5
+        _rate_limit_store["rate_limit:super_admin_login:testclient"] = [time.time()] * 5
 
     resp = client.post("/api/super-admin/login", json=payload)
     assert resp.status_code == 429
@@ -218,6 +218,8 @@ def test_lockout_activates_after_five_bad_attempts():
         )
         assert r.status_code in (401, 429)  # 429 = lockout, 401 = invalid creds
 
+    _rate_limit_store.clear()
+
     r = client.post(
         "/api/super-admin/login",
         json={"email": _ADMIN_EMAIL, "password": "WRONG_PASSWORD"},
@@ -240,6 +242,8 @@ def test_valid_login_clears_lockout_state():
             "/api/super-admin/login",
             json={"email": _ADMIN_EMAIL, "password": "WRONG_PASSWORD"},
         )
+
+    _rate_limit_store.clear()
 
     # Expire the lockout by back-dating it in the store
     for ip_key in list(_super_admin_lockouts.keys()):

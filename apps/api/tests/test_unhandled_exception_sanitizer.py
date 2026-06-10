@@ -21,6 +21,24 @@ def ensure_testclient_compatibility():
 def error_trigger_route():
     raise ValueError("Sensitive database structure / internal query execution details leaked!")
 
+
+@app.get("/api/test-http-exception-500-route")
+def http_exception_500_route():
+    try:
+        raise RuntimeError("postgresql://private-user:private-password@database/internal")
+    except RuntimeError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=500, detail=f"Database query failed: {exc}") from exc
+
+
+@app.get("/api/test-http-exception-400-route")
+def http_exception_400_route():
+    from fastapi import HTTPException
+
+    raise HTTPException(status_code=400, detail="Actionable validation message")
+
+
 def test_unhandled_exception_sanitizer():
     ensure_testclient_compatibility()
     client = TestClient(app, raise_server_exceptions=False)
@@ -52,3 +70,27 @@ def test_unhandled_exception_custom_request_id():
     assert response.status_code == 500
     data = response.json()
     assert data["request_id"] == test_req_id
+
+
+def test_explicit_http_500_detail_is_sanitized():
+    ensure_testclient_compatibility()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/test-http-exception-500-route")
+
+    assert response.status_code == 500
+    data = response.json()
+    assert data["detail"] == "An internal server error occurred."
+    assert data["request_id"]
+    assert "private-password" not in response.text
+    assert "Database query failed" not in response.text
+
+
+def test_http_4xx_detail_remains_actionable():
+    ensure_testclient_compatibility()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/test-http-exception-400-route")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Actionable validation message"}

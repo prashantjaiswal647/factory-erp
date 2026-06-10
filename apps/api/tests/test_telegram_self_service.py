@@ -39,8 +39,8 @@ def telegram_app(monkeypatch):
     Base.metadata.create_all(engine)
     db = SessionLocal()
     db.add_all([
-        Factory(id=1, name="Factory A", subscription_status="active"),
-        Factory(id=2, name="Factory B", subscription_status="active"),
+        Factory(id=1, name="Factory A", subscription_status="active", telegram_bot_token="123456:test-bot-token"),
+        Factory(id=2, name="Factory B", subscription_status="active", telegram_bot_token="123456:test-bot-token"),
     ])
     db.flush()
     db.add_all([
@@ -175,9 +175,12 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
 
     assert response.json()["status"] == "connected"
     assert replay.json()["status"] == "invalid"
-    sender.assert_called_once()
-    assert "Factory Details" in sender.call_args.args[1]
-    assert sender.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "owner_today_summary"
+    # Two outgoing messages: the welcome + the auto test message.
+    assert sender.call_count == 2
+    welcome_call, test_call = sender.call_args_list
+    assert "Factory Details" in welcome_call.args[1]
+    assert welcome_call.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "owner_today_summary"
+    assert "test message successful" in test_call.args[1]
 
     db = SessionLocal()
     try:
@@ -192,6 +195,7 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
         assert binding.role == "Owner"
         assert binding.telegram_chat_id == "10001"
         assert binding.welcome_sent_at is not None
+        assert binding.last_message_status == "sent"
         assert token.used_at is not None
     finally:
         db.close()
@@ -332,3 +336,468 @@ def test_unknown_chat_and_welcome_failure_are_safe(telegram_app):
         assert binding.last_message_status == "failed"
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Z2.7A: 6-digit code binding flow + connect-code endpoint
+# ---------------------------------------------------------------------------
+
+
+def _create_code(client: TestClient) -> str:
+    response = client.post("/api/integrations/telegram/connect-code")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["code"]) == 6
+    assert payload["code"].isalnum() and payload["code"].isupper()
+    assert payload["bot_username"] == "MunshiHermesAi_Bot"
+    return payload["code"]
+
+
+def _bind_code_webhook(client: TestClient, code: str, chat_id: str = "20001", username: str = "code_owner", first_name: str = "Owner"):
+    return client.post(
+        "/api/integrations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+        json={
+            "update_id": 100,
+            "message": {
+                "text": f"/start bind_{code}",
+                "chat": {"id": chat_id},
+                "from": {"username": username, "first_name": first_name},
+            },
+        },
+    )
+
+
+def test_connect_code_endpoint_returns_deep_link_and_code(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    response = client.post("/api/integrations/telegram/connect-code")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["code"]) == 6
+    assert payload["code"].isalnum() and payload["code"].isupper()
+    assert payload["deep_link"].startswith("https://t.me/")
+    assert payload["deep_link"].endswith(f"?start=bind_{payload['code']}")
+    assert payload["bot_username"] == "MunshiHermesAi_Bot"
+    assert payload["expires_at"]
+
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.id == 11).one()
+        assert owner.telegram_binding_code == payload["code"]
+        assert owner.telegram_binding_expiry is not None
+    finally:
+        db.close()
+
+
+def test_connect_code_endpoint_rejects_supervisor(telegram_app):
+    client, _, active_user_id = telegram_app
+    active_user_id["value"] = 13
+    response = client.post("/api/integrations/telegram/connect-code")
+    assert response.status_code == 403
+
+
+def test_connect_code_overwrites_previous_unused_code(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    first = client.post("/api/integrations/telegram/connect-code").json()["code"]
+    second = client.post("/api/integrations/telegram/connect-code").json()["code"]
+    assert first != second
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.id == 11).one()
+        assert owner.telegram_binding_code == second
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_creates_binding_and_sends_welcome_then_test(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message") as sender:
+        response = _bind_code_webhook(client, code, chat_id="code-chat", username="code_owner", first_name="Owner")
+    assert response.json()["status"] == "connected"
+    # Welcome + auto test message both sent.
+    assert sender.call_count == 2
+    welcome_call, test_call = sender.call_args_list
+    assert "Factory Details" in welcome_call.args[1]
+    assert "test message successful" in test_call.args[1]
+
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.id == 11).one()
+        factory = db.query(Factory).filter(Factory.id == 1).one()
+        binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.user_id == 11).one()
+        assert binding.telegram_chat_id == "code-chat"
+        assert binding.telegram_username == "code_owner"
+        assert binding.telegram_first_name == "Owner"
+        assert binding.welcome_sent_at is not None
+        assert binding.last_message_status == "sent"
+        assert owner.telegram_chat_id == "code-chat"
+        assert owner.telegram_binding_code is None
+        assert owner.telegram_binding_expiry is None
+        assert factory.telegram_chat_id == "code-chat"
+        assert factory.telegram_username == "code_owner"
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_expired_code_is_rejected(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    code = _create_code(client)
+    db = SessionLocal()
+    owner = db.query(User).filter(User.id == 11).one()
+    owner.telegram_binding_expiry = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    db.close()
+
+    response = _bind_code_webhook(client, code)
+    assert response.json()["status"] == "expired"
+
+    db = SessionLocal()
+    try:
+        owner = db.query(User).filter(User.id == 11).one()
+        assert owner.telegram_binding_code is None
+        assert owner.telegram_binding_expiry is None
+        assert db.query(TelegramUserBinding).count() == 0
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_unknown_code_is_rejected(telegram_app):
+    client, _, _ = telegram_app
+    response = _bind_code_webhook(client, "ZZZZZZ")
+    assert response.json()["status"] == "invalid"
+
+
+def test_bind_code_flow_replay_after_success_is_safe(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        first = _bind_code_webhook(client, code)
+    assert first.json()["status"] == "connected"
+
+    # The code is one-time: replaying the same code must fail because the
+    # user's telegram_binding_code was cleared on success.
+    with patch("routers.integrations.send_telegram_message") as sender:
+        replay = _bind_code_webhook(client, code)
+    assert replay.json()["status"] == "invalid"
+    # No new binding written, no welcome / test sent.
+    assert sender.call_count == 0
+
+    db = SessionLocal()
+    try:
+        bindings = db.query(TelegramUserBinding).filter(TelegramUserBinding.user_id == 11).all()
+        assert len(bindings) == 1
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_cross_factory_chat_id_rejected(telegram_app):
+    client, SessionLocal, active_user_id = telegram_app
+    _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        first = _bind_code_webhook(client, _create_code(client), chat_id="shared-code-chat")
+    assert first.json()["status"] == "connected"
+
+    active_user_id["value"] = 22
+    _create_code(client)
+    second = _bind_code_webhook(client, _create_code(client), chat_id="shared-code-chat")
+    assert second.json()["status"] == "conflict"
+
+    db = SessionLocal()
+    try:
+        factory_b = db.query(Factory).filter(Factory.id == 2).one()
+        owner_b = db.query(User).filter(User.id == 22).one()
+        assert factory_b.telegram_chat_id is None
+        assert owner_b.telegram_chat_id is None
+        # factory_a still owns the chat_id
+        factory_a = db.query(Factory).filter(Factory.id == 1).one()
+        assert factory_a.telegram_chat_id == "shared-code-chat"
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_sub_owner_does_not_overwrite_factory_chat_id(telegram_app):
+    client, SessionLocal, active_user_id = telegram_app
+    active_user_id["value"] = 11
+    owner_code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        assert _bind_code_webhook(client, owner_code, chat_id="owner-code-chat").json()["status"] == "connected"
+
+    active_user_id["value"] = 12
+    sub_code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        assert _bind_code_webhook(client, sub_code, chat_id="sub-code-chat").json()["status"] == "connected"
+
+    db = SessionLocal()
+    try:
+        factory = db.query(Factory).filter(Factory.id == 1).one()
+        # Factory chat_id must still belong to the Owner binding, not the Sub-Owner.
+        assert factory.telegram_chat_id == "owner-code-chat"
+        bindings = db.query(TelegramUserBinding).filter(TelegramUserBinding.factory_id == 1).all()
+        assert {row.telegram_chat_id for row in bindings} == {"owner-code-chat", "sub-code-chat"}
+    finally:
+        db.close()
+
+
+def test_bind_code_flow_welcome_failure_does_not_send_test_message(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    code = _create_code(client)
+    with patch(
+        "routers.integrations.send_telegram_message",
+        side_effect=TelegramDeliveryError("welcome boom"),
+    ) as sender:
+        response = _bind_code_webhook(client, code, chat_id="code-fail-chat")
+    assert response.json()["status"] == "connected"
+    # Welcome failed, so the auto test message must not be attempted.
+    assert sender.call_count == 1
+
+    db = SessionLocal()
+    try:
+        binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.telegram_chat_id == "code-fail-chat").one()
+        assert binding.welcome_sent_at is None
+        assert binding.last_message_status == "failed"
+    finally:
+        db.close()
+
+
+def test_unified_status_returns_first_name_and_connected_at(telegram_app):
+    client, _, _ = telegram_app
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code, chat_id="code-status-chat", username="status_owner", first_name="Status")
+    response = client.get("/api/integrations/telegram/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["connected"] is True
+    assert payload["telegram_username"] == "status_owner"
+    assert payload["telegram_first_name"] == "Status"
+    assert payload["connected_at"] is not None
+    assert payload["last_message_status"] == "sent"
+
+
+def test_bind_code_flow_is_case_insensitive(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    code = _create_code(client)
+    # The bot forwards exactly what the user types; lower-case should also work.
+    response = client.post(
+        "/api/integrations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+        json={
+            "update_id": 999,
+            "message": {
+                "text": f"/start bind_{code.lower()}",
+                "chat": {"id": "code-lower-chat"},
+                "from": {"username": "lower_owner", "first_name": "Lower"},
+            },
+        },
+    )
+    assert response.json()["status"] == "connected"
+
+    db = SessionLocal()
+    try:
+        binding = db.query(TelegramUserBinding).filter(TelegramUserBinding.telegram_chat_id == "code-lower-chat").one()
+        assert binding.telegram_username == "lower_owner"
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# P4.10: Telegram Command Center Callback and Menu Tests
+# ---------------------------------------------------------------------------
+
+
+def test_owner_menu_contains_full_set_of_buttons(telegram_app):
+    client, _, _ = telegram_app
+    # Bind Owner (user_id = 11) to chat-owner-menu
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message") as sender:
+        _bind_code_webhook(client, code, chat_id="chat-owner-menu")
+    
+    with patch("routers.integrations.send_telegram_message") as sender:
+        # Trigger /menu
+        response = menu_webhook(client, "chat-owner-menu")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        
+        sender.assert_called_once()
+        markup = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
+    
+    # Check all Owner buttons exist
+    callbacks = [btn["callback_data"] for row in markup for btn in row]
+    expected_callbacks = [
+        "owner_today_summary",
+        "owner_collection_war_room",
+        "owner_inventory_risk",
+        "owner_production_status",
+        "owner_last_invoice",
+        "owner_staff_today",
+        "owner_refresh_briefing",
+    ]
+    for expected in expected_callbacks:
+        assert expected in callbacks
+
+
+def test_sub_owner_menu_contains_limited_set_of_buttons(telegram_app):
+    client, _, active_user_id = telegram_app
+    active_user_id["value"] = 12  # Sub-Owner (user_id = 12)
+    
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message") as sender:
+        _bind_code_webhook(client, code, chat_id="chat-sub-owner-menu")
+        
+    with patch("routers.integrations.send_telegram_message") as sender:
+        response = menu_webhook(client, "chat-sub-owner-menu")
+        assert response.status_code == 200
+        
+        sender.assert_called_once()
+        markup = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
+    
+    callbacks = [btn["callback_data"] for row in markup for btn in row]
+    
+    # Sub-owner must have limited callbacks
+    assert "subowner_today_summary" in callbacks
+    assert "subowner_inventory_risk" in callbacks
+    assert "subowner_production_status" in callbacks
+    assert "subowner_staff_today" in callbacks
+    assert "subowner_refresh_briefing" in callbacks
+    
+    # Check that Owner-only callbacks do NOT exist in sub-owner menu
+    assert "owner_collection_war_room" not in callbacks
+    assert "owner_last_invoice" not in callbacks
+
+
+def test_unknown_chat_callback_is_rejected(telegram_app):
+    client, _, _ = telegram_app
+    response = callback_webhook(client, "nonexistent-chat-id", "owner_today_summary")
+    assert response.status_code == 200
+    assert response.json()["status"] == "invalid"
+    assert "not connected" in response.json()["message"].lower() or "invalid connection" in response.json()["message"].lower() or "not active" in response.json()["message"].lower() or "does not exist" in response.json()["message"].lower()
+
+
+def test_owner_collection_war_room_callback(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    # Set up some outstanding bills for Factory A (factory_id = 1)
+    db = SessionLocal()
+    from models import Customer, OutstandingBill
+    c1 = Customer(id=101, factory_id=1, name="Customer One")
+    c2 = Customer(id=102, factory_id=1, name="Customer Two")
+    db.add_all([c1, c2])
+    db.flush()
+    
+    db.add_all([
+        OutstandingBill(
+            id=1,
+            factory_id=1,
+            customer_id=101,
+            tracking_number="B-1",
+            bill_date=datetime.now(timezone.utc).date() - timedelta(days=20),
+            bill_amount=15000.00,
+            balance_amount=15000.00,
+            status="active"
+        ),
+        OutstandingBill(
+            id=2,
+            factory_id=1,
+            customer_id=102,
+            tracking_number="B-2",
+            bill_date=datetime.now(timezone.utc).date() - timedelta(days=5),
+            bill_amount=5000.00,
+            balance_amount=5000.00,
+            status="active"
+        ),
+    ])
+    db.commit()
+    db.close()
+
+    # Bind Owner
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code, chat_id="chat-cwr")
+
+    # Send callback
+    response = callback_webhook(client, "chat-cwr", "owner_collection_war_room")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    msg = data["message"]
+    assert "Collection War Room" in msg
+    assert "Total Outstanding" in msg
+    assert "₹20,000.00" in msg
+    assert "Overdue Amount" in msg
+    assert "₹15,000.00" in msg  # > 15 days overdue
+    assert "Customer One" in msg
+
+
+def test_sub_owner_cannot_access_owner_callbacks(telegram_app):
+    client, _, active_user_id = telegram_app
+    
+    # 1. Bind Owner
+    active_user_id["value"] = 11
+    owner_code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, owner_code, chat_id="owner-c-chat")
+        
+    # 2. Bind Sub-Owner
+    active_user_id["value"] = 12
+    sub_code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, sub_code, chat_id="sub-c-chat")
+        
+    # Sub-owner calling Owner CWR should be forbidden/rejected
+    response = callback_webhook(client, "sub-c-chat", "owner_collection_war_room")
+    assert response.status_code == 200
+    assert response.json()["status"] == "invalid"
+    assert "not available" in response.json()["message"].lower() or "not authorized" in response.json()["message"].lower()
+
+
+def test_refresh_briefing_callback(telegram_app):
+    client, _, _ = telegram_app
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code, chat_id="briefing-chat")
+        
+    with patch("services.briefing_recovery_merge.compose_daily_briefing_with_recovery") as mock_compose:
+        mock_compose.return_value = {"message_text": "Mock Daily Briefing Content"}
+        response = callback_webhook(client, "briefing-chat", "owner_refresh_briefing")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        assert response.json()["message"] == "Mock Daily Briefing Content"
+
+
+def test_cross_factory_isolation_in_callbacks(telegram_app):
+    client, SessionLocal, active_user_id = telegram_app
+    
+    # Add Factory B outstanding bill to ensure it doesn't leak to Factory A
+    db = SessionLocal()
+    from models import Customer, OutstandingBill
+    c_b = Customer(id=201, factory_id=2, name="Customer Factory B")
+    db.add(c_b)
+    db.flush()
+    db.add(
+        OutstandingBill(
+            id=3,
+            factory_id=2,
+            customer_id=201,
+            tracking_number="B-B1",
+            bill_date=datetime.now(timezone.utc).date() - timedelta(days=20),
+            bill_amount=99999.00,
+            balance_amount=99999.00,
+            status="active"
+        )
+    )
+    db.commit()
+    db.close()
+
+    # Bind Owner of Factory A
+    active_user_id["value"] = 11
+    code_a = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code_a, chat_id="chat-isolation-a")
+
+    response = callback_webhook(client, "chat-isolation-a", "owner_collection_war_room")
+    assert response.status_code == 200
+    msg = response.json()["message"]
+    # Total Outstanding must NOT include Factory B's 99999.00
+    assert "99,999.00" not in msg
+    assert "Customer Factory B" not in msg
+
