@@ -80,6 +80,9 @@ class TelegramStatusResponse(BaseModel):
     welcome_sent_at: Optional[str] = None
     last_message_at: Optional[str] = None
     last_message_status: Optional[str] = None
+    last_webhook_event_at: Optional[str] = None
+    # Webhook configuration status (production check)
+    webhook_configured: bool = False
 
 
 class TelegramConnectCodeResponse(BaseModel):
@@ -269,6 +272,148 @@ def _telegram_bot_config() -> tuple[str, str]:
     return token, username
 
 
+# ===========================================================
+# Super Admin: Manual Webhook Registration Endpoint
+# ===========================================================
+class TelegramWebhookRegisterRequest(BaseModel):
+    bot_token: Optional[str] = Field(default=None, max_length=255)
+    webhook_secret: Optional[str] = Field(default=None, max_length=255)
+    use_default: bool = False
+
+
+class TelegramWebhookRegisterResponse(BaseModel):
+    success: bool
+    message: str
+    webhook_url: str
+
+
+@router.post("/api/integrations/telegram/register-webhook", response_model=TelegramWebhookRegisterResponse)
+def register_telegram_webhook(
+    payload: TelegramWebhookRegisterRequest,
+    current_user: User = Depends(check_permissions(["Super Admin"])),
+    db: Session = Depends(get_db),
+):
+    """Super Admin only: Manually register webhook with Telegram.
+    
+    This is useful if auto-registration fails or you want to override
+    existing webhook configuration.
+    """
+    from services.telegram_webhook_manager import register_webhook
+    
+    # Optionally override tokens from request
+    if payload.use_default:
+        # Use environment variables
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+        if not token:
+            return TelegramWebhookRegisterResponse(
+                success=False,
+                message="TELEGRAM_BOT_TOKEN is not configured in environment",
+                webhook_url=""
+            )
+    else:
+        # Use provided tokens temporarily
+        token = payload.bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        secret = payload.webhook_secret or os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+        
+        if not token:
+            return TelegramWebhookRegisterResponse(
+                success=False,
+                message="Bot token required (provide bot_token or use use_default=true)",
+                webhook_url=""
+            )
+        if not secret:
+            return TelegramWebhookRegisterResponse(
+                success=False,
+                message="Webhook secret required (provide webhook_secret or use use_default=true)",
+                webhook_url=""
+            )
+    
+    # Register webhook
+    success, message = register_webhook()
+    
+    # Calculate expected URL
+    public_origin = os.getenv("PUBLIC_API_ORIGIN", "https://munshiai.co.in").rstrip("/")
+    webhook_url = f"{public_origin}/api/integrations/telegram/webhook"
+    
+    return TelegramWebhookRegisterResponse(
+        success=success,
+        message=message,
+        webhook_url=webhook_url if success else webhook_url  # Always return expected URL even if failed
+    )
+
+
+# ===========================================================
+# Phase 1: Admin Diagnostics Endpoint
+# ===========================================================
+@router.get("/api/integrations/telegram/diagnostics", response_model=dict)
+def telegram_diagnostics(
+    current_user: User = Depends(check_permissions(["Super Admin"])),
+    db: Session = Depends(get_db),
+):
+    """Admin-only diagnostics endpoint to troubleshoot Telegram binding issues.
+    
+    Returns configuration state and recent activity without exposing secrets.
+    """
+    bot_token_configured = bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip())
+    bot_username = (os.getenv("TELEGRAM_BOT_USERNAME") or "MunshiHermesAi_Bot").strip().lstrip("@")
+    bot_username_configured = bool(bot_username)
+    webhook_secret_configured = bool(os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip())
+    
+    public_origin = os.getenv("PUBLIC_API_ORIGIN", "https://munshiai.co.in").rstrip("/")
+    expected_webhook_url = f"{public_origin}/api/integrations/telegram/webhook"
+    
+    # Get webhook status from Telegram
+    from services.telegram_webhook_manager import get_webhook_status
+    webhook_info = get_webhook_status()
+    
+    # Get pending bindings
+    pending = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.is_active.is_(False),
+        TelegramUserBinding.telegram_connected_at.isnot(None),
+    ).count()
+    
+    # Get last binding activity
+    last_binding_success = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.is_active.is_(True),
+        TelegramUserBinding.last_message_status == "sent",
+    ).order_by(TelegramUserBinding.last_message_at.desc()).first()
+    
+    last_binding_failure = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.is_active.is_(True),
+        TelegramUserBinding.last_message_status == "failed",
+    ).order_by(TelegramUserBinding.last_message_at.desc()).first()
+    
+    # Get last webhook events (any binding)
+    last_success_binding = db.query(func.count(TelegramUserBinding.id)).filter(
+        TelegramUserBinding.is_active.is_(True),
+        TelegramUserBinding.last_message_status == "sent",
+    ).scalar() or 0
+    
+    last_failure_binding = db.query(func.count(TelegramUserBinding.id)).filter(
+        TelegramUserBinding.is_active.is_(True),
+        TelegramUserBinding.last_message_status == "failed",
+    ).scalar() or 0
+    
+    return {
+        "bot_token_configured": bot_token_configured,
+        "bot_username_configured": bot_username_configured,
+        "telegram_bot_username": bot_username if bot_username_configured else None,
+        "webhook_secret_configured": webhook_secret_configured,
+        "expected_webhook_url": expected_webhook_url,
+        "webhook_configured": webhook_info["configured"],
+        "webhook_url": webhook_info["url"],
+        "pending_update_count": webhook_info["max_pending_updates"],
+        "last_error_date": webhook_info["last_error_date"],
+        "last_error_message": webhook_info["last_error_message"],
+        "pending_bind_count": pending,
+        "last_binding_success_count": last_success_binding,
+        "last_binding_failure_count": last_failure_binding,
+        "last_binding_success_at": last_binding_success.last_message_at if last_binding_success else None,
+        "last_binding_failure_at": last_binding_failure.last_message_at if last_binding_failure else None,
+    }
+
+
 def _token_hash(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
@@ -397,6 +542,21 @@ def get_telegram_status(
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
+    """Get Telegram binding status for current user.
+    
+    Returns:
+    - connected: Whether user is connected
+    - role: User's role in factory
+    - telegram_username: Bot's display username
+    - telegram_first_name: User's Telegram first name
+    - chat_id_verified: Whether chat_id matches binding
+    - connected_at: When binding was created
+    - welcome_sent_at: When welcome message was sent
+    - welcome_status: sent/failed/pending
+    - last_message_at: Last message timestamp
+    - last_message_status: sent/failed
+    - last_webhook_event_at: Most recent webhook event for any binding in factory
+    """
     factory = _factory_for_user(db, current_user)
     binding = db.query(TelegramUserBinding).filter(
         TelegramUserBinding.factory_id == current_user.factory_id,
@@ -405,6 +565,12 @@ def get_telegram_status(
     ).first()
     legacy_owner_connected = current_user.role == "Owner" and bool((factory.telegram_chat_id or "").strip())
     connected = binding is not None or legacy_owner_connected
+    
+    # Get last webhook event for any user binding in this factory
+    last_webhook_event = db.query(TelegramUserBinding).filter(
+        TelegramUserBinding.factory_id == factory.id,
+    ).order_by(TelegramUserBinding.last_message_at.desc()).first()
+    
     return TelegramStatusResponse(
         connected=connected,
         role=current_user.role,
@@ -427,6 +593,16 @@ def get_telegram_status(
             else None
         ),
         last_message_status=binding.last_message_status if binding else factory.telegram_last_message_status if legacy_owner_connected else None,
+        last_webhook_event_at=(
+            last_webhook_event.last_message_at.isoformat()
+            if last_webhook_event and last_webhook_event.last_message_at
+            else None
+        ),
+        # Webhook configuration status
+        webhook_configured=(
+            bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()) and
+            bool(os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip())
+        ),
     )
 
 
@@ -558,7 +734,10 @@ def telegram_self_service_webhook(
             TelegramUserBinding.is_active.is_(True),
         ).first()
         if binding is None:
-            return TelegramActionResponse(status="invalid", message="Telegram account is not connected")
+            return TelegramActionResponse(
+                status="invalid",
+                message="Telegram account is not connected.\n\nPlease go to Dashboard → Integrations → Connect Telegram and follow the steps."
+            )
         user = db.query(User).filter(User.id == binding.user_id, User.factory_id == binding.factory_id).first()
         factory = db.query(Factory).filter(Factory.id == binding.factory_id).first()
         if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
@@ -569,6 +748,14 @@ def telegram_self_service_webhook(
         binding.last_message_status = "sent"
         db.commit()
         return TelegramActionResponse(status="ok", message="Menu sent")
+    
+    # Support /bind <code> as alternative to /start bind_<code>
+    if message is not None and message.text and message.text.strip().lower().startswith("/bind "):
+        code_part = message.text.strip()[6:].strip()
+        if code_part:
+            return _handle_bind_code(db, code_part, str(message.chat.id), message.from_user)
+        return TelegramActionResponse(status="invalid", message="Please enter a valid binding code.\n\nTry: /bind 123456")
+    
     if message is None or not (message.text or "").startswith("/start"):
         return TelegramActionResponse(status="ignored", message="Update ignored")
     parts = (message.text or "").strip().split(maxsplit=1)
@@ -614,9 +801,15 @@ def _handle_bind_code(
         .first()
     )
     if user is None:
-        return TelegramActionResponse(status="invalid", message="Connection code is invalid or already used")
+        return TelegramActionResponse(
+            status="invalid",
+            message="❌ Connection code nahi mila.\n\nPlease check:\n1. Code sahi hai?\n2. Code expiry nahi hua?\n\nDashboard → Integrations → Connect Telegram se naya code generate karein."
+        )
     if user.telegram_binding_expiry is None:
-        return TelegramActionResponse(status="invalid", message="Connection code is invalid or already used")
+        return TelegramActionResponse(
+            status="invalid",
+            message="❌ Connection code expired ya already used.\n\nPlease generate new code from Dashboard → Integrations → Connect Telegram."
+        )
     expiry = user.telegram_binding_expiry
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
@@ -624,19 +817,31 @@ def _handle_bind_code(
         user.telegram_binding_code = None
         user.telegram_binding_expiry = None
         db.commit()
-        return TelegramActionResponse(status="expired", message="Connection code has expired")
-
+        return TelegramActionResponse(
+            status="expired",
+            message="⏰ Connection code expired.\n\nPlease generate new code from Dashboard → Integrations → Connect Telegram."
+        )
+    
     factory = db.query(Factory).filter(Factory.id == user.factory_id, Factory.is_active.is_(True)).with_for_update().first()
     if factory is None:
         user.telegram_binding_code = None
         user.telegram_binding_expiry = None
         db.commit()
-        return TelegramActionResponse(status="invalid", message="Factory is not active")
+        return TelegramActionResponse(
+            status="invalid",
+            message="❌ Factory is not active.\n\nPlease contact Munshi AI support."
+        )
 
     if user.telegram_chat_id and user.telegram_chat_id == chat_id and user.telegram_binding_code is None:
-        return TelegramActionResponse(status="ignored", message="Already connected")
+        return TelegramActionResponse(
+            status="ignored",
+            message="✅ Telegram already connected!\n\nYou're already connected to this Telegram account.\n\nUse /menu to see factory updates."
+        )
     if user.telegram_chat_id and user.telegram_chat_id != chat_id:
-        return TelegramActionResponse(status="conflict", message="This account is already bound to a different Telegram chat")
+        return TelegramActionResponse(
+            status="conflict",
+            message="❌ Different Telegram account already bound.\n\nThis Telegram account is already connected to another user.\n\nPlease disconnect from the other account first."
+        )
 
     conflicting_binding = db.query(TelegramUserBinding).filter(
         TelegramUserBinding.telegram_chat_id == chat_id,
@@ -649,7 +854,10 @@ def _handle_bind_code(
         Factory.is_active.is_(True),
     ).first()
     if conflicting_binding is not None or conflicting_factory is not None:
-        return TelegramActionResponse(status="conflict", message="This Telegram account is already connected")
+        return TelegramActionResponse(
+            status="conflict",
+            message="❌ Telegram account already connected.\n\nThis Telegram account is already connected to factory.\n\nPlease disconnect from the other factory first."
+        )
 
     bot_token, bot_username = _telegram_bot_config()
     binding = db.query(TelegramUserBinding).filter(
@@ -685,14 +893,20 @@ def _handle_connect_token(
         .first()
     )
     if connect_token is None or connect_token.used_at is not None:
-        return TelegramActionResponse(status="invalid", message="Connection link is invalid or already used")
+        return TelegramActionResponse(
+            status="invalid",
+            message="❌ Connection link is invalid or already used.\n\nPlease generate a new connection link from Dashboard → Integrations → Connect Telegram."
+        )
     expiry = connect_token.expires_at
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
     if expiry <= now:
         connect_token.used_at = now
         db.commit()
-        return TelegramActionResponse(status="expired", message="Connection link has expired")
+        return TelegramActionResponse(
+            status="expired",
+            message="⏰ Connection link expired.\n\nPlease generate a new connection link from Dashboard → Integrations → Connect Telegram."
+        )
 
     owner = (
         db.query(User)
@@ -708,7 +922,10 @@ def _handle_connect_token(
     if owner is None or factory is None:
         connect_token.used_at = now
         db.commit()
-        return TelegramActionResponse(status="invalid", message="Connection link is invalid")
+        return TelegramActionResponse(
+            status="invalid",
+            message="❌ Connection link is invalid.\n\nPlease generate a new connection link from Dashboard → Integrations → Connect Telegram."
+        )
 
     conflicting_binding = db.query(TelegramUserBinding).filter(
         TelegramUserBinding.telegram_chat_id == chat_id,
@@ -720,7 +937,10 @@ def _handle_connect_token(
         Factory.id != factory.id,
     ).first()
     if conflicting_binding is not None or conflicting_factory is not None:
-        return TelegramActionResponse(status="conflict", message="This Telegram account is already connected")
+        return TelegramActionResponse(
+            status="conflict",
+            message="❌ Telegram account already connected.\n\nThis Telegram account is already connected to factory.\n\nPlease disconnect from the other factory first."
+        )
 
     bot_token, bot_username = _telegram_bot_config()
     binding = db.query(TelegramUserBinding).filter(

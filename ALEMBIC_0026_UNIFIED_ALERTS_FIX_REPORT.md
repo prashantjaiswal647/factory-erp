@@ -1,39 +1,37 @@
-# ALEMBIC_0026_UNIFIED_ALERTS_FIX_REPORT.md
+# Alembic Migration Fix Report: `0026_unified_alerts`
 
-Generated: 2026-06-10T10:52:00Z
+## Problem Statement
+During deployment, the Alembic upgrade command failed with the following error:
+```
+psycopg2.errors.DuplicateTable: relation "unified_alerts" already exists
+```
+This occurred because the `unified_alerts` table had already been created by earlier runtime synchronization or manual schema updates, causing the migration script `20260616_0026_unified_alerts.py` to fail when executing `op.create_table`.
 
-## Executive Summary
-This sprint fixed a deploy/migration crash in `apps/api/alembic/versions/20260616_0026_unified_alerts.py` where Alembic threw a `DuplicateTable` error because the `unified_alerts` table had already been created by earlier runtime metadata syncs or manual database definitions.
+---
 
-## Root Cause Analysis
-During production or validation startup, tests or runtime syncs may invoke `Base.metadata.create_all` which creates the `unified_alerts` table in PostgreSQL. When Alembic runs its migration list, the `0026_unified_alerts` migration executes a raw `op.create_table("unified_alerts", ...)` without verifying if the table is already present. This results in the database driver throwing a `psycopg2.errors.DuplicateTable` exception and aborting the deployment.
+## Action Taken & Resolution
 
-## Actions Taken
-1. **Idempotence with SQLAlchemy Inspector**:
-   - Modified the migration file [20260616_0026_unified_alerts.py](file:///C:/Users/Prashant/OneDrive/Desktop/Coding%20Projects/ai-erp-system/apps/api/alembic/versions/20260616_0026_unified_alerts.py) to import `inspect` from `sqlalchemy`.
-   - Wrapped the table and index creation statements in a conditional block:
-     ```python
-     bind = op.get_bind()
-     inspector = inspect(bind)
-     tables = inspector.get_table_names()
-     if "unified_alerts" not in tables:
-         # op.create_table(...) and op.create_index(...)
-     ```
-2. **Safe Downgrade Implementation**:
-   - Wrapped the downgrade script's drop statement similarly to prevent crashes if the table is externally managed:
-     ```python
-     if "unified_alerts" in tables:
-         op.drop_table("unified_alerts")
-     ```
+### 1. File Modified
+- **Migration File**: [20260616_0026_unified_alerts.py](file:///C:/Users/Prashant/OneDrive/Desktop/Coding%20Projects/ai-erp-system/apps/api/alembic/versions/20260616_0026_unified_alerts.py)
 
-## Verification Results
-1. **Alembic Migration Upgrade**:
-   - Executed `alembic upgrade head` successfully without any table collisions or crashes.
-2. **Alerts & Lifecycle Verification**:
-   - Ran `pytest` on all affected alerts and lifecycle suites, verifying that all **13 tests pass cleanly**:
-     - `tests/test_unified_alerts.py` (3/3 passed)
-     - `tests/test_collection_war_room.py` (2/2 passed)
-     - `tests/test_p4_5_lifecycle_flows.py` (8/8 passed)
+### 2. Upgrades Performed
+- **SQLAlchemy Inspector Integration**: Wrapped the table creation logic to check if `unified_alerts` is already present in the existing table list.
+- **Idempotent Index Creation**: Added a step using `inspector.get_indexes("unified_alerts")` to list already existing indexes on the table, checking and only creating indexes if they do not already exist. This prevents errors if the table exists but some or all indexes are already defined.
+- **Data Safety**: No modifications were made to the existing production data.
 
-## Conclusion
-The migration `0026_unified_alerts` is now fully idempotent and safe for production deployments, ensuring existing data in `unified_alerts` remains untouched and preventing future deployment pipeline failures.
+### 3. Downgrades Safeguarded
+- **Index Removal**: Safely dropped indexes individually only if they exist.
+- **Safe Table Removal**: Enhanced the downgrade logic to check if the table has rows. If it contains data, the downgrade remains non-destructive and skips dropping the table to avoid accidental data loss.
+
+---
+
+## Test & Validation Summary
+
+1. **Alembic Execution**: Ran `alembic upgrade head` inside the container. The upgrade completed successfully.
+2. **Backend Test Suites**:
+   Ran the following tests to verify correctness:
+   - `tests/test_unified_alerts.py`
+   - `tests/test_collection_war_room.py`
+   - `tests/test_p4_5_lifecycle_flows.py`
+   
+   **Result**: 13/13 passed.
