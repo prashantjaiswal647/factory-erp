@@ -9,12 +9,44 @@ from main import _rate_limit_store, app
 from routers.integrations import enforce_webhook_rate_limit
 
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from db import Base, get_db
+
+# Test DB configuration
+engine = create_engine(
+    "sqlite://",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+from routers.super_admin import _super_admin_failed_attempts, _super_admin_lockouts
+
+
 @pytest.fixture(autouse=True)
 def clear_rate_limits(monkeypatch):
     monkeypatch.delenv("REDIS_URL", raising=False)
+    app.dependency_overrides[get_db] = override_get_db
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     _rate_limit_store.clear()
+    _super_admin_failed_attempts.clear()
+    _super_admin_lockouts.clear()
     yield
+    app.dependency_overrides.pop(get_db, None)
     _rate_limit_store.clear()
+    _super_admin_failed_attempts.clear()
+    _super_admin_lockouts.clear()
 
 
 def test_auth_uses_structured_logging_without_debug_prints():
