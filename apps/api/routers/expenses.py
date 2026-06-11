@@ -27,6 +27,7 @@ class ExpenseResponse(BaseModel):
     amount: Decimal
     category: str
     timestamp: datetime
+    machine_id: Optional[int] = None
 
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 def create_expense(
