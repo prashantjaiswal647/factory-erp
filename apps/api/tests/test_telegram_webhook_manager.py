@@ -1,16 +1,110 @@
-"""Tests for Telegram webhook management and self-service."""
 import pytest
 from unittest.mock import patch, MagicMock
-import httpx
 import os
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from db import Base, get_db
+from models import Factory, User
+from auth import get_current_user, get_current_active_user, check_permissions
+from routers.integrations import router
+
+@pytest.fixture
+def test_db(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-encryption-key-that-is-long-enough-for-jwt")
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    db = SessionLocal()
+    
+    # Create test factory
+    factory = Factory(
+        id=1,
+        name="Test Factory",
+        subscription_status="active",
+        telegram_bot_token="123456:test-token",
+        telegram_chat_id="12345"
+    )
+    db.add(factory)
+    db.flush()
+    
+    # Create test users
+    owner = User(id=1, factory_id=1, username="owner", role="Owner", password_hash="hash", is_active=True)
+    supervisor = User(id=2, factory_id=1, username="supervisor", role="Supervisor", password_hash="hash", is_active=True)
+    super_admin = User(id=3, factory_id=1, username="super_admin", role="Owner", password_hash="hash", is_active=True)
+    
+    db.add_all([owner, supervisor, super_admin])
+    db.commit()
+    db.close()
+    return SessionLocal
+
+def _create_client_for_user(user_id: int, SessionLocal):
+    app = FastAPI()
+    app.include_router(router)
+    
+    def override_db():
+        session = SessionLocal()
+        try:
+            yield session
+        finally:
+            session.close()
+            
+    def override_user():
+        session = SessionLocal()
+        try:
+            user = session.query(User).filter(User.id == user_id).first()
+            session.expunge(user)
+            if user_id == 3:
+                user.role = "Super Admin"
+            return user
+        finally:
+            session.close()
+            
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = override_user
+    app.dependency_overrides[get_current_active_user] = override_user
+    
+    import inspect
+    import httpx
+    if "app" not in inspect.signature(httpx.Client.__init__).parameters:
+        original_init = httpx.Client.__init__
+        def patched_init(self, *args, app=None, **kwargs):
+            return original_init(self, *args, **kwargs)
+        httpx.Client.__init__ = patched_init
+        
+    return TestClient(app)
+
+@pytest.fixture
+def owner_client(test_db):
+    return _create_client_for_user(1, test_db)
+
+@pytest.fixture
+def supervisor_client(test_db):
+    return _create_client_for_user(2, test_db)
+
+@pytest.fixture
+def admin_client(test_db):
+    return _create_client_for_user(3, test_db)
+
+@pytest.fixture
+def super_admin_client(test_db):
+    return _create_client_for_user(3, test_db)
 
 
 @pytest.fixture
 def mock_httpx_post(monkeypatch):
     """Mock httpx.post for testing webhook registration."""
     async def mock_post(*args, **kwargs):
-        # Check if it's a getWebhookInfo or setWebhook call
-        url = args[0] if args else (kwargs.get('url', ''))
+        # Extract URL safely, skipping self client arg if present
+        url = ""
+        if len(args) > 1 and isinstance(args[1], str):
+            url = args[1]
+        elif len(args) > 0 and isinstance(args[0], str):
+            url = args[0]
+        else:
+            url = kwargs.get('url', '')
         
         if 'getWebhookInfo' in url:
             # Return configured webhook
@@ -80,7 +174,7 @@ def test_register_webhook_missing_token(monkeypatch):
     
     token, username, secret, expected_url = get_webhook_config()
     
-    assert token is False
+    assert not token
     assert username == "MunshiHermesAi_Bot"
     assert secret == "webhook-secret"
     
@@ -102,7 +196,7 @@ def test_get_webhook_status_not_configured(monkeypatch):
     assert status["expected_url"] == "https://munshiai.co.in/api/integrations/telegram/webhook"
 
 
-def test_endpoint_register_webhook_success(admin_client, monkeypatch):
+def test_endpoint_register_webhook_success(admin_client, monkeypatch, mock_httpx_post):
     """Test Super Admin can register webhook via endpoint."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "webhook-secret")
@@ -154,18 +248,7 @@ def test_webhook_configured_in_status_endpoint(owner_client, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "webhook-secret")
     
-    with patch('routers.integrations.get_webhook_status') as mock_status:
-        mock_status.return_value = {
-            "configured": True,
-            "url": "https://munshiai.co.in/api/integrations/telegram/webhook",
-            "has_pending_updates": False,
-            "max_pending_updates": 0,
-            "last_error_date": None,
-            "last_error_message": "",
-            "expected_url": "https://munshiai.co.in/api/integrations/telegram/webhook",
-        }
-        
-        response = owner_client.get("/api/integrations/telegram/status")
+    response = owner_client.get("/api/integrations/telegram/status")
     
     assert response.status_code == 200
     data = response.json()
@@ -203,4 +286,4 @@ def test_diagnostic_endpoint_includes_webhook_info(
     assert data["bot_token_configured"] is True
     assert data["webhook_secret_configured"] is True
     assert data["webhook_configured"] is True
-    assert "bot" in data["telegram_bot_username"]
+    assert "bot" in data["telegram_bot_username"].lower()

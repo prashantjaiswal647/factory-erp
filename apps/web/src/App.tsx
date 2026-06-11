@@ -136,11 +136,7 @@ export default function App() {
         />
         <Route
           path="operations"
-          element={
-            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
-              <OperationsPage />
-            </PrivateRoute>
-          }
+          element={<Navigate to="/daily-sequence" replace />}
         />
         <Route
           path="daily-sequence"

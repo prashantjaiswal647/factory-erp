@@ -49,6 +49,110 @@ def inline_keyboard(role: str) -> dict:
     }
 
 
+MAIN_MENU = [
+    [("📊 Dekho", "menu:view"), ("✍️ Kaam Karo", "menu:action")],
+    [("🔔 Alerts", "menu:alerts"), ("⚙️ Settings", "menu:settings")],
+]
+VIEW_MENU = [
+    [("Outstanding", "view:outstanding"), ("Today Production", "view:production")],
+    [("Inventory Stock", "view:inventory"), ("Payments Received", "view:payments")],
+    [("Expenses", "view:expenses"), ("Attendance", "view:attendance")],
+    [("⬅️ Back", "menu:main")],
+]
+ACTION_MENU = [
+    [("Add Payment", "action:payment"), ("Add Production", "action:production")],
+    [("Add Expense", "action:expense"), ("Add Inventory", "action:inventory")],
+    [("Mark Attendance", "action:attendance"), ("Create Invoice", "action:invoice")],
+    [("⬅️ Back", "menu:main")],
+]
+CONFIRM_MENU = [
+    [("✅ Save", "confirm:save"), ("✏️ Edit", "confirm:edit")],
+    [("❌ Cancel", "confirm:cancel")],
+]
+
+
+def role_menu(role: str) -> list[list[tuple[str, str]]]:
+    return MAIN_MENU if role in {"Owner", "Sub-Owner"} else []
+
+
+def inline_keyboard(role: str, menu: str = "main") -> dict:
+    menu_rows = {
+        "main": role_menu(role),
+        "view": VIEW_MENU,
+        "action": ACTION_MENU,
+        "confirm": CONFIRM_MENU,
+    }.get(menu, role_menu(role))
+    return {
+        "inline_keyboard": [
+            [{"text": text, "callback_data": callback_data} for text, callback_data in row]
+            for row in menu_rows
+        ]
+    }
+
+
+def allowed_menu_callbacks(role: str) -> set[str]:
+    rows = role_menu(role) + VIEW_MENU + ACTION_MENU + CONFIRM_MENU
+    legacy = {
+        "telegram_test_message",
+        "subowner_today_summary", "subowner_inventory_risk", "subowner_production_status",
+        "subowner_staff_today", "subowner_refresh_briefing", "subowner_briefing_history",
+    }
+    if role == "Owner":
+        legacy |= {
+            "owner_today_summary", "owner_collection_war_room",
+            "owner_inventory_risk", "owner_production_status", "owner_last_invoice",
+            "owner_staff_today", "owner_refresh_briefing", "owner_briefing_history",
+        }
+    return {callback for row in rows for _, callback in row} | legacy
+
+
+def handle_nested_menu_callback(
+    db: Session,
+    binding: TelegramUserBinding,
+    callback_data: str,
+    telegram_user_id: str,
+) -> tuple[str, dict]:
+    from services.telegram_action_session import create_session, get_session, update_session
+
+    if callback_data == "menu:main":
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "main", {})
+        return "Munshi AI main menu", inline_keyboard(binding.role, "main")
+    if callback_data == "menu:view":
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "view", {})
+        return "📊 Dekho\n\nRead-only factory information choose karein.", inline_keyboard(binding.role, "view")
+    if callback_data == "menu:action":
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "action", {})
+        return "✍️ Kaam Karo\n\nAction choose karein. Save se pehle confirmation zaroor hoga.", inline_keyboard(binding.role, "action")
+    if callback_data == "menu:alerts":
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "alerts", {})
+        return "🔔 Alerts\n\nAlert Center navigation placeholder. ERP data change nahi hua.", inline_keyboard(binding.role, "main")
+    if callback_data == "menu:settings":
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "settings", {})
+        return "⚙️ Settings\n\nSettings navigation placeholder. ERP data change nahi hua.", inline_keyboard(binding.role, "main")
+    if callback_data.startswith("view:"):
+        label = callback_data.split(":", 1)[1].replace("_", " ").title()
+        create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", callback_data, {})
+        return f"{label}\n\nRead-only data placeholder. Live data integration next phase mein hogi.", inline_keyboard(binding.role, "view")
+    if callback_data.startswith("action:"):
+        action = callback_data.split(":", 1)[1]
+        create_session(db, binding.factory_id, telegram_user_id, "menu_action", "confirm", {"action": action, "placeholder": True})
+        return (
+            f"{action.replace('_', ' ').title()}\n\n"
+            "Step-by-step input placeholder ready hai.\n"
+            "Koi database update abhi nahi hoga. Continue karne se pehle confirm karein."
+        ), inline_keyboard(binding.role, "confirm")
+    if callback_data.startswith("confirm:"):
+        session = get_session(db, binding.factory_id, telegram_user_id, "menu_action")
+        if callback_data == "confirm:cancel":
+            if session:
+                update_session(db, session.session_id, "cancelled", session.payload_json or {}, status="cancelled")
+            return "❌ Action cancelled. Koi data save nahi hua.", inline_keyboard(binding.role, "action")
+        if callback_data == "confirm:edit":
+            return "✏️ Edit placeholder. Input collection next phase mein enable hoga.", inline_keyboard(binding.role, "action")
+        return "✅ Save placeholder. Confirmation received, lekin is phase mein database update disabled hai.", inline_keyboard(binding.role, "action")
+    return render_callback_response(db, binding, callback_data), inline_keyboard(binding.role, "main")
+
+
 def render_welcome_message(factory: Factory, user: User, binding: TelegramUserBinding) -> str:
     username = f"@{binding.telegram_username}" if binding.telegram_username else "Connected account"
     if user.role == "Owner":

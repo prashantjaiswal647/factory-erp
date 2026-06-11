@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ai_agent import build_ai_tool_context, initialize_groq_llm
@@ -18,7 +19,7 @@ from db import get_db
 from models import Factory, User, Customer, PackagingProfile, Inventory, SalesInvoice, TelegramConnectToken, TelegramUserBinding
 from telegram_crypto import encrypt_token, decrypt_token
 from services.telegram_delivery import TelegramDeliveryError, send_telegram_message
-from services.telegram_onboarding import inline_keyboard, render_callback_response, render_welcome_message
+from services.telegram_onboarding import allowed_menu_callbacks, handle_nested_menu_callback, inline_keyboard, render_welcome_message
 
 router = APIRouter(tags=["integrations"])
 logger = logging.getLogger(__name__)
@@ -181,6 +182,7 @@ class TelegramActionResponse(BaseModel):
 
 
 class TelegramWebhookUser(BaseModel):
+    id: Optional[int | str] = None
     username: Optional[str] = None
     first_name: Optional[str] = None
 
@@ -711,13 +713,16 @@ def telegram_self_service_webhook(
         factory = db.query(Factory).filter(Factory.id == binding.factory_id, Factory.is_active.is_(True)).first()
         if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
             return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
-        allowed = {button["callback_data"] for row in inline_keyboard(binding.role)["inline_keyboard"] for button in row}
+        allowed = allowed_menu_callbacks(binding.role)
         if callback_data not in allowed:
             return TelegramActionResponse(status="invalid", message="This action is not available for your role")
         factory._telegram_target_chat_id = chat_id
-        response_text = render_callback_response(db, binding, callback_data)
+        telegram_user_id = str((callback.get("from") or {}).get("id") or chat_id)
+        response_text, reply_markup = handle_nested_menu_callback(
+            db, binding, callback_data, telegram_user_id,
+        )
         try:
-            send_telegram_message(factory, response_text, reply_markup=inline_keyboard(binding.role))
+            send_telegram_message(factory, response_text, reply_markup=reply_markup)
             binding.last_message_at = _utcnow()
             binding.last_message_status = "sent"
             db.commit()
@@ -743,7 +748,9 @@ def telegram_self_service_webhook(
         if user is None or factory is None or user.role not in {"Owner", "Sub-Owner"} or user.role != binding.role:
             return TelegramActionResponse(status="invalid", message="Telegram updates abhi aapke role ke liye enabled nahi hain.")
         factory._telegram_target_chat_id = chat_id
-        send_telegram_message(factory, "Munshi AI menu", reply_markup=inline_keyboard(binding.role))
+        telegram_user_id = str(message.from_user.id if message.from_user and message.from_user.id is not None else chat_id)
+        handle_nested_menu_callback(db, binding, "menu:main", telegram_user_id)
+        send_telegram_message(factory, "Munshi AI menu", reply_markup=inline_keyboard(binding.role, "main"))
         binding.last_message_at = _utcnow()
         binding.last_message_status = "sent"
         db.commit()

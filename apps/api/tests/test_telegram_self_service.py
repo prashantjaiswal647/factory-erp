@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from auth import get_current_user
 from db import Base, get_db
-from models import Factory, TelegramConnectToken, TelegramUserBinding, User
+from models import Factory, TelegramActionSession, TelegramConnectToken, TelegramUserBinding, User
 from routers.integrations import router
 from services.telegram_delivery import TelegramDeliveryError
 
@@ -179,7 +179,7 @@ def test_successful_bind_and_token_is_one_time(telegram_app):
     assert sender.call_count == 2
     welcome_call, test_call = sender.call_args_list
     assert "Factory Details" in welcome_call.args[1]
-    assert welcome_call.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "owner_today_summary"
+    assert welcome_call.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "menu:view"
     assert "test message successful" in test_call.args[1]
 
     db = SessionLocal()
@@ -316,6 +316,84 @@ def test_role_menu_and_callbacks_resolve_user_binding(telegram_app):
         webhook(client, sub_token, chat_id="sub-menu")
     forbidden = callback_webhook(client, "sub-menu", "owner_staff_actions")
     assert forbidden.json()["status"] == "invalid"
+
+
+def test_nested_menu_callbacks_and_back_navigation(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    owner_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        webhook(client, owner_token, chat_id="nested-menu")
+
+    with patch("routers.integrations.send_telegram_message") as sender:
+        menu = menu_webhook(client, "nested-menu")
+        view = callback_webhook(client, "nested-menu", "menu:view")
+        back = callback_webhook(client, "nested-menu", "menu:main")
+
+    assert menu.json()["status"] == "ok"
+    assert view.json()["status"] == "ok"
+    assert "Read-only" in view.json()["message"]
+    assert back.json()["message"] == "Munshi AI main menu"
+    view_keyboard = sender.call_args_list[1].kwargs["reply_markup"]["inline_keyboard"]
+    assert [button["callback_data"] for row in view_keyboard for button in row] == [
+        "view:outstanding", "view:production", "view:inventory",
+        "view:payments", "view:expenses", "view:attendance", "menu:main",
+    ]
+    main_keyboard = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
+    assert [button["callback_data"] for row in main_keyboard for button in row] == [
+        "menu:view", "menu:action", "menu:alerts", "menu:settings",
+    ]
+
+    db = SessionLocal()
+    try:
+        session = db.query(TelegramActionSession).filter(
+            TelegramActionSession.factory_id == 1,
+            TelegramActionSession.chat_id == "nested-menu",
+            TelegramActionSession.action == "menu_navigation",
+            TelegramActionSession.status == "pending",
+        ).one()
+        assert session.step == "main"
+    finally:
+        db.close()
+
+
+def test_action_placeholder_requires_confirmation_and_never_writes_business_data(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    owner_token, _ = create_link(client)
+    with patch("routers.integrations.send_telegram_message"):
+        webhook(client, owner_token, chat_id="action-menu")
+
+    with patch("routers.integrations.send_telegram_message") as sender:
+        menu = callback_webhook(client, "action-menu", "menu:action")
+        action = callback_webhook(client, "action-menu", "action:payment")
+        save = callback_webhook(client, "action-menu", "confirm:save")
+        cancel = callback_webhook(client, "action-menu", "confirm:cancel")
+
+    action_keyboard = sender.call_args_list[0].kwargs["reply_markup"]["inline_keyboard"]
+    assert [button["callback_data"] for row in action_keyboard for button in row] == [
+        "action:payment", "action:production", "action:expense",
+        "action:inventory", "action:attendance", "action:invoice", "menu:main",
+    ]
+    assert menu.json()["status"] == "ok"
+    assert action.json()["status"] == "ok"
+    assert "database update" in action.json()["message"]
+    confirm_keyboard = sender.call_args_list[1].kwargs["reply_markup"]["inline_keyboard"]
+    assert {button["callback_data"] for row in confirm_keyboard for button in row} == {
+        "confirm:save", "confirm:edit", "confirm:cancel",
+    }
+    assert "database update disabled" in save.json()["message"]
+    assert "Koi data save nahi hua" in cancel.json()["message"]
+
+    db = SessionLocal()
+    try:
+        sessions = db.query(TelegramActionSession).filter(
+            TelegramActionSession.factory_id == 1,
+            TelegramActionSession.chat_id == "action-menu",
+            TelegramActionSession.action == "menu_action",
+        ).all()
+        assert len(sessions) == 1
+        assert sessions[0].status == "cancelled"
+    finally:
+        db.close()
 
 
 def test_unknown_chat_and_welcome_failure_are_safe(telegram_app):
@@ -622,19 +700,9 @@ def test_owner_menu_contains_full_set_of_buttons(telegram_app):
         sender.assert_called_once()
         markup = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
     
-    # Check all Owner buttons exist
+    # Main menu intentionally contains only four top-level buttons.
     callbacks = [btn["callback_data"] for row in markup for btn in row]
-    expected_callbacks = [
-        "owner_today_summary",
-        "owner_collection_war_room",
-        "owner_inventory_risk",
-        "owner_production_status",
-        "owner_last_invoice",
-        "owner_staff_today",
-        "owner_refresh_briefing",
-    ]
-    for expected in expected_callbacks:
-        assert expected in callbacks
+    assert callbacks == ["menu:view", "menu:action", "menu:alerts", "menu:settings"]
 
 
 def test_sub_owner_menu_contains_limited_set_of_buttons(telegram_app):
@@ -654,16 +722,7 @@ def test_sub_owner_menu_contains_limited_set_of_buttons(telegram_app):
     
     callbacks = [btn["callback_data"] for row in markup for btn in row]
     
-    # Sub-owner must have limited callbacks
-    assert "subowner_today_summary" in callbacks
-    assert "subowner_inventory_risk" in callbacks
-    assert "subowner_production_status" in callbacks
-    assert "subowner_staff_today" in callbacks
-    assert "subowner_refresh_briefing" in callbacks
-    
-    # Check that Owner-only callbacks do NOT exist in sub-owner menu
-    assert "owner_collection_war_room" not in callbacks
-    assert "owner_last_invoice" not in callbacks
+    assert callbacks == ["menu:view", "menu:action", "menu:alerts", "menu:settings"]
 
 
 def test_unknown_chat_callback_is_rejected(telegram_app):
