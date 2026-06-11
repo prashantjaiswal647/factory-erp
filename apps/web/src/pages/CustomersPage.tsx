@@ -459,8 +459,8 @@ export default function CustomersPage() {
 
       {editingCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200 text-left">
-            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <div className="w-full max-w-2xl rounded-xl border border-zinc-200 bg-white shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200 text-left">
+            <div className="flex items-center justify-between border-b border-zinc-100 p-5">
               <div>
                 <h3 className="text-lg font-bold text-zinc-950">Edit Customer</h3>
                 <p className="text-xs text-zinc-500 mt-0.5">Update customer details</p>
@@ -468,46 +468,57 @@ export default function CustomersPage() {
               <button
                 type="button"
                 onClick={() => setEditingCustomer(null)}
-                className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="grid gap-4">
-              <TextField label="Customer Name" value={editForm.name || ""} onChange={(name) => setEditForm({ ...editForm, name })} />
-              <NumberTextField label="Phone Number" value={editForm.phone_number || ""} onChange={(phone_number) => setEditForm({ ...editForm, phone_number })} />
-              <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
-              <TextField label="Place / City" value={editForm.place || ""} onChange={(place) => setEditForm({ ...editForm, place })} />
-              <TextField label="GST Number" value={editForm.gst_number || ""} onChange={(gst_number) => setEditForm({ ...editForm, gst_number })} />
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <TextField label="Customer Name" value={editForm.name || ""} onChange={(name) => setEditForm({ ...editForm, name })} />
+                <NumberTextField label="Phone Number" value={editForm.phone_number || ""} onChange={(phone_number) => setEditForm({ ...editForm, phone_number })} />
+                <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
+                <TextField label="Place / City" value={editForm.place || ""} onChange={(place) => setEditForm({ ...editForm, place })} />
+                <div className="md:col-span-2">
+                  <TextField label="GST Number" value={editForm.gst_number || ""} onChange={(gst_number) => setEditForm({ ...editForm, gst_number })} />
+                </div>
+              </div>
               
               <div className="border-t border-zinc-100 pt-4 mt-2">
-                <h4 className="text-xs font-semibold text-zinc-950 uppercase tracking-wider mb-2">Opening Balance / Advance</h4>
-                <div className="grid gap-3">
+                <h4 className="text-sm font-semibold text-zinc-950 mb-1">Opening Balance / Advance</h4>
+                <p className="text-xs text-zinc-500 mb-3">
+                  Previous due customer onboarding से पहले का बकाया है. Advance वह amount है जो customer ने future order के लिए पहले से दे दिया है.
+                </p>
+                <div className="grid gap-4 md:grid-cols-2">
                   <NumberTextField label="Previous Due Amount (₹)" value={editForm.opening_outstanding?.toString() || "0"} onChange={(v) => setEditForm({ ...editForm, opening_outstanding: parseFloat(v) || 0 })} />
                   <label className="block text-sm">
                     <span className="font-medium text-zinc-700">Previous Due As of Date</span>
                     <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500" value={editForm.opening_outstanding_date || ""} onChange={(e) => setEditForm({ ...editForm, opening_outstanding_date: e.target.value })} />
                   </label>
-                  <TextField label="Previous Due Note / Reason" value={editForm.opening_outstanding_note || ""} onChange={(v) => setEditForm({ ...editForm, opening_outstanding_note: v })} />
+                  <div className="md:col-span-2">
+                    <TextField label="Previous Due Note / Reason" value={editForm.opening_outstanding_note || ""} onChange={(v) => setEditForm({ ...editForm, opening_outstanding_note: v })} />
+                  </div>
                   
-                  <div className="border-t border-zinc-100 my-1"></div>
+                  <div className="md:col-span-2 border-t border-zinc-100 my-2"></div>
                   
                   <NumberTextField label="Advance Received Amount (₹)" value={editForm.advance_balance?.toString() || "0"} onChange={(v) => setEditForm({ ...editForm, advance_balance: parseFloat(v) || 0 })} />
                   <label className="block text-sm">
                     <span className="font-medium text-zinc-700">Advance Received Date</span>
                     <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500" value={editForm.advance_balance_date || ""} onChange={(e) => setEditForm({ ...editForm, advance_balance_date: e.target.value })} />
                   </label>
-                  <TextField label="Advance Note / Reason" value={editForm.advance_balance_note || ""} onChange={(v) => setEditForm({ ...editForm, advance_balance_note: v })} />
+                  <div className="md:col-span-2">
+                    <TextField label="Advance Note / Reason" value={editForm.advance_balance_note || ""} onChange={(v) => setEditForm({ ...editForm, advance_balance_note: v })} />
+                  </div>
                 </div>
               </div>
             </div>
 
-            {editError ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{editError}</p> : null}
+            {editError ? <p className="px-5 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">{editError}</p> : null}
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-3 border-t border-zinc-100 p-5 bg-zinc-50 rounded-b-xl">
               <button
-                className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+                className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-700 bg-white hover:bg-zinc-50"
                 type="button"
                 onClick={() => setEditingCustomer(null)}
               >
