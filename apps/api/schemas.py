@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class BriefingExplanation(BaseModel):
@@ -691,6 +691,13 @@ class CustomerCreate(BaseModel):
     advance_balance: Decimal = Field(default=Decimal("0.00"))
     advance_balance_note: Optional[str] = Field(default=None)
     advance_balance_date: Optional[date] = Field(default=None)
+
+    @field_validator("opening_outstanding_date", "advance_balance_date", mode="before")
+    @classmethod
+    def empty_balance_date_to_none(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="before")
     @classmethod

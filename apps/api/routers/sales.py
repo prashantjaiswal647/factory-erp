@@ -9,7 +9,7 @@ from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -1481,6 +1481,13 @@ class CustomerUpdatePayload(BaseModel):
     advance_balance: Decimal | None = None
     advance_balance_note: str | None = None
     advance_balance_date: date | None = None
+
+    @field_validator("opening_outstanding_date", "advance_balance_date", mode="before")
+    @classmethod
+    def empty_balance_date_to_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 @router.patch("/customers/{customer_id}", response_model=CustomerSearchResponse)

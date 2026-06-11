@@ -113,7 +113,16 @@ export default function CustomersPage() {
     setIsUpdating(true);
     setEditError("");
     try {
-      await updateSalesCustomer(editingCustomer.id, editForm);
+      const payload: CustomerUpdate = {
+        ...editForm,
+        opening_outstanding_date: editForm.opening_outstanding_date?.trim()
+          ? editForm.opening_outstanding_date
+          : null,
+        advance_balance_date: editForm.advance_balance_date?.trim()
+          ? editForm.advance_balance_date
+          : null
+      };
+      await updateSalesCustomer(editingCustomer.id, payload);
       setToast(`Customer "${editForm.name}" updated successfully.`);
       setEditingCustomer(null);
       await loadCustomers();
@@ -179,7 +188,13 @@ export default function CustomersPage() {
         name: form.name.trim(),
         company_name: form.company_name.trim(),
         place: form.place.trim(),
-        gst_number: form.gst_number?.trim() || null
+        gst_number: form.gst_number?.trim() || null,
+        opening_outstanding_date: form.opening_outstanding_date?.trim()
+          ? form.opening_outstanding_date
+          : null,
+        advance_balance_date: form.advance_balance_date?.trim()
+          ? form.advance_balance_date
+          : null
       });
       const newCustomer = response.data;
       setToast(`Customer ${newCustomer.name || ""} saved successfully`);

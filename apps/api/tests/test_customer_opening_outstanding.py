@@ -80,6 +80,33 @@ def test_customer_creation_balances():
             name="Cust F", phone_number="333", place="Delhi", previous_due=Decimal("100.00"), advance_balance=Decimal("100.00")
         )
 
+def test_customer_create_accepts_blank_balance_dates():
+    payload = CustomerCreate.model_validate(
+        {
+            "name": "Cust A",
+            "phone_number": "123",
+            "place": "Delhi",
+            "opening_outstanding_date": "",
+            "advance_balance_date": "   ",
+        }
+    )
+    assert payload.opening_outstanding_date is None
+    assert payload.advance_balance_date is None
+
+
+def test_customer_update_accepts_blank_balance_dates():
+    from routers.sales import CustomerUpdatePayload
+
+    payload = CustomerUpdatePayload.model_validate(
+        {
+            "opening_outstanding_date": "",
+            "advance_balance_date": "   ",
+        }
+    )
+    assert payload.opening_outstanding_date is None
+    assert payload.advance_balance_date is None
+
+
 def test_customer_edit_updates_balances():
     db = _session()
     f1 = Factory(name="Test Factory 1")
