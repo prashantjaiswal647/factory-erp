@@ -82,7 +82,8 @@ export default function OutstandingPage() {
       ...initialPayment,
       customer_phone: row.customer_phone,
       sale_id: bill?.order_id ?? undefined,
-      amount_paid: Number(bill?.remaining_balance ?? row.current_pending_balance)
+      amount_paid: Number(bill?.remaining_balance ?? row.current_pending_balance),
+      save_extra_as_advance: true
     });
   }
 
@@ -217,16 +218,42 @@ export default function OutstandingPage() {
             <div className="divide-y divide-zinc-100">
               {filteredRows.map((row) => {
                 const isExpanded = expandedCustomerId === row.customer_id;
+                const receivable = Number(row.current_pending_balance || 0);
+                const advance = Number(row.advance_balance || 0);
+                const netBalance = receivable - advance;
+
+                let netText = "Settled";
+                if (netBalance > 0) {
+                  netText = `₹${netBalance.toFixed(2)} receivable`;
+                } else if (netBalance < 0) {
+                  netText = `₹${Math.abs(netBalance).toFixed(2)} advance available`;
+                }
+
+                let badgeText = "Settled";
+                let badgeClass = "bg-zinc-50 text-zinc-600 border border-zinc-200";
+                if (receivable > 0) {
+                  badgeText = "Due";
+                  badgeClass = "bg-amber-50 text-amber-700 border border-amber-200";
+                } else if (advance > 0) {
+                  badgeText = "Advance";
+                  badgeClass = "bg-emerald-50 text-emerald-700 border border-emerald-200";
+                }
+
                 return (
                   <div key={row.customer_id}>
-                    <button className="grid w-full gap-3 px-5 py-4 text-left hover:bg-zinc-50 md:grid-cols-[1fr_140px_140px_140px_auto]" type="button" onClick={() => setExpandedCustomerId(isExpanded ? null : row.customer_id)}>
+                    <button className="grid w-full gap-3 px-5 py-4 text-left hover:bg-zinc-50 md:grid-cols-[1.5fr_140px_140px_160px_120px_auto]" type="button" onClick={() => setExpandedCustomerId(isExpanded ? null : row.customer_id)}>
                       <div>
                         <p className="font-semibold text-zinc-950">{row.customer_name}</p>
                         <p className="text-sm text-zinc-500">{row.customer_phone} · {row.place || "-"}</p>
                       </div>
-                      <Summary label="Total Bill" value={money(row.total_bill_amount)} />
-                      <Summary label="Total Paid" value={money(row.total_paid)} />
-                      <Summary label="Pending" value={money(row.current_pending_balance)} strong dataTestId="outstanding-amount-display" />
+                      <Summary label="Receivable / Outstanding" value={money(receivable)} strong={receivable > 0} />
+                      <Summary label="Advance Available" value={money(advance)} />
+                      <Summary label="Net Balance" value={netText} />
+                      <span className="flex items-center">
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${badgeClass}`}>
+                          {badgeText}
+                        </span>
+                      </span>
                       <span className="flex items-center justify-end gap-2 text-sm font-semibold text-brand-700">
                         {(row.bills || []).length} bills
                         <ChevronDown className={`h-4 w-4 transition ${isExpanded ? "rotate-180" : ""}`} />
@@ -349,6 +376,11 @@ export default function OutstandingPage() {
                 <h2 className="text-lg font-semibold text-zinc-950">Record Payment</h2>
                 <p className="text-sm text-zinc-500">{selected.customer_name} - {selected.customer_phone}</p>
                 {selectedBill ? <p className="mt-1 text-xs font-medium text-brand-700">Bill #{selectedBill.order_id ?? selectedBill.bill_id}</p> : null}
+                {Number(selected.advance_balance || 0) > 0 && (
+                  <p className="mt-1 text-xs font-semibold text-emerald-600">
+                    Advance available: ₹{Number(selected.advance_balance).toFixed(2)}
+                  </p>
+                )}
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200 text-zinc-600" type="button" onClick={() => setSelected(null)}>
                 <X className="h-4 w-4" />
@@ -360,6 +392,32 @@ export default function OutstandingPage() {
                 Amount Paid
                 <input className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="number" value={payment.amount_paid === 0 ? "" : payment.amount_paid} onChange={(event) => setPayment((current) => ({ ...current, amount_paid: event.target.value === "" ? 0 : Number(event.target.value) }))} />
               </label>
+
+              {(() => {
+                const outstandingLimit = selectedBill ? Number(selectedBill.remaining_balance) : Number(selected.current_pending_balance);
+                const isOverpaying = payment.amount_paid > outstandingLimit;
+                const overpaidAmount = payment.amount_paid - outstandingLimit;
+                if (isOverpaying) {
+                  return (
+                    <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 space-y-1">
+                      <p className="font-semibold">
+                        ₹{outstandingLimit.toFixed(2)} outstanding clear होगा और ₹{overpaidAmount.toFixed(2)} advance के रूप में save होगा.
+                      </p>
+                      <label className="flex items-center gap-1.5 font-medium text-emerald-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={payment.save_extra_as_advance ?? true}
+                          onChange={(e) => setPayment((current) => ({ ...current, save_extra_as_advance: e.target.checked }))}
+                          className="rounded text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span>Extra amount will be saved as advance for next order.</span>
+                      </label>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
               <label className="grid gap-1 text-sm font-medium text-zinc-700">
                 Payment Mode
                 <select className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={payment.payment_mode} onChange={(event) => setPayment((current) => ({ ...current, payment_mode: event.target.value as PaymentCreate["payment_mode"] }))}>

@@ -123,6 +123,7 @@ class PaymentCreate(BaseModel):
     date: Optional[Union[date, str]] = None
     order_id: Optional[int] = None
     sale_id: Optional[int] = None
+    save_extra_as_advance: bool = True
 
 
 class PaymentResponse(BaseModel):
@@ -151,12 +152,16 @@ class OutstandingRow(BaseModel):
     total_bill_amount: Decimal
     total_paid: Decimal
     current_pending_balance: Decimal
+    advance_balance: Decimal = Decimal("0.00")
+    net_balance: Decimal = Decimal("0.00")
     last_reminded_at: Optional[datetime] = None
     bills: List[OutstandingBillRow] = Field(default_factory=list)
 
 
 class OutstandingResponse(BaseModel):
     grand_total_outstanding: Decimal
+    grand_total_advance: Decimal = Decimal("0.00")
+    grand_total_net: Decimal = Decimal("0.00")
     customers: List[OutstandingRow]
 
 
@@ -211,6 +216,7 @@ def apply_payment_to_orders(db: Session, factory_id: int, customer: Customer, am
 def build_outstanding_response(db: Session, factory_id: int) -> OutstandingResponse:
     rows: list[OutstandingRow] = []
     grand_total = Decimal("0.00")
+    grand_advance = Decimal("0.00")
 
     customers = db.query(Customer).filter(Customer.factory_id == factory_id).order_by(Customer.name.asc()).all()
     for customer in customers:
@@ -220,8 +226,10 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
             continue
 
         total_bill, total_paid, balance = calculate_customer_outstanding(db, factory_id, customer)
-        if balance <= 0:
+        adv = to_money(customer.advance_balance)
+        if balance <= 0 and adv <= 0:
             continue
+            
         ledger_bills = (
             db.query(OutstandingBill)
             .filter(OutstandingBill.factory_id == factory_id)
@@ -252,6 +260,8 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
                 total_bill_amount=total_bill,
                 total_paid=total_paid,
                 current_pending_balance=balance,
+                advance_balance=adv,
+                net_balance=to_money(balance - adv),
                 last_reminded_at=customer.last_whatsapp_reminder_at,
                 bills=[
                     OutstandingBillRow(
@@ -277,8 +287,15 @@ def build_outstanding_response(db: Session, factory_id: int) -> OutstandingRespo
             )
         )
         grand_total = to_money(grand_total + balance)
+        grand_advance = to_money(grand_advance + adv)
 
-    return OutstandingResponse(grand_total_outstanding=grand_total, customers=rows)
+    grand_net = to_money(grand_total - grand_advance)
+    return OutstandingResponse(
+        grand_total_outstanding=grand_total,
+        grand_total_advance=grand_advance,
+        grand_total_net=grand_net,
+        customers=rows,
+    )
 
 
 @router.get("/api/accounts/outstanding", response_model=OutstandingResponse)
@@ -327,8 +344,17 @@ def record_payment(
         if customer is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
         _, _, current_balance = calculate_customer_outstanding(db, factory_id, customer)
-        if to_money(payload.amount_paid) > current_balance:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment amount exceeds outstanding balance")
+        amount_to_pay = to_money(payload.amount_paid)
+        extra_advance = Decimal("0.00")
+
+        if amount_to_pay > current_balance:
+            if not payload.save_extra_as_advance:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Payment amount exceeds outstanding balance"
+                )
+            extra_advance = amount_to_pay - current_balance
+            amount_to_pay = current_balance
 
         daily_sale_id = None
         if payload.sale_id is not None:
@@ -367,33 +393,52 @@ def record_payment(
         db.add(payment)
         db.flush()
 
-        unapplied = apply_payment_to_outstanding_bills(
-            db,
-            factory_id=factory_id,
-            customer_id=customer.id,
-            amount=to_money(payload.amount_paid),
-            payment_mode=payload.payment_mode,
-            collection_date=payment_date,
-            payment_id=payment.id,
-            selected_order_id=selected_order_id,
-            created_by_user_id=current_user.id,
-        )
-        if unapplied > 0:
-            order_unapplied = apply_payment_to_orders(db, factory_id, customer, unapplied, selected_order_id)
-            legacy_applied = to_money(unapplied - order_unapplied)
-            if legacy_applied > 0:
-                db.add(
-                    PaymentCollection(
-                        factory_id=factory_id,
-                        customer_id=customer.id,
-                        payment_id=payment.id,
-                        outstanding_bill_id=None,
-                        amount_collected=legacy_applied,
-                        payment_mode=payload.payment_mode,
-                        collection_date=payload.date or date.today(),
-                        created_by_user_id=current_user.id,
+        unapplied = Decimal("0.00")
+        if amount_to_pay > 0:
+            unapplied = apply_payment_to_outstanding_bills(
+                db,
+                factory_id=factory_id,
+                customer_id=customer.id,
+                amount=amount_to_pay,
+                payment_mode=payload.payment_mode,
+                collection_date=payment_date,
+                payment_id=payment.id,
+                selected_order_id=selected_order_id,
+                created_by_user_id=current_user.id,
+            )
+            if unapplied > 0:
+                order_unapplied = apply_payment_to_orders(db, factory_id, customer, unapplied, selected_order_id)
+                legacy_applied = to_money(unapplied - order_unapplied)
+                if legacy_applied > 0:
+                    db.add(
+                        PaymentCollection(
+                            factory_id=factory_id,
+                            customer_id=customer.id,
+                            payment_id=payment.id,
+                            outstanding_bill_id=None,
+                            amount_collected=legacy_applied,
+                            payment_mode=payload.payment_mode,
+                            collection_date=payload.date or date.today(),
+                            created_by_user_id=current_user.id,
+                        )
                     )
+
+        if extra_advance > 0:
+            customer.advance_balance = to_money(customer.advance_balance) + extra_advance
+            db.add(
+                PaymentCollection(
+                    factory_id=factory_id,
+                    customer_id=customer.id,
+                    payment_id=payment.id,
+                    outstanding_bill_id=None,
+                    amount_collected=extra_advance,
+                    payment_mode=payload.payment_mode,
+                    collection_date=payment_date,
+                    created_by_user_id=current_user.id,
+                    reference_number="Save extra as advance",
                 )
+            )
+
         db.flush()
 
         balance = sync_customer_balance_from_bills(db, factory_id, customer)

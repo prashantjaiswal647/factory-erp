@@ -14,7 +14,13 @@ const initialForm: CustomerCreate = {
   previous_due: 0,
   total_due: 0,
   opening_balance: 0,
-  legacy_dues: 0
+  legacy_dues: 0,
+  opening_outstanding: 0,
+  opening_outstanding_date: "",
+  opening_outstanding_note: "",
+  advance_balance: 0,
+  advance_balance_date: "",
+  advance_balance_note: ""
 };
 
 export default function CustomersPage() {
@@ -74,6 +80,12 @@ export default function CustomersPage() {
       place: customer.place,
       gst_number: customer.gst_number || "",
       company_name: customer.company_name || "",
+      opening_outstanding: customer.opening_outstanding || 0,
+      opening_outstanding_date: customer.opening_outstanding_date || "",
+      opening_outstanding_note: customer.opening_outstanding_note || "",
+      advance_balance: customer.advance_balance || 0,
+      advance_balance_date: customer.advance_balance_date || "",
+      advance_balance_note: customer.advance_balance_note || ""
     });
     setEditError("");
   }
@@ -84,6 +96,19 @@ export default function CustomersPage() {
       setEditError("Name and Phone Number are required.");
       return;
     }
+    if ((editForm.opening_outstanding || 0) < 0) {
+      setEditError("Opening outstanding cannot be negative.");
+      return;
+    }
+    if ((editForm.advance_balance || 0) < 0) {
+      setEditError("Advance balance cannot be negative.");
+      return;
+    }
+    if ((editForm.opening_outstanding || 0) > 0 && (editForm.advance_balance || 0) > 0) {
+      setEditError("A customer cannot have both opening outstanding and advance balance at the same time.");
+      return;
+    }
+
     setIsUpdating(true);
     setEditError("");
     try {
@@ -131,6 +156,18 @@ export default function CustomersPage() {
       setError("Place is required.");
       return;
     }
+    if ((form.opening_outstanding || 0) < 0) {
+      setError("Opening outstanding cannot be negative.");
+      return;
+    }
+    if ((form.advance_balance || 0) < 0) {
+      setError("Advance balance cannot be negative.");
+      return;
+    }
+    if ((form.opening_outstanding || 0) > 0 && (form.advance_balance || 0) > 0) {
+      setError("A customer cannot have both opening outstanding and advance balance at the same time.");
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -162,8 +199,8 @@ export default function CustomersPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
-        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center gap-3">
+        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm space-y-4">
+          <div className="mb-1 flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
               <UserRound className="h-5 w-5" />
             </span>
@@ -178,9 +215,33 @@ export default function CustomersPage() {
             <TextField label="GST Number" value={form.gst_number || ""} onChange={(gst_number) => setForm({ ...form, gst_number })} />
           </div>
 
+          <div className="border-t border-zinc-100 pt-4 mt-2">
+            <h3 className="text-sm font-semibold text-zinc-950 mb-1">Opening Balance / Advance</h3>
+            <p className="text-xs text-zinc-500 mb-3">
+              Previous due customer onboarding से पहले का बकाया है. Advance वह amount है जो customer ने future order के लिए पहले से दे दिया है.
+            </p>
+            <div className="grid gap-3">
+              <NumberTextField label="Previous Due Amount (₹)" value={form.opening_outstanding?.toString() || "0"} onChange={(v) => setForm({ ...form, opening_outstanding: parseFloat(v) || 0 })} />
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Previous Due As of Date</span>
+                <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={form.opening_outstanding_date || ""} onChange={(e) => setForm({ ...form, opening_outstanding_date: e.target.value })} />
+              </label>
+              <TextField label="Previous Due Note / Reason" value={form.opening_outstanding_note || ""} onChange={(v) => setForm({ ...form, opening_outstanding_note: v })} />
+              
+              <div className="border-t border-zinc-100 my-2"></div>
+              
+              <NumberTextField label="Advance Received Amount (₹)" value={form.advance_balance?.toString() || "0"} onChange={(v) => setForm({ ...form, advance_balance: parseFloat(v) || 0 })} />
+              <label className="block text-sm">
+                <span className="font-medium text-zinc-700">Advance Received Date</span>
+                <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={form.advance_balance_date || ""} onChange={(e) => setForm({ ...form, advance_balance_date: e.target.value })} />
+              </label>
+              <TextField label="Advance Note / Reason" value={form.advance_balance_note || ""} onChange={(v) => setForm({ ...form, advance_balance_note: v })} />
+            </div>
+          </div>
+
           {error ? <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
 
-          <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving} type="button" onClick={submit}>
+          <button className="mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" disabled={isSaving} type="button" onClick={submit}>
             <Check className="h-4 w-4" />
             {isSaving ? "Saving..." : "Save Customer"}
           </button>
@@ -205,7 +266,7 @@ export default function CustomersPage() {
             </div>
           </div>
 
-          <div className="max-h-[600px] overflow-y-auto">
+          <div className="max-h-[800px] overflow-y-auto">
             {isLoadingCustomers ? (
               <div className="p-6 text-sm text-zinc-500">Loading customers...</div>
             ) : filteredCustomers.length === 0 ? (
@@ -214,64 +275,92 @@ export default function CustomersPage() {
               <table className="min-w-full divide-y divide-zinc-200 text-sm">
                 <thead className="sticky top-0 z-10 bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
                   <tr>
-                    <th className="px-5 py-3">Phone Number</th>
                     <th className="px-5 py-3">Customer Name</th>
-                    <th className="px-5 py-3">Company</th>
-                    <th className="px-5 py-3">Place / City</th>
-                    <th className="px-5 py-3">GST Number</th>
+                    <th className="px-5 py-3">Phone Number</th>
+                    <th className="px-5 py-3">Previous Due</th>
+                    <th className="px-5 py-3">Advance</th>
+                    <th className="px-5 py-3">Net Balance</th>
+                    <th className="px-5 py-3">Status</th>
                     <th className="px-5 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
-                  {filteredCustomers.map((customer) => (
-                    <tr key={customer.id} className="hover:bg-zinc-50">
-                      <td className="px-5 py-3">
-                        <span className="rounded-md bg-brand-50 px-2 py-1 font-semibold text-brand-700">
-                          {customer.phone_number}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 font-medium text-zinc-950">{customer.name}</td>
-                      <td className="px-5 py-3 text-zinc-700">{customer.company_name || "-"}</td>
-                      <td className="px-5 py-3 text-zinc-600">{customer.place}</td>
-                      <td className="px-5 py-3 text-zinc-600">{customer.gst_number || "-"}</td>
-                      <td className="px-5 py-3">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            onClick={() => handleSharePortal(customer)}
-                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-bold text-brand-700 hover:bg-brand-50"
-                            type="button"
-                          >
-                            <Share2 className="h-3.5 w-3.5" />
-                            Portal
-                          </button>
-                          <button
-                            onClick={() => navigate("/outstanding")}
-                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
-                            type="button"
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            View Ledger
-                          </button>
-                          <button
-                            onClick={() => openEditModal(customer)}
-                            className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
-                            type="button"
-                          >
-                            <Edit className="h-3.5 w-3.5" />
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteCustomer(customer)}
-                            className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 bg-red-50/50 px-2 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300"
-                            type="button"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredCustomers.map((customer) => {
+                    const outstanding = customer.opening_outstanding || 0;
+                    const advance = customer.advance_balance || 0;
+                    let netBalanceText = "Settled";
+                    if (outstanding > advance) {
+                      netBalanceText = `₹${(outstanding - advance).toFixed(2)} receivable`;
+                    } else if (advance > outstanding) {
+                      netBalanceText = `₹${(advance - outstanding).toFixed(2)} advance available`;
+                    }
+
+                    let statusText = "Normal";
+                    let badgeColor = "bg-zinc-50 text-zinc-600 border border-zinc-200";
+                    if (outstanding > 0) {
+                      statusText = "Due";
+                      badgeColor = "bg-amber-50 text-amber-700 border border-amber-200";
+                    } else if (advance > 0) {
+                      statusText = "Advance";
+                      badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-200";
+                    } else {
+                      statusText = "Settled";
+                    }
+
+                    return (
+                      <tr key={customer.id} className="hover:bg-zinc-50">
+                        <td className="px-5 py-3">
+                          <div className="font-medium text-zinc-950">{customer.name}</div>
+                          <div className="text-xs text-zinc-500">{customer.company_name || "-"}</div>
+                        </td>
+                        <td className="px-5 py-3 text-zinc-700">{customer.phone_number}</td>
+                        <td className="px-5 py-3 text-zinc-600">₹{outstanding.toFixed(2)}</td>
+                        <td className="px-5 py-3 text-zinc-600">₹{advance.toFixed(2)}</td>
+                        <td className="px-5 py-3 text-zinc-800 font-semibold">{netBalanceText}</td>
+                        <td className="px-5 py-3">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeColor}`}>
+                            {statusText}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => handleSharePortal(customer)}
+                              className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-bold text-brand-700 hover:bg-brand-50"
+                              type="button"
+                            >
+                              <Share2 className="h-3.5 w-3.5" />
+                              Portal
+                            </button>
+                            <button
+                              onClick={() => navigate("/outstanding")}
+                              className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                              type="button"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              View Ledger
+                            </button>
+                            <button
+                              onClick={() => openEditModal(customer)}
+                              className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                              type="button"
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCustomer(customer)}
+                              className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 bg-red-50/50 px-2 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300"
+                              type="button"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -390,6 +479,27 @@ export default function CustomersPage() {
               <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
               <TextField label="Place / City" value={editForm.place || ""} onChange={(place) => setEditForm({ ...editForm, place })} />
               <TextField label="GST Number" value={editForm.gst_number || ""} onChange={(gst_number) => setEditForm({ ...editForm, gst_number })} />
+              
+              <div className="border-t border-zinc-100 pt-4 mt-2">
+                <h4 className="text-xs font-semibold text-zinc-950 uppercase tracking-wider mb-2">Opening Balance / Advance</h4>
+                <div className="grid gap-3">
+                  <NumberTextField label="Previous Due Amount (₹)" value={editForm.opening_outstanding?.toString() || "0"} onChange={(v) => setEditForm({ ...editForm, opening_outstanding: parseFloat(v) || 0 })} />
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">Previous Due As of Date</span>
+                    <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500" value={editForm.opening_outstanding_date || ""} onChange={(e) => setEditForm({ ...editForm, opening_outstanding_date: e.target.value })} />
+                  </label>
+                  <TextField label="Previous Due Note / Reason" value={editForm.opening_outstanding_note || ""} onChange={(v) => setEditForm({ ...editForm, opening_outstanding_note: v })} />
+                  
+                  <div className="border-t border-zinc-100 my-1"></div>
+                  
+                  <NumberTextField label="Advance Received Amount (₹)" value={editForm.advance_balance?.toString() || "0"} onChange={(v) => setEditForm({ ...editForm, advance_balance: parseFloat(v) || 0 })} />
+                  <label className="block text-sm">
+                    <span className="font-medium text-zinc-700">Advance Received Date</span>
+                    <input type="date" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500" value={editForm.advance_balance_date || ""} onChange={(e) => setEditForm({ ...editForm, advance_balance_date: e.target.value })} />
+                  </label>
+                  <TextField label="Advance Note / Reason" value={editForm.advance_balance_note || ""} onChange={(v) => setEditForm({ ...editForm, advance_balance_note: v })} />
+                </div>
+              </div>
             </div>
 
             {editError ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{editError}</p> : null}
@@ -435,7 +545,6 @@ function NumberTextField({ label, value, onChange }: { label: string; value: str
     </label>
   );
 }
-
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
     <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
@@ -443,3 +552,4 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
     </button>
   );
 }
+

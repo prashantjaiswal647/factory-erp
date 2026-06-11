@@ -253,23 +253,63 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     story.extend([table, Spacer(1, 15)])
 
     # Summary table + Words calculation
+    # Summary table + Words calculation
     taxable_value = Decimal(str(payload.get("total_taxable_value") or total_taxable_amount))
     total_cgst = Decimal(str(payload.get("total_cgst") or 0))
     total_sgst = Decimal(str(payload.get("total_sgst") or 0))
     total_igst = Decimal(str(payload.get("total_igst") or 0))
     total_val_num = float(invoice.get("bill_total") or payload.get("bill_total") or (taxable_value + total_cgst + total_sgst + total_igst))
-    amount_in_words = number_to_words_in_words(total_val_num)
+
+    # Check if we have opening/advance adjustment data in invoice
+    has_opening_or_advance = (
+        invoice.get("previous_due") is not None or
+        invoice.get("advance_available") is not None or
+        invoice.get("advance_adjusted") is not None
+    )
+
+    if has_opening_or_advance:
+        rem_payable_val = float(invoice.get("remaining_payable") or total_val_num)
+        amount_in_words = number_to_words_in_words(rem_payable_val)
+    else:
+        amount_in_words = number_to_words_in_words(total_val_num)
 
     summary_rows = [
         ["Subtotal / Taxable Value", _money(taxable_value)],
-        ["CGST", _money(total_cgst)],
-        ["SGST", _money(total_sgst)],
-        ["IGST", _money(total_igst)],
-        ["Total Amount", _money(total_val_num)],
-        ["Amount Paid / Advance", _money(invoice.get("amount_paid") or payload.get("amount_paid") or 0)],
-        ["Balance Due Amount", _money(invoice.get("customer_total_due") or payload.get("customer_total_due") or 0)],
     ]
-    summary = Table(summary_rows, colWidths=[160, 100], hAlign="RIGHT")
+    if total_cgst > 0:
+        summary_rows.append(["CGST", _money(total_cgst)])
+    if total_sgst > 0:
+        summary_rows.append(["SGST", _money(total_sgst)])
+    if total_igst > 0:
+        summary_rows.append(["IGST", _money(total_igst)])
+    
+    summary_rows.append(["Current Bill Amount", _money(total_val_num)])
+    
+    if has_opening_or_advance:
+        prev_due = Decimal(str(invoice.get("previous_due") or 0))
+        adv_avail = Decimal(str(invoice.get("advance_available") or 0))
+        adv_adj = Decimal(str(invoice.get("advance_adjusted") or 0))
+        tot_before = Decimal(str(invoice.get("total_before_advance") or (Decimal(total_val_num) + prev_due)))
+        rem_pay = Decimal(str(invoice.get("remaining_payable") or (tot_before - adv_adj)))
+        adv_rem = Decimal(str(invoice.get("advance_balance_remaining") or (adv_avail - adv_adj)))
+        
+        if prev_due > 0:
+            summary_rows.append(["Previous Due", _money(prev_due)])
+        if prev_due > 0 or adv_avail > 0:
+            summary_rows.append(["Total Before Advance", _money(tot_before)])
+        if adv_avail > 0:
+            summary_rows.append(["Advance Available", _money(adv_avail)])
+        if adv_adj > 0:
+            summary_rows.append(["Advance Adjusted", _money(adv_adj)])
+        
+        summary_rows.append(["Remaining Payable", _money(rem_pay)])
+        if adv_rem > 0:
+            summary_rows.append(["Advance Balance Remaining", _money(adv_rem)])
+    else:
+        summary_rows.append(["Amount Paid / Advance", _money(invoice.get("amount_paid") or payload.get("amount_paid") or 0)])
+        summary_rows.append(["Balance Due Amount", _money(invoice.get("customer_total_due") or payload.get("customer_total_due") or 0)])
+
+    summary = Table(summary_rows, colWidths=[165, 95], hAlign="RIGHT")
     summary.setStyle(
         TableStyle(
             [

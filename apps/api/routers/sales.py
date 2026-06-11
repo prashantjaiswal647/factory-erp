@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import logging
@@ -24,7 +24,7 @@ from db import get_db
 from models import BoxStock, Customer, DailySale, Factory, FactoryAutomationSheet, FinalProductStock, FinishedGoodsStock, InvoiceDeliveryLog, InvoiceDocument, Order, OrderItem, Payment, RecycledInvoice, TelegramUserBinding, User, ActivityLog, OutstandingBill, PaymentCollection, PackagingProfile, FactorySettings
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import CustomerCreate, CustomerResponse, DailySaleCreate, DailySaleResponse
-from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
+from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills, active_customer_outstanding, apply_payment_to_outstanding_bills
 from services.activity_logger import log_activity
 from services.invoice_pdf import build_invoice_pdf_bytes
 from services.n8n_sync import sync_data_to_n8n_bg
@@ -359,6 +359,13 @@ class CustomerSearchResponse(BaseModel):
     phone_number: str
     gst_number: str | None = None
     company_name: str | None = None
+    previous_due: Decimal = Decimal("0.00")
+    opening_outstanding: Decimal = Decimal("0.00")
+    opening_outstanding_note: str | None = None
+    opening_outstanding_date: date | None = None
+    advance_balance: Decimal = Decimal("0.00")
+    advance_balance_note: str | None = None
+    advance_balance_date: date | None = None
 
 
 class BillCustomerOption(BaseModel):
@@ -449,6 +456,8 @@ class OutstandingCustomerBillsResponse(BaseModel):
     total_bill_amount: Decimal
     total_paid: Decimal
     current_pending_balance: Decimal
+    opening_outstanding: Decimal = Decimal("0.00")
+    advance_balance: Decimal = Decimal("0.00")
     bills: list[OutstandingBillResponse]
 
 
@@ -1378,7 +1387,17 @@ def create_sales_customer(
         to_money(payload.legacy_dues),
         to_money(payload.previous_due),
         to_money(payload.total_due),
+        to_money(payload.opening_outstanding),
     )
+    advance_val = to_money(payload.advance_balance)
+    
+    if opening_due < 0:
+        raise HTTPException(status_code=400, detail="Opening outstanding cannot be negative.")
+    if advance_val < 0:
+        raise HTTPException(status_code=400, detail="Advance balance cannot be negative.")
+    if opening_due > 0 and advance_val > 0:
+        raise HTTPException(status_code=400, detail="A customer cannot have both opening outstanding and advance balance positive.")
+
     phone_number = payload.phone_number.strip()
     try:
         with db.begin_nested() if db.in_transaction() else db.begin():
@@ -1405,6 +1424,11 @@ def create_sales_customer(
                 phone=phone_number,
                 contact_number=phone_number,
                 previous_due=opening_due,
+                opening_outstanding_note=clean_optional_text(payload.opening_outstanding_note),
+                opening_outstanding_date=payload.opening_outstanding_date,
+                advance_balance=advance_val,
+                advance_balance_note=clean_optional_text(payload.advance_balance_note),
+                advance_balance_date=payload.advance_balance_date,
                 total_due=opening_due,
                 pending_balance=opening_due,
                 balance_amount=opening_due,
@@ -1419,7 +1443,7 @@ def create_sales_customer(
                     customer_id=customer.id,
                     source_type="opening_balance",
                     tracking_number=f"OPEN-{customer.id}",
-                    bill_date=datetime.now(timezone.utc).date(),
+                    bill_date=payload.opening_outstanding_date or datetime.now(timezone.utc).date(),
                     bill_amount=opening_due,
                     amount_paid=Decimal("0.00"),
                 )
@@ -1449,6 +1473,14 @@ class CustomerUpdatePayload(BaseModel):
     place: str | None = None
     gst_number: str | None = None
     company_name: str | None = None
+    address: str | None = None
+    previous_due: Decimal | None = None
+    opening_outstanding: Decimal | None = None
+    opening_outstanding_note: str | None = None
+    opening_outstanding_date: date | None = None
+    advance_balance: Decimal | None = None
+    advance_balance_note: str | None = None
+    advance_balance_date: date | None = None
 
 
 @router.patch("/customers/{customer_id}", response_model=CustomerSearchResponse)
@@ -1466,6 +1498,12 @@ def update_sales_customer(
     )
     if customer is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    old_outstanding = customer.previous_due
+    old_advance = customer.advance_balance
+
+    # Track activity log details
+    changes = []
 
     if payload.name is not None:
         customer.name = payload.name.strip()
@@ -1487,13 +1525,102 @@ def update_sales_customer(
     if payload.place is not None:
         customer.place = payload.place.strip()
         customer.address = payload.place.strip()
+    if payload.address is not None:
+        customer.address = payload.address.strip()
     if payload.gst_number is not None:
         customer.gst_number = payload.gst_number.strip() or None
     if payload.company_name is not None:
         customer.firm_name = payload.company_name.strip() or None
 
+    # Handle opening balance update
+    new_outstanding = payload.opening_outstanding if payload.opening_outstanding is not None else payload.previous_due
+    new_advance = payload.advance_balance
+
+    if new_outstanding is not None:
+        new_outstanding = to_money(new_outstanding)
+        if new_outstanding < 0:
+            raise HTTPException(status_code=400, detail="Opening outstanding cannot be negative.")
+        curr_advance = to_money(new_advance if new_advance is not None else customer.advance_balance)
+        if new_outstanding > 0 and curr_advance > 0:
+            raise HTTPException(status_code=400, detail="A customer cannot have both opening outstanding and advance balance positive.")
+        
+        customer.previous_due = new_outstanding
+        changes.append(f"previous due from ₹{old_outstanding} to ₹{new_outstanding}")
+
+        # Update/Create the OPENING ledger bill
+        open_bill = (
+            db.query(OutstandingBill)
+            .filter(OutstandingBill.factory_id == current_user.factory_id)
+            .filter(OutstandingBill.customer_id == customer.id)
+            .filter(OutstandingBill.source_type == "opening_balance")
+            .first()
+        )
+        if open_bill:
+            diff = new_outstanding - to_money(open_bill.bill_amount)
+            open_bill.bill_amount = new_outstanding
+            open_bill.balance_amount = max(Decimal("0.00"), to_money(open_bill.balance_amount) + diff)
+            if open_bill.balance_amount <= 0:
+                open_bill.status = "closed"
+            else:
+                open_bill.status = "active"
+        elif new_outstanding > 0:
+            create_outstanding_bill(
+                db,
+                factory_id=current_user.factory_id,
+                customer_id=customer.id,
+                source_type="opening_balance",
+                tracking_number=f"OPEN-{customer.id}",
+                bill_date=payload.opening_outstanding_date or datetime.now(timezone.utc).date(),
+                bill_amount=new_outstanding,
+                amount_paid=Decimal("0.00"),
+            )
+
+    if payload.opening_outstanding_note is not None:
+        customer.opening_outstanding_note = payload.opening_outstanding_note
+    if payload.opening_outstanding_date is not None:
+        customer.opening_outstanding_date = payload.opening_outstanding_date
+
+    # Handle advance balance update
+    if new_advance is not None:
+        new_advance = to_money(new_advance)
+        if new_advance < 0:
+            raise HTTPException(status_code=400, detail="Advance balance cannot be negative.")
+        curr_outstanding = to_money(new_outstanding if new_outstanding is not None else customer.previous_due)
+        if curr_outstanding > 0 and new_advance > 0:
+            raise HTTPException(status_code=400, detail="A customer cannot have both opening outstanding and advance balance positive.")
+        
+        customer.advance_balance = new_advance
+        changes.append(f"advance balance from ₹{old_advance} to ₹{new_advance}")
+
+    if payload.advance_balance_note is not None:
+        customer.advance_balance_note = payload.advance_balance_note
+    if payload.advance_balance_date is not None:
+        customer.advance_balance_date = payload.advance_balance_date
+
+    # Force database sync to ensure total_due etc. matches the ledger
+    sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+
     db.commit()
     db.refresh(customer)
+
+    # Log changes in activity_logs
+    if changes:
+        try:
+            log_activity(
+                db,
+                int(current_user.factory_id),
+                current_user.id,
+                current_user.full_name or current_user.username,
+                current_user.role,
+                "CUSTOMER_UPDATED",
+                f"Updated customer {customer.name} fields: {', '.join(changes)}",
+                "customer",
+                customer.id,
+                {"customer_id": customer.id, "changes": changes}
+            )
+        except Exception:
+            logger.warning("Activity logging failed on customer update", exc_info=True)
+
     return CustomerSearchResponse(
         id=customer.id,
         name=customer.name,
@@ -1501,6 +1628,13 @@ def update_sales_customer(
         phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
         gst_number=customer.gst_number,
         company_name=customer.firm_name,
+        previous_due=customer.previous_due,
+        opening_outstanding=customer.previous_due,
+        opening_outstanding_note=customer.opening_outstanding_note,
+        opening_outstanding_date=customer.opening_outstanding_date,
+        advance_balance=customer.advance_balance,
+        advance_balance_note=customer.advance_balance_note,
+        advance_balance_date=customer.advance_balance_date,
     )
 
 
@@ -1773,6 +1907,16 @@ def create_invoice_from_sale(
     igst = total_tax if not intra_state else Decimal("0.00")
     total = to_money(subtotal + cgst + sgst + igst)
     amount_paid = to_money(sale.amount_paid or sale.initial_payment)
+
+    # Calculate ledger-based outstanding before this bill
+    ledger_balance = active_customer_outstanding(db, factory_id, customer.id)
+    available_advance = to_money(customer.advance_balance)
+    
+    total_before_advance = to_money(total + ledger_balance)
+    advance_adjusted = min(available_advance, total_before_advance)
+    remaining_payable = total_before_advance - advance_adjusted
+    remaining_advance = available_advance - advance_adjusted
+
     invoice_payload = {
         "event": "invoice.created_from_sale",
         "factory_id": factory_id,
@@ -1788,7 +1932,13 @@ def create_invoice_from_sale(
             "payment_method": payload.payment_method,
             "bill_total": total,
             "amount_paid": amount_paid,
-            "customer_total_due": max(Decimal("0.00"), total - amount_paid),
+            "previous_due": ledger_balance,
+            "total_before_advance": total_before_advance,
+            "advance_available": available_advance,
+            "advance_adjusted": advance_adjusted,
+            "remaining_payable": remaining_payable,
+            "advance_balance_remaining": remaining_advance,
+            "customer_total_due": remaining_payable,
             "status": "created",
         },
         "items": [{
@@ -1818,6 +1968,34 @@ def create_invoice_from_sale(
         customer=customer,
         invoice_payload=invoice_payload,
     )
+
+    if advance_adjusted > 0:
+        # Create a ledger-based Payment for advance adjusted
+        payment = Payment(
+            factory_id=current_user.factory_id,
+            customer_phone=customer_display_phone(customer) or customer.phone_number or "",
+            sale_id=sale.id,
+            amount_paid=advance_adjusted,
+            payment_mode="UPI",
+            date=sale.date or datetime.now(timezone.utc).date(),
+        )
+        db.add(payment)
+        db.flush()
+
+        apply_payment_to_outstanding_bills(
+            db,
+            factory_id=current_user.factory_id,
+            customer_id=customer.id,
+            amount=advance_adjusted,
+            payment_mode="UPI",
+            collection_date=sale.date or datetime.now(timezone.utc).date(),
+            payment_id=payment.id,
+            created_by_user_id=current_user.id,
+        )
+
+        customer.advance_balance = remaining_advance
+
+    sync_customer_balance_from_bills(db, current_user.factory_id, customer)
     sync_next_invoice_setting(db, factory, invoice_number, invoice_type)
     db.commit()
     return InvoiceFromSaleResponse(
@@ -2318,6 +2496,8 @@ def get_sales_outstanding(
                     total_bill_amount=Decimal("0.00"),
                     total_paid=Decimal("0.00"),
                     current_pending_balance=Decimal("0.00"),
+                    opening_outstanding=to_money(bill.customer.opening_outstanding or 0),
+                    advance_balance=to_money(bill.customer.advance_balance or 0),
                     bills=[],
                 )
             row = grouped[customer_id]
@@ -2346,6 +2526,28 @@ def get_sales_outstanding(
                 )
             )
             grand_total = to_money(grand_total + to_money(bill.balance_amount))
+
+        # Include advance-only and opening-only customers from Customer table
+        all_custs = (
+            db.query(Customer)
+            .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+            .filter((Customer.advance_balance > 0) | (Customer.opening_outstanding > 0))
+            .all()
+        )
+        for cust in all_custs:
+            if cust.id not in grouped:
+                grouped[cust.id] = OutstandingCustomerBillsResponse(
+                    customer_id=cust.id,
+                    customer_name=cust.name,
+                    customer_phone=customer_display_phone(cust),
+                    place=cust.place or cust.address or "",
+                    total_bill_amount=Decimal("0.00"),
+                    total_paid=Decimal("0.00"),
+                    current_pending_balance=Decimal("0.00"),
+                    opening_outstanding=to_money(cust.opening_outstanding or 0),
+                    advance_balance=to_money(cust.advance_balance or 0),
+                    bills=[],
+                )
         return SalesOutstandingResponse(grand_total_outstanding=grand_total, customers=list(grouped.values()))
 
     orders = (
@@ -2373,6 +2575,8 @@ def get_sales_outstanding(
                 total_bill_amount=Decimal("0.00"),
                 total_paid=Decimal("0.00"),
                 current_pending_balance=Decimal("0.00"),
+                opening_outstanding=to_money(order.customer.opening_outstanding or 0),
+                advance_balance=to_money(order.customer.advance_balance or 0),
                 bills=[],
             )
 
@@ -2395,6 +2599,28 @@ def get_sales_outstanding(
             )
         )
         grand_total = to_money(grand_total + balance)
+
+    # Include advance-only and opening-only customers from Customer table for fallback branch
+    all_custs = (
+        db.query(Customer)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .filter((Customer.advance_balance > 0) | (Customer.opening_outstanding > 0))
+        .all()
+    )
+    for cust in all_custs:
+        if cust.id not in grouped:
+            grouped[cust.id] = OutstandingCustomerBillsResponse(
+                customer_id=cust.id,
+                customer_name=cust.name,
+                customer_phone=customer_display_phone(cust),
+                place=cust.place or cust.address or "",
+                total_bill_amount=Decimal("0.00"),
+                total_paid=Decimal("0.00"),
+                current_pending_balance=Decimal("0.00"),
+                opening_outstanding=to_money(cust.opening_outstanding or 0),
+                advance_balance=to_money(cust.advance_balance or 0),
+                bills=[],
+            )
 
     return SalesOutstandingResponse(grand_total_outstanding=grand_total, customers=list(grouped.values()))
 

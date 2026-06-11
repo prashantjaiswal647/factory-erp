@@ -705,6 +705,12 @@ export type CustomerCreate = {
   total_due: number;
   opening_balance?: number;
   legacy_dues?: number;
+  opening_outstanding?: number;
+  opening_outstanding_note?: string | null;
+  opening_outstanding_date?: string | null;
+  advance_balance?: number;
+  advance_balance_note?: string | null;
+  advance_balance_date?: string | null;
 };
 
 export type CustomerSearchResult = {
@@ -714,6 +720,13 @@ export type CustomerSearchResult = {
   place: string;
   phone_number: string;
   gst_number?: string | null;
+  previous_due?: number;
+  opening_outstanding?: number;
+  opening_outstanding_note?: string | null;
+  opening_outstanding_date?: string | null;
+  advance_balance?: number;
+  advance_balance_note?: string | null;
+  advance_balance_date?: string | null;
 };
 
 export type BillCustomerOption = {
@@ -771,6 +784,8 @@ export type OutstandingCustomer = {
   total_bill_amount: string;
   total_paid: string;
   current_pending_balance: string;
+  opening_outstanding?: number;
+  advance_balance?: number;
   last_reminded_at?: string | null;
   bills?: OutstandingBill[];
 };
@@ -816,11 +831,13 @@ export type PaymentReminderTriggerResponse = {
 };
 
 export type PaymentCreate = {
-  customer_phone: string;
+  customer_phone?: string;
+  customer_id?: number;
   amount_paid: number;
   payment_mode: "Cash" | "UPI" | "Bank Transfer";
   date?: string;
   sale_id?: number;
+  save_extra_as_advance?: boolean;
 };
 
 export type AttendanceSummaryRow = {
@@ -1042,6 +1059,13 @@ export type CustomerUpdate = {
   place?: string;
   gst_number?: string;
   company_name?: string;
+  previous_due?: number;
+  opening_outstanding?: number;
+  opening_outstanding_note?: string | null;
+  opening_outstanding_date?: string | null;
+  advance_balance?: number;
+  advance_balance_note?: string | null;
+  advance_balance_date?: string | null;
 };
 
 export function updateSalesCustomer(customerId: number, payload: CustomerUpdate) {

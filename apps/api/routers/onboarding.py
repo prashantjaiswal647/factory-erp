@@ -3,10 +3,10 @@ import re
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, status, BackgroundTasks, UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +36,7 @@ from models import (
     User,
     Worker,
     WorkerOpeningAttendance,
+    OutstandingBill,
 )
 from schemas import (
     CustomerPayload,
@@ -72,6 +73,7 @@ from services.bulk_validation import (
     enrich_failed_rows,
     make_report,
 )
+from services.accounting import create_outstanding_bill
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -81,7 +83,7 @@ logger = logging.getLogger(__name__)
 BULK_TEMPLATE_COLUMNS = {
     "company_profile": ["row_type", "factory_name", "gstin", "factory_address", "invoice_prefix", "advance_upi_discount", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
     "worker": ["row_type", "name", "mobile_number", "daily_wages", "duty_hours", "previous_attendance_details"],
-    "customer": ["row_type", "name", "firm_name", "contact_number", "phone_number", "place", "address", "gst_number", "previous_due"],
+    "customer": ["row_type", "name", "firm_name", "contact_number", "phone_number", "place", "address", "gst_number", "previous_due", "advance_balance"],
     "machine": ["row_type", "machine_name", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
     "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_boras_sacks"],
     "bottom_reel": ["row_type", "bottom_size_mm", "total_individual_rolls", "total_weight_kg"],
@@ -150,6 +152,7 @@ OPTIONAL_BULK_HEADERS = {
         "place",
         "gst_number",
         "previous_due",
+        "advance_balance",
     },
     "blank_stock": {"total_boras_sacks"},
 }
@@ -162,28 +165,29 @@ BULK_NUMERIC_DEFAULTS = {
     },
     "customer": {
         "previous_due": Decimal("0"),
+        "advance_balance": Decimal("0"),
     },
     "blank_stock": {
         "kg_per_sack": Decimal("0"),
         "total_boras_sacks": Decimal("0"),
     },
     "bottom_reel": {
-        "total_individual_rolls": 0,
+        "total_individual_rolls": Decimal("0"),
         "total_weight_kg": Decimal("0"),
     },
     "box_stock": {
-        "box_quantity_pieces": 0,
-        "price_per_box_rs": 0,
+        "box_quantity_pieces": Decimal("0"),
+        "price_per_box_rs": Decimal("0"),
     },
     "plastic_stock": {
-        "total_boras_sacks": 0,
-        "weight_per_bora_kg": 0,
-        "price_per_kg_rs": 0,
+        "total_boras_sacks": Decimal("0"),
+        "weight_per_bora_kg": Decimal("0"),
+        "price_per_kg_rs": Decimal("0"),
     },
     "finished_goods": {
-        "pcs_per_packet": 1,
-        "packets_per_box": 1,
-        "initial_stock_boxes": 0,
+        "pcs_per_packet": Decimal("1"),
+        "packets_per_box": Decimal("1"),
+        "initial_stock_boxes": Decimal("0"),
     },
 }
 
@@ -230,7 +234,36 @@ class CustomerBulkRow(BaseModel):
     place: Optional[str] = Field(default=None, max_length=255)
     address: Optional[str] = Field(default=None, max_length=500)
     gst_number: Optional[str] = Field(default=None, max_length=50)
-    previous_due: Decimal = Field(default=Decimal("0"), ge=0)
+    previous_due: Decimal = Field(default=Decimal("0"))
+    advance_balance: Decimal = Field(default=Decimal("0"))
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_customer_bulk(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Check previous_due
+            pd = data.get("previous_due")
+            if pd == "" or pd is None:
+                data["previous_due"] = Decimal("0")
+            else:
+                try:
+                    pd_val = Decimal(str(pd))
+                    if pd_val < 0:
+                        raise ValueError("Opening outstanding cannot be negative.")
+                except (ValueError, TypeError):
+                    raise ValueError("Opening outstanding cannot be negative.")
+            # Check advance_balance
+            ab = data.get("advance_balance")
+            if ab == "" or ab is None:
+                data["advance_balance"] = Decimal("0")
+            else:
+                try:
+                    ab_val = Decimal(str(ab))
+                    if ab_val < 0:
+                        raise ValueError("Advance balance cannot be negative.")
+                except (ValueError, TypeError):
+                    raise ValueError("Advance balance cannot be negative.")
+        return data
 
 
 class MachineBulkRow(BaseModel):
@@ -962,7 +995,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
 
             contact_number = (row.get("contact_number") or "").strip() or None
             phone_number = (row.get("phone_number") or "").strip() or None
-            previous_due = row.get("previous_due") or Decimal("0")
+            previous_due = Decimal(str(row.get("previous_due") or "0"))
+            advance_balance = Decimal(str(row.get("advance_balance") or "0"))
             customer.name = customer_name
             customer.firm_name = (row.get("firm_name") or "").strip() or None
             customer.contact_number = contact_number
@@ -972,10 +1006,32 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             customer.address = (row.get("address") or "").strip() or None
             customer.gst_number = (row.get("gst_number") or "").strip() or None
             customer.previous_due = previous_due
+            customer.advance_balance = advance_balance
             customer.total_due = previous_due
             customer.pending_dues = float(previous_due)
             customer.pending_balance = previous_due
             customer.balance_amount = previous_due
+            
+            db.flush()
+            if previous_due > 0:
+                open_bill = (
+                    db.query(OutstandingBill)
+                    .filter(OutstandingBill.factory_id == factory_id)
+                    .filter(OutstandingBill.customer_id == customer.id)
+                    .filter(OutstandingBill.source_type == "opening_balance")
+                    .first()
+                )
+                if not open_bill:
+                    create_outstanding_bill(
+                        db,
+                        factory_id=factory_id,
+                        customer_id=customer.id,
+                        source_type="opening_balance",
+                        tracking_number=f"OPEN-{customer.id}",
+                        bill_date=date.today(),
+                        bill_amount=previous_due,
+                        amount_paid=Decimal("0.00"),
+                    )
             saved_count += 1
         db.flush()
         return saved_count

@@ -51,6 +51,7 @@ def test_master_template_contains_customers_sheet_with_valid_sample():
         "address",
         "gst_number",
         "previous_due",
+        "advance_balance",
     ]
 
 

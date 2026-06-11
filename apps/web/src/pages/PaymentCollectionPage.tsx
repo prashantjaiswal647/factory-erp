@@ -11,7 +11,8 @@ const initialPayment: PaymentCreate = {
   customer_phone: "",
   amount_paid: 0,
   payment_mode: "Cash",
-  date: today
+  date: today,
+  save_extra_as_advance: true
 };
 
 function apiErrorMessage(error: unknown) {
@@ -94,7 +95,11 @@ export default function PaymentCollectionPage() {
     setSelectedCustomer(customer);
     setCustomerQuery(`${customer.name} - ${customer.place} (${customer.phone_number})`);
     setCustomerResults([]);
-    setPayment((current) => ({ ...current, customer_phone: customer.phone_number }));
+    setPayment((current) => ({
+      ...current,
+      customer_phone: customer.phone_number,
+      save_extra_as_advance: true
+    }));
   }
 
   function clearCustomer() {
@@ -121,7 +126,8 @@ export default function PaymentCollectionPage() {
         amount_paid: Number(payment.amount_paid || 0),
         payment_mode: payment.payment_mode,
         date: payment.date || undefined,
-        sale_id: payment.sale_id ? Number(payment.sale_id) : undefined
+        sale_id: payment.sale_id ? Number(payment.sale_id) : undefined,
+        save_extra_as_advance: payment.save_extra_as_advance !== false
       };
       const response = await addPayment(payload);
       setToast(`Payment saved. Remaining balance: ${money(response.data.total_remaining_balance)}`);
@@ -212,6 +218,32 @@ export default function PaymentCollectionPage() {
                 onChange={(event) => setPayment((current) => ({ ...current, amount_paid: event.target.value === "" ? 0 : Number(event.target.value) }))}
               />
             </label>
+
+            {(() => {
+              if (!selectedCustomer) return null;
+              const outstandingLimit = Number(remainingBalance);
+              const isOverpaying = payment.amount_paid > outstandingLimit;
+              const overpaidAmount = payment.amount_paid - outstandingLimit;
+              if (isOverpaying) {
+                return (
+                  <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 space-y-1 md:col-span-2">
+                    <p className="font-semibold">
+                      ₹{outstandingLimit.toFixed(2)} outstanding clear होगा और ₹{overpaidAmount.toFixed(2)} advance के रूप में save होगा.
+                    </p>
+                    <label className="flex items-center gap-1.5 font-medium text-emerald-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={payment.save_extra_as_advance ?? true}
+                        onChange={(e) => setPayment((current) => ({ ...current, save_extra_as_advance: e.target.checked }))}
+                        className="rounded text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span>Extra amount will be saved as advance for next order.</span>
+                    </label>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           <div className="mt-5 flex justify-end">
@@ -221,7 +253,7 @@ export default function PaymentCollectionPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm h-fit">
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-md bg-white text-amber-700">
               <IndianRupee className="h-5 w-5" />
@@ -232,9 +264,14 @@ export default function PaymentCollectionPage() {
             </div>
           </div>
           {selectedCustomer ? (
-            <div className="mt-4 rounded-md bg-white/80 p-3 text-sm text-amber-950">
+            <div className="mt-4 rounded-md bg-white/80 p-3 text-sm text-amber-950 space-y-1">
               <p className="font-semibold">{selectedCustomer.name}</p>
               <p>{selectedCustomer.place} ({selectedCustomer.phone_number})</p>
+              {Number(selectedCustomer.advance_balance || 0) > 0 && (
+                <p className="text-xs font-bold text-emerald-700 mt-1">
+                  Advance available: ₹{Number(selectedCustomer.advance_balance).toFixed(2)}
+                </p>
+              )}
             </div>
           ) : (
             <p className="mt-4 text-sm text-amber-800">Balance dekhne ke liye customer select karein.</p>

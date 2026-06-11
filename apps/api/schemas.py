@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -681,10 +681,65 @@ class CustomerCreate(BaseModel):
     company_name: Optional[str] = Field(default=None, max_length=255)
     address: Optional[str] = None
     phone: Optional[str] = Field(default=None, max_length=50)
-    previous_due: Decimal = Field(default=Decimal("0.00"), ge=0)
-    total_due: Decimal = Field(default=Decimal("0.00"), ge=0)
-    opening_balance: Decimal = Field(default=Decimal("0.00"), ge=0)
-    legacy_dues: Decimal = Field(default=Decimal("0.00"), ge=0)
+    previous_due: Decimal = Field(default=Decimal("0.00"))
+    total_due: Decimal = Field(default=Decimal("0.00"))
+    opening_balance: Decimal = Field(default=Decimal("0.00"))
+    legacy_dues: Decimal = Field(default=Decimal("0.00"))
+    opening_outstanding: Decimal = Field(default=Decimal("0.00"))
+    opening_outstanding_note: Optional[str] = Field(default=None)
+    opening_outstanding_date: Optional[date] = Field(default=None)
+    advance_balance: Decimal = Field(default=Decimal("0.00"))
+    advance_balance_note: Optional[str] = Field(default=None)
+    advance_balance_date: Optional[date] = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_opening_balances(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # 1. Blank values default to 0
+            po = data.get("opening_outstanding")
+            pd = data.get("previous_due")
+            if po == "" or po is None:
+                po = Decimal("0.00")
+            if pd == "" or pd is None:
+                pd = Decimal("0.00")
+            
+            # Convert to Decimal for validation
+            try:
+                po_val = Decimal(str(po))
+            except Exception:
+                po_val = Decimal("0.00")
+            try:
+                pd_val = Decimal(str(pd))
+            except Exception:
+                pd_val = Decimal("0.00")
+
+            # 2. Opening outstanding cannot be negative.
+            if po_val < 0 or pd_val < 0:
+                raise ValueError("Opening outstanding cannot be negative.")
+
+            # advance_balance
+            ab = data.get("advance_balance")
+            if ab == "" or ab is None:
+                ab = Decimal("0.00")
+            try:
+                ab_val = Decimal(str(ab))
+            except Exception:
+                ab_val = Decimal("0.00")
+
+            # 3. Advance balance cannot be negative.
+            if ab_val < 0:
+                raise ValueError("Advance balance cannot be negative.")
+
+            # 4. Same customer: previous_due and advance_balance cannot be both positive
+            eff_due = max(po_val, pd_val)
+            if eff_due > 0 and ab_val > 0:
+                raise ValueError("A customer cannot have both opening outstanding and advance balance positive.")
+            
+            data["opening_outstanding"] = eff_due
+            data["previous_due"] = eff_due
+            data["advance_balance"] = ab_val
+        return data
 
 
 class CustomerResponse(BaseModel):
@@ -700,6 +755,12 @@ class CustomerResponse(BaseModel):
     phone: Optional[str] = None
     previous_due: Decimal
     total_due: Decimal
+    opening_outstanding: Optional[Decimal] = Decimal("0.00")
+    opening_outstanding_note: Optional[str] = None
+    opening_outstanding_date: Optional[date] = None
+    advance_balance: Optional[Decimal] = Decimal("0.00")
+    advance_balance_note: Optional[str] = None
+    advance_balance_date: Optional[date] = None
 
 
 # ---------------------------------------------------------------------------
