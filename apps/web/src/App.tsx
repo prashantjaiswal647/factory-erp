@@ -134,6 +134,7 @@ export default function App() {
             </PrivateRoute>
           }
         />
+        {/* /operations redirected to /daily-sequence to avoid duplicate manual operations sidebar item */}
         <Route
           path="operations"
           element={<Navigate to="/daily-sequence" replace />}
