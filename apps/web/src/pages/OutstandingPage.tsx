@@ -1,7 +1,7 @@
 import { BellRing, ChevronDown, IndianRupee, Search, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { clearOutstandingBill, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
+import { clearOutstandingBill, createCustomerLedgerAdjustment, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import type { OutstandingBill, OutstandingCustomer, PaymentCreate } from "../lib/api";
@@ -46,6 +46,11 @@ export default function OutstandingPage() {
   const [error, setError] = useState("");
   const [deleteModalData, setDeleteModalData] = useState<{ row: OutstandingCustomer; bill: OutstandingBill } | null>(null);
   const [expandedBillHistoryId, setExpandedBillHistoryId] = useState<number | null>(null);
+  const [adjusting, setAdjusting] = useState<OutstandingCustomer | null>(null);
+  const [adjustmentType, setAdjustmentType] = useState<"add_balance" | "reduce_balance">("add_balance");
+  const [adjustmentAmount, setAdjustmentAmount] = useState(0);
+  const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [adjustmentConfirmed, setAdjustmentConfirmed] = useState(false);
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const { user } = useAuth();
   const canDeleteOutstanding = isOwnerLevelRole(user?.role);
@@ -121,6 +126,35 @@ export default function OutstandingPage() {
       await load();
     } catch {
       setError("Payment save nahi ho paaya.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function submitAdjustment() {
+    if (!adjusting || adjustmentAmount <= 0 || !adjustmentReason.trim() || !adjustmentConfirmed) {
+      setError("Amount, reason, and confirmation are required.");
+      return;
+    }
+    if (adjustmentType === "reduce_balance" && adjustmentAmount > toNumber(adjusting.current_pending_balance)) {
+      setError("Reduction cannot exceed current outstanding.");
+      return;
+    }
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await createCustomerLedgerAdjustment(adjusting.customer_id, {
+        adjustment_type: adjustmentType,
+        amount: adjustmentAmount,
+        reason: adjustmentReason.trim(),
+      });
+      setToast(`Customer balance updated to ${formatMoney(response.data.new_outstanding)}.`);
+      setAdjusting(null);
+      triggerDataRefresh();
+      await load();
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Balance adjustment failed.");
     } finally {
       setIsSaving(false);
     }
@@ -354,6 +388,15 @@ export default function OutstandingPage() {
                           </table>
                         </div>
                         <div className="mt-3 flex justify-end gap-2">
+                          <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => {
+                            setAdjusting(row);
+                            setAdjustmentType("add_balance");
+                            setAdjustmentAmount(0);
+                            setAdjustmentReason("");
+                            setAdjustmentConfirmed(false);
+                          }}>
+                            Adjust Balance
+                          </button>
                           <button className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100" type="button" onClick={() => triggerReminder(row)}>
                             <BellRing className="h-3.5 w-3.5" />
                             Send Reminder
@@ -440,6 +483,54 @@ export default function OutstandingPage() {
               </button>
               <button className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" type="button" disabled={isSaving} onClick={submitPayment}>
                 {isSaving ? "Saving..." : "Save Payment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {adjusting ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-zinc-950/50 px-4">
+          <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-950">Adjust Customer Balance</h2>
+                <p className="text-sm text-zinc-500">{adjusting.customer_name}</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200" type="button" onClick={() => setAdjusting(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-4">
+              <Summary label="Current Outstanding" value={money(adjusting.current_pending_balance)} strong />
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Action
+                <select className="h-10 rounded-md border border-zinc-200 px-3" value={adjustmentType} onChange={(event) => setAdjustmentType(event.target.value as "add_balance" | "reduce_balance")}>
+                  <option value="add_balance">Add Balance</option>
+                  <option value="reduce_balance">Reduce Balance</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Adjustment Amount
+                <input className="h-10 rounded-md border border-zinc-200 px-3" type="number" min="0.01" step="0.01" value={adjustmentAmount || ""} onChange={(event) => setAdjustmentAmount(Number(event.target.value))} />
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Reason
+                <textarea className="min-h-20 rounded-md border border-zinc-200 px-3 py-2" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} placeholder="Previous bill not entered, rate correction, discount..." />
+              </label>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p>New Outstanding: <strong>{formatMoney(Math.max(0, toNumber(adjusting.current_pending_balance) + (adjustmentType === "add_balance" ? adjustmentAmount : -adjustmentAmount)))}</strong></p>
+                <p className="mt-1 text-xs">This will change the customer ledger and will be recorded in audit history.</p>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-zinc-700">
+                <input className="mt-1" type="checkbox" checked={adjustmentConfirmed} onChange={(event) => setAdjustmentConfirmed(event.target.checked)} />
+                I confirm this ledger adjustment and its reason.
+              </label>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold" type="button" onClick={() => setAdjusting(null)}>Cancel</button>
+              <button className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white disabled:bg-zinc-300" type="button" disabled={isSaving || !adjustmentConfirmed || !adjustmentReason.trim() || adjustmentAmount <= 0} onClick={submitAdjustment}>
+                {isSaving ? "Updating..." : "Yes, Confirm Update"}
               </button>
             </div>
           </div>

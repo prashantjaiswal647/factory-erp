@@ -9,7 +9,7 @@ from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -1505,6 +1505,11 @@ def update_sales_customer(
     )
     if customer is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+    if payload.opening_outstanding is not None or payload.previous_due is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use the customer ledger-adjustments endpoint to change outstanding balance",
+        )
 
     old_outstanding = customer.previous_due
     old_opening = to_money(customer.previous_due or 0)
@@ -3328,3 +3333,158 @@ def upload_customers_seed(
         "imported_count": count,
         "skipped_count": skipped
     }
+
+
+class LedgerAdjustmentCreate(BaseModel):
+    adjustment_type: str = Field(..., pattern="^(add_balance|reduce_balance)$")
+    amount: Decimal = Field(..., gt=0)
+    reason: str = Field(..., min_length=1, max_length=1000)
+    linked_bill_id: int | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def reason_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Reason is required")
+        return cleaned
+
+
+class LedgerAdjustmentResponse(BaseModel):
+    adjustment_id: int
+    previous_outstanding: Decimal
+    adjustment_amount: Decimal
+    new_outstanding: Decimal
+    adjustment_type: str
+    reason: str
+
+
+@router.post("/customers/{customer_id}/ledger-adjustments", response_model=LedgerAdjustmentResponse)
+def create_customer_adjustment(
+    customer_id: int,
+    payload: LedgerAdjustmentCreate,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    from models import CustomerLedgerAdjustment
+
+    customer = (
+        db.query(Customer)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .filter(Customer.id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if customer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    try:
+        previous_outstanding = active_customer_outstanding(db, current_user.factory_id, customer.id)
+        linked_bill = None
+        if payload.linked_bill_id is not None:
+            linked_bill = (
+                db.query(OutstandingBill)
+                .filter(OutstandingBill.id == payload.linked_bill_id)
+                .filter(OutstandingBill.factory_id == int(current_user.factory_id))
+                .filter(OutstandingBill.customer_id == customer.id)
+                .first()
+            )
+            if linked_bill is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Linked bill not found")
+
+        adjustment = CustomerLedgerAdjustment(
+            customer_id=customer.id,
+            factory_id=current_user.factory_id,
+            adjustment_type=payload.adjustment_type,
+            amount=payload.amount,
+            reason=payload.reason,
+            linked_bill_id=linked_bill.id if linked_bill is not None else None,
+            created_by_user_id=current_user.id,
+            created_by_name=current_user.full_name or current_user.username,
+        )
+        db.add(adjustment)
+        db.flush()
+
+        if payload.adjustment_type == "add_balance":
+            manual_bill = create_outstanding_bill(
+                db,
+                factory_id=current_user.factory_id,
+                customer_id=customer.id,
+                source_type="manual_adjustment",
+                tracking_number=f"ADJ-{adjustment.id}",
+                bill_date=datetime.now(timezone.utc).date(),
+                bill_amount=payload.amount,
+                amount_paid=Decimal("0.00"),
+            )
+            adjustment.linked_bill_id = manual_bill.id if manual_bill is not None else None
+        else:
+            if payload.amount > previous_outstanding:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Reduction amount cannot exceed current outstanding",
+                )
+            remaining = to_money(payload.amount)
+            bills_query = (
+                db.query(OutstandingBill)
+                .filter(OutstandingBill.factory_id == int(current_user.factory_id))
+                .filter(OutstandingBill.customer_id == customer.id)
+                .filter(OutstandingBill.balance_amount > 0)
+                .filter(OutstandingBill.status.in_(("active", "partial")))
+                .with_for_update()
+            )
+            if linked_bill is not None:
+                bills_query = bills_query.filter(OutstandingBill.id == linked_bill.id)
+            bills = bills_query.order_by(OutstandingBill.bill_date.asc(), OutstandingBill.id.asc()).all()
+            for bill in bills:
+                if remaining <= 0:
+                    break
+                reduction = min(remaining, to_money(bill.balance_amount))
+                bill.balance_amount = to_money(bill.balance_amount) - reduction
+                bill.status = "closed" if bill.balance_amount <= 0 else "partial"
+                remaining -= reduction
+            if remaining > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Reduction amount exceeds the selected bill balance",
+                )
+
+        new_outstanding = sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+        log_activity(
+            db,
+            int(current_user.factory_id),
+            current_user.id,
+            current_user.full_name or current_user.username,
+            current_user.role,
+            "LEDGER_ADJUSTMENT_CREATED",
+            f"Recorded {payload.adjustment_type} adjustment of Rs {payload.amount:,.2f} for {customer.name}",
+            "customer",
+            customer.id,
+            {
+                "customer_id": customer.id,
+                "adjustment_id": adjustment.id,
+                "adjustment_type": payload.adjustment_type,
+                "amount": float(payload.amount),
+                "reason": payload.reason,
+                "previous_outstanding": float(previous_outstanding),
+                "new_outstanding": float(new_outstanding),
+            }
+        )
+        db.commit()
+        return LedgerAdjustmentResponse(
+            adjustment_id=adjustment.id,
+            previous_outstanding=previous_outstanding,
+            adjustment_amount=payload.amount,
+            new_outstanding=new_outstanding,
+            adjustment_type=payload.adjustment_type,
+            reason=payload.reason,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create customer ledger adjustment")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to record customer ledger adjustment",
+        )

@@ -80,13 +80,7 @@ export default function CustomersPage() {
       phone_number: customer.phone_number,
       place: customer.place,
       gst_number: customer.gst_number || "",
-      company_name: customer.company_name || "",
-      opening_outstanding: customer.opening_outstanding || 0,
-      opening_outstanding_date: customer.opening_outstanding_date || "",
-      opening_outstanding_note: customer.opening_outstanding_note || "",
-      advance_balance: customer.advance_balance || 0,
-      advance_balance_date: customer.advance_balance_date || "",
-      advance_balance_note: customer.advance_balance_note || ""
+      company_name: customer.company_name || ""
     });
     setEditError("");
   }
@@ -114,13 +108,11 @@ export default function CustomersPage() {
     setEditError("");
     try {
       const payload: CustomerUpdate = {
-        ...editForm,
-        opening_outstanding_date: editForm.opening_outstanding_date?.trim()
-          ? editForm.opening_outstanding_date
-          : null,
-        advance_balance_date: editForm.advance_balance_date?.trim()
-          ? editForm.advance_balance_date
-          : null
+        name: editForm.name,
+        phone_number: editForm.phone_number,
+        place: editForm.place,
+        gst_number: editForm.gst_number,
+        company_name: editForm.company_name,
       };
       await updateSalesCustomer(editingCustomer.id, payload);
       setToast(`Customer "${editForm.name}" updated successfully.`);

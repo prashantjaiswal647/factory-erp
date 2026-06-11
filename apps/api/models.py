@@ -2265,3 +2265,31 @@ class RecoveryFollowup(TenantMixin, Base):
     __table_args__ = (
         Index("ix_recovery_followups_factory_status", "factory_id", "status"),
     )
+
+
+class CustomerLedgerAdjustment(TenantMixin, Base):
+    __tablename__ = "customer_ledger_adjustments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    adjustment_type = Column(String(20), nullable=False)
+    amount = Column(Numeric(14, 2), nullable=False)
+    reason = Column(Text, nullable=False)
+    linked_bill_id = Column(Integer, ForeignKey("outstanding_bills.id"), nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String(255), nullable=True)
+    metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    customer = relationship("Customer", backref="ledger_adjustments")
+    linked_bill = relationship("OutstandingBill")
+    creator = relationship("User")
+
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_ledger_adjustments_amount_positive"),
+        CheckConstraint(
+            "adjustment_type IN ('add_balance', 'reduce_balance')",
+            name="ck_ledger_adjustments_type_valid",
+        ),
+        Index("ix_customer_ledger_adjustments_factory_customer", "factory_id", "customer_id"),
+    )

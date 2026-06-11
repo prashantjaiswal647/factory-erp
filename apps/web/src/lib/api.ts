@@ -1155,6 +1155,28 @@ export function sendOutstandingReminder(customerId: number) {
   return api.post(`/api/accounts/reminders/${customerId}`);
 }
 
+export type CustomerLedgerAdjustmentCreate = {
+  adjustment_type: "add_balance" | "reduce_balance";
+  amount: number;
+  reason: string;
+};
+
+export type CustomerLedgerAdjustmentResponse = {
+  adjustment_id: number;
+  previous_outstanding: string;
+  adjustment_amount: string;
+  new_outstanding: string;
+  adjustment_type: "add_balance" | "reduce_balance";
+  reason: string;
+};
+
+export function createCustomerLedgerAdjustment(customerId: number, payload: CustomerLedgerAdjustmentCreate) {
+  return api.post<CustomerLedgerAdjustmentResponse>(
+    `/api/sales/customers/${customerId}/ledger-adjustments`,
+    payload,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Collection War Room (P4.5 D2)
 // ---------------------------------------------------------------------------
