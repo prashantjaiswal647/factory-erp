@@ -1507,6 +1507,8 @@ def update_sales_customer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
     old_outstanding = customer.previous_due
+    old_opening = to_money(customer.previous_due or 0)
+    old_total_due = to_money(customer.total_due or 0)
     old_advance = customer.advance_balance
 
     # Track activity log details
@@ -1571,19 +1573,21 @@ def update_sales_customer(
         customer.firm_name = new_company_name
 
     # Handle opening balance update
-    new_outstanding = payload.opening_outstanding if payload.opening_outstanding is not None else payload.previous_due
+    new_opening = payload.opening_outstanding if payload.opening_outstanding is not None else payload.previous_due
     new_advance = payload.advance_balance
+    delta = Decimal("0.00")
 
-    if new_outstanding is not None:
-        new_outstanding = to_money(new_outstanding)
-        if new_outstanding < 0:
+    if new_opening is not None:
+        new_opening = to_money(new_opening)
+        if new_opening < 0:
             raise HTTPException(status_code=400, detail="Opening outstanding cannot be negative.")
         curr_advance = to_money(new_advance if new_advance is not None else customer.advance_balance)
-        if new_outstanding > 0 and curr_advance > 0:
+        if new_opening > 0 and curr_advance > 0:
             raise HTTPException(status_code=400, detail="A customer cannot have both opening outstanding and advance balance positive.")
         
-        customer.previous_due = new_outstanding
-        changes.append(f"previous due from ₹{old_outstanding} to ₹{new_outstanding}")
+        delta = new_opening - old_opening
+        customer.previous_due = new_opening
+        changes.append(f"previous due from ₹{old_opening} to ₹{new_opening}")
 
         # Update/Create the OPENING ledger bill
         open_bill = (
@@ -1594,14 +1598,13 @@ def update_sales_customer(
             .first()
         )
         if open_bill:
-            diff = new_outstanding - to_money(open_bill.bill_amount)
-            open_bill.bill_amount = new_outstanding
-            open_bill.balance_amount = max(Decimal("0.00"), to_money(open_bill.balance_amount) + diff)
+            open_bill.bill_amount = new_opening
+            open_bill.balance_amount = max(Decimal("0.00"), to_money(open_bill.balance_amount) + delta)
             if open_bill.balance_amount <= 0:
                 open_bill.status = "closed"
             else:
                 open_bill.status = "active"
-        elif new_outstanding > 0:
+        elif new_opening > 0:
             create_outstanding_bill(
                 db,
                 factory_id=current_user.factory_id,
@@ -1609,7 +1612,7 @@ def update_sales_customer(
                 source_type="opening_balance",
                 tracking_number=f"OPEN-{customer.id}",
                 bill_date=payload.opening_outstanding_date or datetime.now(timezone.utc).date(),
-                bill_amount=new_outstanding,
+                bill_amount=new_opening,
                 amount_paid=Decimal("0.00"),
             )
 
@@ -1623,7 +1626,7 @@ def update_sales_customer(
         new_advance = to_money(new_advance)
         if new_advance < 0:
             raise HTTPException(status_code=400, detail="Advance balance cannot be negative.")
-        curr_outstanding = to_money(new_outstanding if new_outstanding is not None else customer.previous_due)
+        curr_outstanding = to_money(new_opening if new_opening is not None else customer.previous_due)
         if curr_outstanding > 0 and new_advance > 0:
             raise HTTPException(status_code=400, detail="A customer cannot have both opening outstanding and advance balance positive.")
         
@@ -1644,6 +1647,36 @@ def update_sales_customer(
     # Log changes in activity_logs
     if changes:
         try:
+            # Query unpaid invoice due
+            unpaid_invoice_due = to_money(
+                db.query(sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0))
+                .filter(OutstandingBill.factory_id == current_user.factory_id)
+                .filter(OutstandingBill.customer_id == customer.id)
+                .filter(OutstandingBill.source_type == "invoice")
+                .filter(OutstandingBill.status.in_(["active", "partial"]))
+                .scalar()
+            )
+            # Query payment total
+            from models import PaymentCollection
+            payment_total = to_money(
+                db.query(sql_func.coalesce(sql_func.sum(PaymentCollection.amount_collected), 0))
+                .filter(PaymentCollection.factory_id == current_user.factory_id)
+                .filter(PaymentCollection.customer_id == customer.id)
+                .scalar()
+            )
+            new_total_due = to_money(customer.total_due or 0)
+            
+            audit_metadata = {
+                "customer_id": customer.id,
+                "old_total_due": float(old_total_due),
+                "new_total_due": float(new_total_due),
+                "old_opening_balance": float(old_opening),
+                "new_opening_balance": float(new_opening if new_opening is not None else old_opening),
+                "delta": float(delta),
+                "payment_total": float(payment_total),
+                "invoice_due_total": float(unpaid_invoice_due),
+                "changes": changes
+            }
             log_activity(
                 db,
                 int(current_user.factory_id),
@@ -1654,7 +1687,7 @@ def update_sales_customer(
                 f"Updated customer {customer.name} fields: {', '.join(changes)}",
                 "customer",
                 customer.id,
-                {"customer_id": customer.id, "changes": changes}
+                audit_metadata
             )
         except Exception:
             logger.warning("Activity logging failed on customer update", exc_info=True)

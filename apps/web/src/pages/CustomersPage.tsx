@@ -504,7 +504,7 @@ export default function CustomersPage() {
               <div className="border-t border-zinc-100 pt-4 mt-2">
                 <h4 className="text-sm font-semibold text-zinc-950 mb-1">Opening Balance / Advance</h4>
                 <p className="text-xs text-zinc-500 mb-3">
-                  Previous due customer onboarding से पहले का बकाया है. Advance वह amount है जो customer ने future order के लिए पहले से दे दिया है.
+                  Opening balance is for onboarding-time balance only. Do not use this for regular payment correction. Previous due customer onboarding से पहले का बकाया है. Advance वह amount है जो customer ने future order के लिए पहले से दे दिया है.
                 </p>
                 <div className="grid gap-4 md:grid-cols-2">
                   <NumberTextField label="Previous Due Amount (₹)" value={editForm.opening_outstanding?.toString() || "0"} onChange={(v) => setEditForm({ ...editForm, opening_outstanding: parseFloat(v) || 0 })} />

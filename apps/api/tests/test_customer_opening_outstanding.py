@@ -620,3 +620,89 @@ def test_get_sales_outstanding_endpoint():
 class BackgroundTasksMock:
     def add_task(self, func, *args, **kwargs):
         pass
+
+
+def test_edit_opening_balance_preserves_historical_dues_regression():
+    db = _session()
+    f1 = Factory(id=1, name="Factory 1")
+    db.add(f1)
+    db.flush()
+
+    user = SimpleNamespace(id=1, username="owner", role="Owner", factory_id=f1.id, full_name="Owner F1")
+    db_user = User(id=1, username="owner", role="Owner", factory_id=f1.id, full_name="Owner F1", password_hash="test-hash")
+    db.add(db_user)
+    db.flush()
+
+    # 1. Customer has existing invoice/outstanding of 42979.00
+    # Let's create customer with previous_due = 42979.00 (which acts as opening balance/outstanding)
+    payload = CustomerCreate(name="Cust A", phone_number="12345", place="Delhi", previous_due=Decimal("42979.00"))
+    customer = create_sales_customer(payload=payload, current_user=user, db=db)
+    
+    assert customer.total_due == Decimal("42979.00")
+
+    # 2. Add three payments of 1,000.00
+    from routers.payments import PaymentCreate, record_payment
+    for _ in range(3):
+        pay_req = PaymentCreate(customer_id=customer.id, amount_paid=1000.00, payment_mode="UPI", save_extra_as_advance=True)
+        record_payment(payload=pay_req, background_tasks=BackgroundTasksMock(), current_user=db_user, db=db)
+
+    db.refresh(customer)
+    # Dues should be 42979.00 - 3000.00 = 39979.00
+    assert customer.total_due == Decimal("39979.00")
+
+    # 3. Edit opening/previous due to 3,000.00 (same date)
+    # The old opening balance was 42979.00. The new opening balance is 3000.00.
+    # The delta is 3000.00 - 42979.00 = -39979.00.
+    # The expected total due should be: 42979.00 - 3000.00 (payments) + delta = 0.00.
+    from routers.sales import CustomerUpdatePayload
+    update_sales_customer(
+        customer_id=customer.id,
+        payload=CustomerUpdatePayload(opening_outstanding=Decimal("3000.00")),
+        current_user=user,
+        db=db
+    )
+    db.refresh(customer)
+    # Since the 42979.00 was opening balance, and it got updated to 3000.00,
+    # and they paid 3000.00, the remaining balance of the opening bill is 0.00.
+    assert customer.total_due == Decimal("0.00")
+    
+    # Let's now test the other scenario: Customer has an invoice of 42979.00 and opening balance was 0.00.
+    c2 = create_sales_customer(
+        payload=CustomerCreate(name="Cust B", phone_number="67890", place="Delhi", previous_due=Decimal("0.00")),
+        current_user=user,
+        db=db
+    )
+    # Create outstanding bill (simulating a sale invoice)
+    create_outstanding_bill(
+        db,
+        factory_id=f1.id,
+        customer_id=c2.id,
+        source_type="invoice",
+        tracking_number=f"INV-{c2.id}",
+        bill_date=date.today(),
+        bill_amount=Decimal("42979.00"),
+        amount_paid=Decimal("0.00")
+    )
+    from services.accounting import sync_customer_balance_from_bills
+    sync_customer_balance_from_bills(db, f1.id, c2)
+    assert c2.total_due == Decimal("42979.00")
+
+    # Add three payments of 1,000.00
+    for _ in range(3):
+        pay_req = PaymentCreate(customer_id=c2.id, amount_paid=1000.00, payment_mode="UPI", save_extra_as_advance=True)
+        record_payment(payload=pay_req, background_tasks=BackgroundTasksMock(), current_user=db_user, db=db)
+
+    db.refresh(c2)
+    assert c2.total_due == Decimal("39979.00")
+
+    # Edit opening outstanding to 3,000.00
+    # Old opening = 0, new opening = 3000, delta = 3000.
+    # New total due should be: 39979.00 (remaining invoice) + 3000.00 (new opening) = 42979.00.
+    update_sales_customer(
+        customer_id=c2.id,
+        payload=CustomerUpdatePayload(opening_outstanding=Decimal("3000.00")),
+        current_user=user,
+        db=db
+    )
+    db.refresh(c2)
+    assert c2.total_due == Decimal("42979.00")
