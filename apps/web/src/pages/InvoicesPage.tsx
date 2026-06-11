@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 
 import { downloadInvoicePdf, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
 import type { InvoiceDashboardResponse, InvoiceDeliveryHistoryItem, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 function money(value: string | number) {
-  return `Rs ${Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `Rs ${toNumber(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function dateLabel(value: string) {
@@ -58,9 +59,9 @@ function numberToWords(num: number): string {
     return str.trim();
   }
   
-  const parts = num.toFixed(2).split(".");
-  const rupees = parseInt(parts[0], 10);
-  const paise = parseInt(parts[1], 10);
+  const totalPaise = Math.round(toNumber(num) * 100);
+  const rupees = Math.floor(totalPaise / 100);
+  const paise = totalPaise % 100;
   
   let word = convert(rupees) + " Rupees";
   if (paise > 0) {
@@ -792,7 +793,7 @@ export default function InvoicesPage() {
               <div className="p-3 bg-rose-50 rounded-lg border border-rose-100 flex flex-col">
                 <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Remaining Balance Unsettled Dues</span>
                 <span className="text-base font-bold text-rose-800 mt-1">
-                  Rs. {money(Number(selectedInvoiceDetails.bill_total) - Number(selectedInvoiceDetails.amount_paid))}
+                  Rs. {money(toNumber(selectedInvoiceDetails.bill_total) - toNumber(selectedInvoiceDetails.amount_paid))}
                 </span>
               </div>
             </div>

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, updateSalesCustomer } from "../lib/api";
 import type { CustomerCreate, CustomerSearchResult, CustomerUpdate } from "../lib/api";
+import { formatMoney, toNumber } from "../lib/format";
 
 const initialForm: CustomerCreate = {
   phone_number: "",
@@ -286,13 +287,13 @@ export default function CustomersPage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
                   {filteredCustomers.map((customer) => {
-                    const outstanding = customer.opening_outstanding || 0;
-                    const advance = customer.advance_balance || 0;
+                    const outstanding = toNumber(customer.opening_outstanding);
+                    const advance = toNumber(customer.advance_balance);
                     let netBalanceText = "Settled";
                     if (outstanding > advance) {
-                      netBalanceText = `₹${(outstanding - advance).toFixed(2)} receivable`;
+                      netBalanceText = `${formatMoney(outstanding - advance)} receivable`;
                     } else if (advance > outstanding) {
-                      netBalanceText = `₹${(advance - outstanding).toFixed(2)} advance available`;
+                      netBalanceText = `${formatMoney(advance - outstanding)} advance available`;
                     }
 
                     let statusText = "Normal";
@@ -314,8 +315,8 @@ export default function CustomersPage() {
                           <div className="text-xs text-zinc-500">{customer.company_name || "-"}</div>
                         </td>
                         <td className="px-5 py-3 text-zinc-700">{customer.phone_number}</td>
-                        <td className="px-5 py-3 text-zinc-600">₹{outstanding.toFixed(2)}</td>
-                        <td className="px-5 py-3 text-zinc-600">₹{advance.toFixed(2)}</td>
+                        <td className="px-5 py-3 text-zinc-600">{formatMoney(outstanding)}</td>
+                        <td className="px-5 py-3 text-zinc-600">{formatMoney(advance)}</td>
                         <td className="px-5 py-3 text-zinc-800 font-semibold">{netBalanceText}</td>
                         <td className="px-5 py-3">
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeColor}`}>

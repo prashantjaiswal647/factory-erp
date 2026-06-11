@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { addPayment, getPaymentDues, searchCustomers } from "../lib/api";
 import type { CustomerSearchResult, OutstandingCustomer, PaymentCreate } from "../lib/api";
+import { formatMoney, toNumber } from "../lib/format";
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -31,7 +32,7 @@ function apiErrorMessage(error: unknown) {
 }
 
 function money(value: string | number) {
-  return `₹${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  return `₹${toNumber(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
 export default function PaymentCollectionPage() {
@@ -123,7 +124,7 @@ export default function PaymentCollectionPage() {
     try {
       const payload: PaymentCreate = {
         customer_phone: String(selectedCustomer.phone_number || payment.customer_phone || "").trim(),
-        amount_paid: Number(payment.amount_paid || 0),
+        amount_paid: toNumber(payment.amount_paid),
         payment_mode: payment.payment_mode,
         date: payment.date || undefined,
         sale_id: payment.sale_id ? Number(payment.sale_id) : undefined,
@@ -221,14 +222,15 @@ export default function PaymentCollectionPage() {
 
             {(() => {
               if (!selectedCustomer) return null;
-              const outstandingLimit = Number(remainingBalance);
-              const isOverpaying = payment.amount_paid > outstandingLimit;
-              const overpaidAmount = payment.amount_paid - outstandingLimit;
+              const outstandingLimit = toNumber(remainingBalance);
+              const payableAmount = toNumber(payment.amount_paid);
+              const isOverpaying = payableAmount > outstandingLimit;
+              const overpaidAmount = payableAmount - outstandingLimit;
               if (isOverpaying) {
                 return (
                   <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 space-y-1 md:col-span-2">
                     <p className="font-semibold">
-                      ₹{outstandingLimit.toFixed(2)} outstanding clear होगा और ₹{overpaidAmount.toFixed(2)} advance के रूप में save होगा.
+                      {formatMoney(outstandingLimit)} outstanding clear होगा और {formatMoney(overpaidAmount)} advance के रूप में save होगा.
                     </p>
                     <label className="flex items-center gap-1.5 font-medium text-emerald-700 cursor-pointer">
                       <input
@@ -267,9 +269,9 @@ export default function PaymentCollectionPage() {
             <div className="mt-4 rounded-md bg-white/80 p-3 text-sm text-amber-950 space-y-1">
               <p className="font-semibold">{selectedCustomer.name}</p>
               <p>{selectedCustomer.place} ({selectedCustomer.phone_number})</p>
-              {Number(selectedCustomer.advance_balance || 0) > 0 && (
+              {toNumber(selectedCustomer.advance_balance) > 0 && (
                 <p className="text-xs font-bold text-emerald-700 mt-1">
-                  Advance available: ₹{Number(selectedCustomer.advance_balance).toFixed(2)}
+                  Advance available: {formatMoney(selectedCustomer.advance_balance)}
                 </p>
               )}
             </div>

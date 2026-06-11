@@ -1,22 +1,39 @@
-export function asNumber(value: number | string | null | undefined) {
-  if (value === null || value === undefined) {
-    return 0;
+export function toNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
   }
-  return Number(value);
+  if (typeof value === "string") {
+    const cleaned = value.replace(/,/g, "").trim();
+    if (!cleaned) return 0;
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
-export function formatCurrency(value: number | string | null | undefined) {
+export function asNumber(value: unknown) {
+  return toNumber(value);
+}
+
+export function formatCurrency(value: unknown) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 0
-  }).format(asNumber(value));
+  }).format(toNumber(value));
 }
 
-export function formatNumber(value: number | string | null | undefined, maximumFractionDigits = 0) {
+export function formatMoney(value: unknown) {
+  return `₹${toNumber(value).toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+}
+
+export function formatNumber(value: unknown, maximumFractionDigits = 0) {
   return new Intl.NumberFormat("en-IN", {
     maximumFractionDigits
-  }).format(asNumber(value));
+  }).format(toNumber(value));
 }
 
 export function formatDate(value: string) {
