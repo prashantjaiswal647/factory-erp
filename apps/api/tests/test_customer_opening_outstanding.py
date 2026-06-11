@@ -190,6 +190,30 @@ def test_customer_edit_allows_unchanged_identity_and_profile_updates():
     assert exc.value.detail == "Use the customer ledger-adjustments endpoint to change outstanding balance"
 
 
+def test_customer_search_returns_current_ledger_outstanding():
+    db = _session()
+    factory = Factory(name="Search Balance Factory")
+    db.add(factory)
+    db.flush()
+    user = SimpleNamespace(id=1, username="owner", role="Owner", factory_id=factory.id, full_name="Owner")
+    customer = create_sales_customer(
+        payload=CustomerCreate(
+            name="Ledger Search Customer",
+            phone_number="555",
+            place="Delhi",
+            previous_due=Decimal("1200.00"),
+        ),
+        current_user=user,
+        db=db,
+    )
+
+    from routers.sales import search_customers
+    rows = search_customers(q="", current_user=user, db=db)
+    row = next(item for item in rows if item.id == customer.id)
+    assert row.opening_outstanding == Decimal("1200.00")
+    assert row.current_outstanding == Decimal("1200.00")
+
+
 def test_customer_edit_duplicate_checks_are_factory_scoped_and_exclude_self():
     db = _session()
     f1 = Factory(name="Factory 1")

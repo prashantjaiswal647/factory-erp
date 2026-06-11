@@ -722,6 +722,7 @@ export type CustomerSearchResult = {
   gst_number?: string | null;
   previous_due?: number;
   opening_outstanding?: number;
+  current_outstanding?: number;
   opening_outstanding_note?: string | null;
   opening_outstanding_date?: string | null;
   advance_balance?: number;

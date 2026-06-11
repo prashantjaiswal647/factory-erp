@@ -1,9 +1,10 @@
-import { Check, Edit, FileText, Search, UserRound, Share2, Trash2, X } from "lucide-react";
+import { Check, Edit, FileText, Search, UserRound, Share2, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, updateSalesCustomer } from "../lib/api";
+import { createCustomerLedgerAdjustment, createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, updateSalesCustomer } from "../lib/api";
 import type { CustomerCreate, CustomerSearchResult, CustomerUpdate } from "../lib/api";
+import { useDataRefresh } from "../context/DataRefreshContext";
 import { formatMoney, toNumber } from "../lib/format";
 
 const initialForm: CustomerCreate = {
@@ -26,6 +27,7 @@ const initialForm: CustomerCreate = {
 
 export default function CustomersPage() {
   const navigate = useNavigate();
+  const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const [form, setForm] = useState<CustomerCreate>(initialForm);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -43,6 +45,12 @@ export default function CustomersPage() {
   const [editForm, setEditForm] = useState<CustomerUpdate>({});
   const [isUpdating, setIsUpdating] = useState(false);
   const [editError, setEditError] = useState("");
+  const [adjustingCustomer, setAdjustingCustomer] = useState<CustomerSearchResult | null>(null);
+  const [adjustmentType, setAdjustmentType] = useState<"add_balance" | "reduce_balance">("add_balance");
+  const [adjustmentAmount, setAdjustmentAmount] = useState(0);
+  const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [adjustmentError, setAdjustmentError] = useState("");
+  const [isAdjusting, setIsAdjusting] = useState(false);
 
   async function handleSharePortal(customer: CustomerSearchResult) {
     setSharingCustomer(customer);
@@ -91,19 +99,6 @@ export default function CustomersPage() {
       setEditError("Name and Phone Number are required.");
       return;
     }
-    if ((editForm.opening_outstanding || 0) < 0) {
-      setEditError("Opening outstanding cannot be negative.");
-      return;
-    }
-    if ((editForm.advance_balance || 0) < 0) {
-      setEditError("Advance balance cannot be negative.");
-      return;
-    }
-    if ((editForm.opening_outstanding || 0) > 0 && (editForm.advance_balance || 0) > 0) {
-      setEditError("A customer cannot have both opening outstanding and advance balance at the same time.");
-      return;
-    }
-
     setIsUpdating(true);
     setEditError("");
     try {
@@ -118,6 +113,7 @@ export default function CustomersPage() {
       setToast(`Customer "${editForm.name}" updated successfully.`);
       setEditingCustomer(null);
       await loadCustomers();
+      triggerDataRefresh();
     } catch (caught) {
       const detail = (caught as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
       setEditError(typeof detail === "string" ? detail : "Customer update failed.");
@@ -138,7 +134,49 @@ export default function CustomersPage() {
 
   useEffect(() => {
     void loadCustomers();
-  }, []);
+  }, [refreshVersion]);
+
+  function openAdjustmentModal(customer: CustomerSearchResult) {
+    setAdjustingCustomer(customer);
+    setAdjustmentType("add_balance");
+    setAdjustmentAmount(0);
+    setAdjustmentReason("");
+    setAdjustmentError("");
+  }
+
+  async function submitAdjustment() {
+    if (!adjustingCustomer || adjustmentAmount <= 0 || !adjustmentReason.trim()) {
+      setAdjustmentError("Amount and reason are required.");
+      return;
+    }
+    const currentOutstanding = toNumber(adjustingCustomer.current_outstanding);
+    if (adjustmentType === "reduce_balance" && adjustmentAmount > currentOutstanding) {
+      setAdjustmentError("Reduction cannot exceed current outstanding.");
+      return;
+    }
+    setIsAdjusting(true);
+    setAdjustmentError("");
+    try {
+      const response = await createCustomerLedgerAdjustment(adjustingCustomer.id, {
+        adjustment_type: adjustmentType,
+        amount: adjustmentAmount,
+        reason: adjustmentReason.trim(),
+      });
+      setToast(
+        `Balance updated. Old: ${formatMoney(response.data.previous_outstanding)} | ` +
+        `Adjustment: ${adjustmentType === "add_balance" ? "+" : "-"}${formatMoney(response.data.adjustment_amount)} | ` +
+        `New: ${formatMoney(response.data.new_outstanding)}`
+      );
+      setAdjustingCustomer(null);
+      await loadCustomers();
+      triggerDataRefresh();
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      setAdjustmentError(typeof detail === "string" ? detail : "Balance adjustment failed.");
+    } finally {
+      setIsAdjusting(false);
+    }
+  }
 
   const filteredCustomers = useMemo(() => {
     const cleanCustomers = Array.isArray(customers) ? customers : [];
@@ -295,7 +333,7 @@ export default function CustomersPage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
                   {filteredCustomers.map((customer) => {
-                    const outstanding = toNumber(customer.opening_outstanding);
+                    const outstanding = toNumber(customer.current_outstanding);
                     const advance = toNumber(customer.advance_balance);
                     let netBalanceText = "Settled";
                     if (outstanding > advance) {
@@ -348,6 +386,14 @@ export default function CustomersPage() {
                             >
                               <FileText className="h-3.5 w-3.5" />
                               View Ledger
+                            </button>
+                            <button
+                              onClick={() => openAdjustmentModal(customer)}
+                              className="inline-flex h-8 items-center gap-1 rounded-md bg-brand-600 px-2 text-xs font-semibold text-white hover:bg-brand-700"
+                              type="button"
+                            >
+                              <WalletCards className="h-3.5 w-3.5" />
+                              Adjust Balance
                             </button>
                             <button
                               onClick={() => openEditModal(customer)}
@@ -465,6 +511,51 @@ export default function CustomersPage() {
         </div>
       )}
 
+      {adjustingCustomer && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-950">Adjust Balance</h3>
+                <p className="text-sm text-zinc-500">{adjustingCustomer.name}</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200" type="button" onClick={() => setAdjustingCustomer(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-4">
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Action
+                <select className="h-10 rounded-md border border-zinc-200 px-3" value={adjustmentType} onChange={(event) => setAdjustmentType(event.target.value as "add_balance" | "reduce_balance")}>
+                  <option value="add_balance">Add Balance</option>
+                  <option value="reduce_balance">Reduce Balance</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Adjustment Amount
+                <input className="h-10 rounded-md border border-zinc-200 px-3" type="number" min="0.01" step="0.01" value={adjustmentAmount || ""} onChange={(event) => setAdjustmentAmount(Number(event.target.value))} />
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Reason
+                <textarea className="min-h-20 rounded-md border border-zinc-200 px-3 py-2" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} />
+              </label>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                <p>Current Outstanding: <strong>{formatMoney(adjustingCustomer.current_outstanding || 0)}</strong></p>
+                <p>Adjustment Amount: <strong>{adjustmentType === "add_balance" ? "+" : "-"}{formatMoney(adjustmentAmount)}</strong></p>
+                <p>New Outstanding: <strong>{formatMoney(Math.max(0, toNumber(adjustingCustomer.current_outstanding) + (adjustmentType === "add_balance" ? adjustmentAmount : -adjustmentAmount)))}</strong></p>
+              </div>
+              {adjustmentError ? <p className="text-sm text-red-700">{adjustmentError}</p> : null}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold" type="button" onClick={() => setAdjustingCustomer(null)}>Cancel</button>
+              <button className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white disabled:bg-zinc-300" type="button" disabled={isAdjusting || adjustmentAmount <= 0 || !adjustmentReason.trim()} onClick={submitAdjustment}>
+                {isAdjusting ? "Updating..." : "Confirm Adjustment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editingCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-2xl rounded-xl border border-zinc-200 bg-white shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200 text-left">
@@ -492,8 +583,23 @@ export default function CustomersPage() {
                   <TextField label="GST Number" value={editForm.gst_number || ""} onChange={(gst_number) => setEditForm({ ...editForm, gst_number })} />
                 </div>
               </div>
+
+              <div className="border-t border-zinc-100 pt-4">
+                <h4 className="text-sm font-semibold text-zinc-950">Customer Balance</h4>
+                <p className="mt-1 text-xs text-amber-700">Balance fields are read-only. Use Adjust Balance button.</p>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  <ReadOnlyMoneyField label="Current Outstanding" value={editingCustomer.current_outstanding} />
+                  <ReadOnlyMoneyField label="Advance Available" value={editingCustomer.advance_balance} />
+                </div>
+                <button className="mt-4 h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700" type="button" onClick={() => {
+                  setEditingCustomer(null);
+                  openAdjustmentModal(editingCustomer);
+                }}>
+                  Adjust Balance
+                </button>
+              </div>
               
-              <div className="border-t border-zinc-100 pt-4 mt-2">
+              <div className="hidden">
                 <h4 className="text-sm font-semibold text-zinc-950 mb-1">Opening Balance / Advance</h4>
                 <p className="text-xs text-zinc-500 mb-3">
                   Opening balance is for onboarding-time balance only. Do not use this for regular payment correction. Previous due customer onboarding से पहले का बकाया है. Advance वह amount है जो customer ने future order के लिए पहले से दे दिया है.
@@ -562,6 +668,14 @@ function NumberTextField({ label, value, onChange }: { label: string; value: str
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
       <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" inputMode="numeric" value={value} onFocus={(event) => event.target.select()} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+function ReadOnlyMoneyField({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-zinc-700">{label}</span>
+      <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-zinc-100 px-3 text-zinc-700" readOnly value={formatMoney(value || 0)} />
     </label>
   );
 }

@@ -361,6 +361,7 @@ class CustomerSearchResponse(BaseModel):
     company_name: str | None = None
     previous_due: Decimal = Decimal("0.00")
     opening_outstanding: Decimal = Decimal("0.00")
+    current_outstanding: Decimal = Decimal("0.00")
     opening_outstanding_note: str | None = None
     opening_outstanding_date: date | None = None
     advance_balance: Decimal = Decimal("0.00")
@@ -1719,6 +1720,7 @@ def update_sales_customer(
         company_name=customer.firm_name,
         previous_due=customer.previous_due,
         opening_outstanding=customer.previous_due,
+        current_outstanding=customer.total_due,
         opening_outstanding_note=customer.opening_outstanding_note,
         opening_outstanding_date=customer.opening_outstanding_date,
         advance_balance=customer.advance_balance,
@@ -1754,6 +1756,14 @@ def search_customers(
             phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
             gst_number=customer.gst_number,
             company_name=customer.firm_name,
+            previous_due=customer.previous_due,
+            opening_outstanding=customer.previous_due,
+            current_outstanding=customer.total_due,
+            opening_outstanding_note=customer.opening_outstanding_note,
+            opening_outstanding_date=customer.opening_outstanding_date,
+            advance_balance=customer.advance_balance,
+            advance_balance_note=customer.advance_balance_note,
+            advance_balance_date=customer.advance_balance_date,
         )
         for customer in customers
     ]
