@@ -368,7 +368,8 @@ def test_e2e_erp_workflow(mock_n8n_sync):
         "customer_id": 1,
         "amount_paid": 300.0,  # exceeds outstanding 200
         "payment_mode": "UPI",
-        "date": "2026-06-03"
+        "date": "2026-06-03",
+        "save_extra_as_advance": False
     }
     overpay_res = client.post("/api/payments/add", json=overpay_payload)
     assert overpay_res.status_code == 400

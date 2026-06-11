@@ -444,6 +444,11 @@ class Customer(TenantMixin, Base):
     address = Column(Text, nullable=True)
     phone = Column(String(50), nullable=True)
     previous_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    opening_outstanding_note = Column(Text, nullable=True)
+    opening_outstanding_date = Column(Date, nullable=True)
+    advance_balance = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    advance_balance_note = Column(Text, nullable=True)
+    advance_balance_date = Column(Date, nullable=True)
     total_due = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     contact_number = Column(String(50), nullable=True)
     telegram_id = Column(String(100), nullable=True, index=True)
@@ -465,6 +470,7 @@ class Customer(TenantMixin, Base):
     __table_args__ = (
         CheckConstraint("balance_amount >= 0", name="ck_customers_balance_amount_non_negative"),
         CheckConstraint("previous_due >= 0", name="ck_customers_previous_due_non_negative"),
+        CheckConstraint("advance_balance >= 0", name="ck_customers_advance_balance_non_negative"),
         CheckConstraint("total_due >= 0", name="ck_customers_total_due_non_negative"),
         CheckConstraint("pending_dues >= 0", name="ck_customers_pending_dues_non_negative"),
         CheckConstraint("pending_balance >= 0", name="ck_customers_pending_balance_non_negative"),
