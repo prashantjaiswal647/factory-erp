@@ -238,15 +238,15 @@ export default function CustomersPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="w-full max-w-full min-w-0 space-y-6 overflow-x-hidden">
       {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
       <div>
         <h1 className="text-2xl font-semibold text-zinc-950">Customers</h1>
         <p className="mt-1 text-sm text-zinc-500">Create customers before invoice generation.</p>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
-        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm space-y-4">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(300px,420px)_minmax(0,1fr)]">
+        <section className="min-w-0 space-y-4 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
           <div className="mb-1 flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
               <UserRound className="h-5 w-5" />
@@ -294,7 +294,7 @@ export default function CustomersPage() {
           </button>
         </section>
 
-        <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <div className="border-b border-zinc-200 p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -313,26 +313,22 @@ export default function CustomersPage() {
             </div>
           </div>
 
-          <div className="max-h-[800px] overflow-y-auto">
+          <div className="max-h-[800px] min-w-0 overflow-y-auto overflow-x-hidden">
             {isLoadingCustomers ? (
               <div className="p-6 text-sm text-zinc-500">Loading customers...</div>
             ) : filteredCustomers.length === 0 ? (
               <div className="p-6 text-sm text-zinc-500">No customers found.</div>
             ) : (
-              <table className="min-w-full divide-y divide-zinc-200 text-sm">
-                <thead className="sticky top-0 z-10 bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
-                  <tr>
-                    <th className="px-5 py-3">Customer Name</th>
-                    <th className="px-5 py-3">Phone Number</th>
-                    <th className="px-5 py-3">Previous Due</th>
-                    <th className="px-5 py-3">Advance</th>
-                    <th className="px-5 py-3">Net Balance</th>
-                    <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100">
-                  {filteredCustomers.map((customer) => {
+              <div className="min-w-0 divide-y divide-zinc-100">
+                <div className="sticky top-0 z-10 hidden min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,.9fr)_minmax(0,.8fr)_minmax(0,.8fr)_minmax(0,1fr)_auto] gap-3 bg-zinc-50 px-4 py-3 text-xs font-semibold uppercase text-zinc-500 lg:grid">
+                  <span>Customer</span>
+                  <span>Phone</span>
+                  <span>Receivable</span>
+                  <span>Advance</span>
+                  <span>Net / Status</span>
+                  <span className="text-right">Actions</span>
+                </div>
+                {filteredCustomers.map((customer) => {
                     const outstanding = toNumber(customer.current_outstanding);
                     const advance = toNumber(customer.advance_balance);
                     let netBalanceText = "Settled";
@@ -355,22 +351,23 @@ export default function CustomersPage() {
                     }
 
                     return (
-                      <tr key={customer.id} className="hover:bg-zinc-50">
-                        <td className="px-5 py-3">
-                          <div className="font-medium text-zinc-950">{customer.name}</div>
-                          <div className="text-xs text-zinc-500">{customer.company_name || "-"}</div>
-                        </td>
-                        <td className="px-5 py-3 text-zinc-700">{customer.phone_number}</td>
-                        <td className="px-5 py-3 text-zinc-600">{formatMoney(outstanding)}</td>
-                        <td className="px-5 py-3 text-zinc-600">{formatMoney(advance)}</td>
-                        <td className="px-5 py-3 text-zinc-800 font-semibold">{netBalanceText}</td>
-                        <td className="px-5 py-3">
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeColor}`}>
-                            {statusText}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3">
-                          <div className="flex justify-end gap-2">
+                      <article key={customer.id} className="min-w-0 p-4 hover:bg-zinc-50">
+                        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,.9fr)_minmax(0,.8fr)_minmax(0,.8fr)_minmax(0,1fr)_auto] lg:items-center">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-zinc-950" title={customer.name}>{customer.name}</div>
+                            <div className="truncate text-xs text-zinc-500" title={customer.company_name || "-"}>{customer.company_name || "-"}</div>
+                          </div>
+                          <Metric label="Phone" value={customer.phone_number} />
+                          <Metric label="Receivable" value={formatMoney(outstanding)} />
+                          <Metric label="Advance" value={formatMoney(advance)} />
+                          <div className="min-w-0">
+                            <span className="text-xs font-medium uppercase text-zinc-400 lg:hidden">Net Balance</span>
+                            <div className="break-words text-sm font-semibold text-zinc-800">{netBalanceText}</div>
+                            <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeColor}`}>
+                              {statusText}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 flex-wrap gap-2 lg:max-w-[230px] lg:justify-end">
                             <button
                               onClick={() => handleSharePortal(customer)}
                               className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-bold text-brand-700 hover:bg-brand-50"
@@ -412,12 +409,11 @@ export default function CustomersPage() {
                               Delete
                             </button>
                           </div>
-                        </td>
-                      </tr>
+                        </div>
+                      </article>
                     );
                   })}
-                </tbody>
-              </table>
+              </div>
             )}
           </div>
         </section>
@@ -513,7 +509,8 @@ export default function CustomersPage() {
 
       {adjustingCustomer && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl">
+          <div className="flex max-h-[90vh] w-[95vw] max-w-3xl flex-col overflow-x-hidden rounded-xl bg-white shadow-2xl">
+            <div className="overflow-y-auto overflow-x-hidden p-6 max-h-[75vh]">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-lg font-bold text-zinc-950">Adjust Balance</h3>
@@ -552,13 +549,14 @@ export default function CustomersPage() {
                 {isAdjusting ? "Updating..." : "Confirm Adjustment"}
               </button>
             </div>
+            </div>
           </div>
         </div>
       )}
 
       {editingCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-xl border border-zinc-200 bg-white shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200 text-left">
+          <div className="flex max-h-[90vh] w-[95vw] max-w-3xl flex-col overflow-x-hidden rounded-xl border border-zinc-200 bg-white text-left shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between border-b border-zinc-100 p-5">
               <div>
                 <h3 className="text-lg font-bold text-zinc-950">Edit Customer</h3>
@@ -573,8 +571,8 @@ export default function CustomersPage() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
+            <div className="max-h-[75vh] flex-1 space-y-4 overflow-y-auto overflow-x-hidden p-5">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <TextField label="Customer Name" value={editForm.name || ""} onChange={(name) => setEditForm({ ...editForm, name })} />
                 <NumberTextField label="Phone Number" value={editForm.phone_number || ""} onChange={(phone_number) => setEditForm({ ...editForm, phone_number })} />
                 <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
@@ -630,7 +628,7 @@ export default function CustomersPage() {
 
             {editError ? <p className="px-5 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">{editError}</p> : null}
 
-            <div className="flex justify-end gap-3 border-t border-zinc-100 p-5 bg-zinc-50 rounded-b-xl">
+            <div className="sticky bottom-0 flex flex-wrap justify-end gap-3 rounded-b-xl border-t border-zinc-100 bg-zinc-50 p-5">
               <button
                 className="h-10 rounded-md border border-zinc-200 px-4 text-sm font-semibold text-zinc-700 bg-white hover:bg-zinc-50"
                 type="button"
@@ -677,6 +675,14 @@ function ReadOnlyMoneyField({ label, value }: { label: string; value?: string | 
       <span className="font-medium text-zinc-700">{label}</span>
       <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-zinc-100 px-3 text-zinc-700" readOnly value={formatMoney(value || 0)} />
     </label>
+  );
+}
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <span className="text-xs font-medium uppercase text-zinc-400 lg:hidden">{label}</span>
+      <div className="truncate text-sm text-zinc-700" title={value}>{value}</div>
+    </div>
   );
 }
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
