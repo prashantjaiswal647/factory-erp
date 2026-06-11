@@ -2534,7 +2534,7 @@ def get_sales_outstanding(
                     total_bill_amount=Decimal("0.00"),
                     total_paid=Decimal("0.00"),
                     current_pending_balance=Decimal("0.00"),
-                    opening_outstanding=to_money(bill.customer.opening_outstanding or 0),
+                    opening_outstanding=to_money(bill.customer.previous_due or 0),
                     advance_balance=to_money(bill.customer.advance_balance or 0),
                     bills=[],
                 )
@@ -2569,7 +2569,7 @@ def get_sales_outstanding(
         all_custs = (
             db.query(Customer)
             .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-            .filter((Customer.advance_balance > 0) | (Customer.opening_outstanding > 0))
+            .filter((Customer.advance_balance > 0) | (Customer.previous_due > 0))
             .all()
         )
         for cust in all_custs:
@@ -2582,7 +2582,7 @@ def get_sales_outstanding(
                     total_bill_amount=Decimal("0.00"),
                     total_paid=Decimal("0.00"),
                     current_pending_balance=Decimal("0.00"),
-                    opening_outstanding=to_money(cust.opening_outstanding or 0),
+                    opening_outstanding=to_money(cust.previous_due or 0),
                     advance_balance=to_money(cust.advance_balance or 0),
                     bills=[],
                 )
@@ -2613,7 +2613,7 @@ def get_sales_outstanding(
                 total_bill_amount=Decimal("0.00"),
                 total_paid=Decimal("0.00"),
                 current_pending_balance=Decimal("0.00"),
-                opening_outstanding=to_money(order.customer.opening_outstanding or 0),
+                opening_outstanding=to_money(order.customer.previous_due or 0),
                 advance_balance=to_money(order.customer.advance_balance or 0),
                 bills=[],
             )
@@ -2642,7 +2642,7 @@ def get_sales_outstanding(
     all_custs = (
         db.query(Customer)
         .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-        .filter((Customer.advance_balance > 0) | (Customer.opening_outstanding > 0))
+        .filter((Customer.advance_balance > 0) | (Customer.previous_due > 0))
         .all()
     )
     for cust in all_custs:
@@ -2655,7 +2655,7 @@ def get_sales_outstanding(
                 total_bill_amount=Decimal("0.00"),
                 total_paid=Decimal("0.00"),
                 current_pending_balance=Decimal("0.00"),
-                opening_outstanding=to_money(cust.opening_outstanding or 0),
+                opening_outstanding=to_money(cust.previous_due or 0),
                 advance_balance=to_money(cust.advance_balance or 0),
                 bills=[],
             )
