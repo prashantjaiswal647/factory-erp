@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -130,3 +131,32 @@ def test_reduce_cannot_exceed_outstanding():
             db,
         )
     assert exc.value.status_code == 400
+
+
+def test_reduce_balance_decreases_outstanding_without_payment_history():
+    db = _db()
+    customer = _setup_customer(db, Decimal("5000.00"))
+    result = create_customer_adjustment(
+        customer.id,
+        LedgerAdjustmentCreate(
+            adjustment_type="reduce_balance",
+            amount=Decimal("1200.00"),
+            reason="Discount",
+        ),
+        _owner(),
+        db,
+    )
+    assert result.previous_outstanding == Decimal("5000.00")
+    assert result.adjustment_amount == Decimal("1200.00")
+    assert result.new_outstanding == Decimal("3800.00")
+    from models import PaymentCollection
+    assert db.query(PaymentCollection).filter(PaymentCollection.customer_id == customer.id).count() == 0
+
+
+def test_adjustment_reason_is_required():
+    with pytest.raises(ValidationError):
+        LedgerAdjustmentCreate(
+            adjustment_type="add_balance",
+            amount=Decimal("100.00"),
+            reason="   ",
+        )

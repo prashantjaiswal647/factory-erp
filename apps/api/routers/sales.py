@@ -1505,7 +1505,20 @@ def update_sales_customer(
     )
     if customer is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
-    if payload.opening_outstanding is not None or payload.previous_due is not None:
+    submitted_opening = (
+        payload.opening_outstanding
+        if payload.opening_outstanding is not None
+        else payload.previous_due
+    )
+    opening_changed = (
+        submitted_opening is not None
+        and to_money(submitted_opening) != to_money(customer.previous_due)
+    )
+    advance_changed = (
+        payload.advance_balance is not None
+        and to_money(payload.advance_balance) != to_money(customer.advance_balance)
+    )
+    if opening_changed or advance_changed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Use the customer ledger-adjustments endpoint to change outstanding balance",

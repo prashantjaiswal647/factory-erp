@@ -9,7 +9,13 @@ from sqlalchemy.pool import StaticPool
 
 from db import Base
 from models import Factory, Customer, OutstandingBill, Payment, PaymentCollection, DailySale, User, Order, PackagingProfile
-from routers.sales import create_sales_customer, update_sales_customer, create_invoice_from_sale
+from routers.sales import (
+    LedgerAdjustmentCreate,
+    create_customer_adjustment,
+    create_invoice_from_sale,
+    create_sales_customer,
+    update_sales_customer,
+)
 from routers.payments import record_payment, build_outstanding_response
 from routers.onboarding import apply_bulk_rows, CustomerBulkRow
 from schemas import CustomerCreate
@@ -107,7 +113,7 @@ def test_customer_update_accepts_blank_balance_dates():
     assert payload.advance_balance_date is None
 
 
-def test_customer_edit_updates_balances():
+def test_customer_edit_rejects_direct_balance_mutation():
     db = _session()
     f1 = Factory(name="Test Factory 1")
     db.add(f1)
@@ -118,18 +124,16 @@ def test_customer_edit_updates_balances():
     payload = CustomerCreate(name="Cust A", phone_number="123", place="Delhi")
     c1 = create_sales_customer(payload=payload, current_user=user, db=db)
 
-    # 6. Customer edit updates previous_due
     from routers.sales import CustomerUpdatePayload
-    update_payload = CustomerUpdatePayload(previous_due=Decimal("1500.00"))
-    res = update_sales_customer(customer_id=c1.id, payload=update_payload, current_user=user, db=db)
-    assert res.previous_due == Decimal("1500.00")
-    assert res.advance_balance == Decimal("0.00")
-    
-    # 7. Customer edit updates advance_balance
-    update_payload2 = CustomerUpdatePayload(previous_due=Decimal("0.00"), advance_balance=Decimal("800.00"))
-    res2 = update_sales_customer(customer_id=c1.id, payload=update_payload2, current_user=user, db=db)
-    assert res2.previous_due == Decimal("0.00")
-    assert res2.advance_balance == Decimal("800.00")
+    for update_payload in (
+        CustomerUpdatePayload(previous_due=Decimal("1500.00")),
+        CustomerUpdatePayload(opening_outstanding=Decimal("1500.00")),
+        CustomerUpdatePayload(advance_balance=Decimal("800.00")),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            update_sales_customer(customer_id=c1.id, payload=update_payload, current_user=user, db=db)
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "Use the customer ledger-adjustments endpoint to change outstanding balance"
 
 def test_customer_edit_allows_unchanged_identity_and_profile_updates():
     db = _session()
@@ -158,6 +162,8 @@ def test_customer_edit_allows_unchanged_identity_and_profile_updates():
             phone_number="123",
             gst_number="07ABCDE1234F1Z5",
             company_name="Alpha Cups",
+            opening_outstanding=Decimal("0.00"),
+            advance_balance=Decimal("0.00"),
         ),
         current_user=user,
         db=db,
@@ -173,13 +179,15 @@ def test_customer_edit_allows_unchanged_identity_and_profile_updates():
     assert profile_update.place == "Noida"
     assert profile_update.company_name == "Alpha Packaging"
 
-    balance_update = update_sales_customer(
-        customer_id=customer.id,
-        payload=CustomerUpdatePayload(opening_outstanding=Decimal("250.00")),
-        current_user=user,
-        db=db,
-    )
-    assert balance_update.opening_outstanding == Decimal("250.00")
+    with pytest.raises(HTTPException) as exc:
+        update_sales_customer(
+            customer_id=customer.id,
+            payload=CustomerUpdatePayload(opening_outstanding=Decimal("250.00")),
+            current_user=user,
+            db=db,
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Use the customer ledger-adjustments endpoint to change outstanding balance"
 
 
 def test_customer_edit_duplicate_checks_are_factory_scoped_and_exclude_self():
@@ -650,21 +658,27 @@ def test_edit_opening_balance_preserves_historical_dues_regression():
     # Dues should be 42979.00 - 3000.00 = 39979.00
     assert customer.total_due == Decimal("39979.00")
 
-    # 3. Edit opening/previous due to 3,000.00 (same date)
-    # The old opening balance was 42979.00. The new opening balance is 3000.00.
-    # The delta is 3000.00 - 42979.00 = -39979.00.
-    # The expected total due should be: 42979.00 - 3000.00 (payments) + delta = 0.00.
-    from routers.sales import CustomerUpdatePayload
-    update_sales_customer(
+    payment_count = (
+        db.query(PaymentCollection)
+        .filter(PaymentCollection.customer_id == customer.id)
+        .count()
+    )
+    adjustment = create_customer_adjustment(
         customer_id=customer.id,
-        payload=CustomerUpdatePayload(opening_outstanding=Decimal("3000.00")),
+        payload=LedgerAdjustmentCreate(
+            adjustment_type="add_balance",
+            amount=Decimal("3000.00"),
+            reason="Previous bill not entered",
+        ),
         current_user=user,
-        db=db
+        db=db,
     )
     db.refresh(customer)
-    # Since the 42979.00 was opening balance, and it got updated to 3000.00,
-    # and they paid 3000.00, the remaining balance of the opening bill is 0.00.
-    assert customer.total_due == Decimal("0.00")
+    assert adjustment.previous_outstanding == Decimal("39979.00")
+    assert adjustment.adjustment_amount == Decimal("3000.00")
+    assert adjustment.new_outstanding == Decimal("42979.00")
+    assert customer.total_due == Decimal("42979.00")
+    assert db.query(PaymentCollection).filter(PaymentCollection.customer_id == customer.id).count() == payment_count
     
     # Let's now test the other scenario: Customer has an invoice of 42979.00 and opening balance was 0.00.
     c2 = create_sales_customer(
@@ -695,14 +709,27 @@ def test_edit_opening_balance_preserves_historical_dues_regression():
     db.refresh(c2)
     assert c2.total_due == Decimal("39979.00")
 
-    # Edit opening outstanding to 3,000.00
-    # Old opening = 0, new opening = 3000, delta = 3000.
-    # New total due should be: 39979.00 (remaining invoice) + 3000.00 (new opening) = 42979.00.
-    update_sales_customer(
+    invoice_bill = (
+        db.query(OutstandingBill)
+        .filter(OutstandingBill.customer_id == c2.id)
+        .filter(OutstandingBill.source_type == "invoice")
+        .one()
+    )
+    invoice_remaining_before = invoice_bill.balance_amount
+    adjustment2 = create_customer_adjustment(
         customer_id=c2.id,
-        payload=CustomerUpdatePayload(opening_outstanding=Decimal("3000.00")),
+        payload=LedgerAdjustmentCreate(
+            adjustment_type="add_balance",
+            amount=Decimal("3000.00"),
+            reason="Previous bill not entered",
+        ),
         current_user=user,
-        db=db
+        db=db,
     )
     db.refresh(c2)
+    db.refresh(invoice_bill)
+    assert adjustment2.previous_outstanding == Decimal("39979.00")
+    assert adjustment2.adjustment_amount == Decimal("3000.00")
+    assert adjustment2.new_outstanding == Decimal("42979.00")
     assert c2.total_due == Decimal("42979.00")
+    assert invoice_bill.balance_amount == invoice_remaining_before
