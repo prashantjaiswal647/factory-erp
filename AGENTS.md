@@ -347,6 +347,14 @@ Follow this sequence unless a P0 incident overrides it.
 - `invoice_delivery_logs` records download, reprint, Telegram, and email activity without changing invoice accounting data.
 - Invoice PDFs and delivery/history endpoints must always verify `factory_id`.
 
+## 24. Telegram Nested ERP Menu
+
+- `/menu` displays exactly four top-level inline buttons: Dekho, Kaam Karo, Alerts, and Settings.
+- Read-only and action submenus use namespaced callback data and always include Back navigation.
+- Menu state is stored per factory and Telegram user/chat through `TelegramActionSession`.
+- Action placeholders must show Save, Edit, and Cancel confirmation buttons before any future business write.
+- The current navigation phase performs no ERP business-table writes; legacy callbacks remain accepted for already-open Telegram messages.
+
 ## 24. AI Feature Vetting Rules
 
 Before building any AI feature ask:

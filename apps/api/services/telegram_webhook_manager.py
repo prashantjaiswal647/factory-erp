@@ -19,11 +19,11 @@ class WebhookStatus(TypedDict):
     expected_url: str
 
 
-def get_webhook_config() -> tuple[bool, str, str, str]:
+def get_webhook_config() -> tuple[str, str, str, str]:
     """Get webhook configuration from environment.
     
     Returns:
-        Tuple of (token_configured, username, secret, expected_url)
+        Tuple of (token, username, secret, expected_url)
     """
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     username = (os.getenv("TELEGRAM_BOT_USERNAME") or "MunshiHermesAi_Bot").strip().lstrip("@")
@@ -31,7 +31,22 @@ def get_webhook_config() -> tuple[bool, str, str, str]:
     public_origin = os.getenv("PUBLIC_API_ORIGIN", "https://munshiai.co.in").rstrip("/")
     expected_url = f"{public_origin}/api/integrations/telegram/webhook"
     
-    return bool(token), username, secret, expected_url
+    return token, username, secret, expected_url
+
+
+def _run_sync(coro):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with ThreadPoolExecutor() as executor:
+            return executor.submit(asyncio.run, coro).result()
+    else:
+        return asyncio.run(coro)
 
 
 def get_webhook_status() -> WebhookStatus:
@@ -94,8 +109,7 @@ def get_webhook_status() -> WebhookStatus:
                     "expected_url": expected_url,
                 }
         
-        import asyncio
-        status = asyncio.run(fetch_webhook_info())
+        status = _run_sync(fetch_webhook_info())
         logger.info(f"Webhook status check: configured={status['configured']}, url={status['url']}")
         return status
         
@@ -144,13 +158,7 @@ def register_webhook() -> tuple[bool, str]:
                 logger.info(f"Webhook successfully registered: {expected_url}")
                 return True, f"Webhook registered successfully at {expected_url}"
 
-        loop = asyncio.get_event_loop()
-
-        if loop.is_running():
-            loop.create_task(register())
-            return True, "Webhook registration scheduled"
-
-        success, message = loop.run_until_complete(register())
+        success, message = _run_sync(register())
         return success, message
 
         
