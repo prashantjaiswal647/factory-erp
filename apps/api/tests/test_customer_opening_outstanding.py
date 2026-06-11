@@ -104,6 +104,129 @@ def test_customer_edit_updates_balances():
     assert res2.previous_due == Decimal("0.00")
     assert res2.advance_balance == Decimal("800.00")
 
+def test_customer_edit_allows_unchanged_identity_and_profile_updates():
+    db = _session()
+    f1 = Factory(name="Test Factory 1")
+    db.add(f1)
+    db.flush()
+    user = SimpleNamespace(id=1, username="owner", role="Owner", factory_id=f1.id, full_name="Owner F1")
+
+    customer = create_sales_customer(
+        payload=CustomerCreate(
+            name="Cust A",
+            phone_number="123",
+            place="Delhi",
+            gst_number="07ABCDE1234F1Z5",
+            company_name="Alpha Cups",
+        ),
+        current_user=user,
+        db=db,
+    )
+
+    from routers.sales import CustomerUpdatePayload
+    unchanged = update_sales_customer(
+        customer_id=customer.id,
+        payload=CustomerUpdatePayload(
+            name="Cust A",
+            phone_number="123",
+            gst_number="07ABCDE1234F1Z5",
+            company_name="Alpha Cups",
+        ),
+        current_user=user,
+        db=db,
+    )
+    assert unchanged.phone_number == "123"
+
+    profile_update = update_sales_customer(
+        customer_id=customer.id,
+        payload=CustomerUpdatePayload(place="Noida", company_name="Alpha Packaging"),
+        current_user=user,
+        db=db,
+    )
+    assert profile_update.place == "Noida"
+    assert profile_update.company_name == "Alpha Packaging"
+
+    balance_update = update_sales_customer(
+        customer_id=customer.id,
+        payload=CustomerUpdatePayload(opening_outstanding=Decimal("250.00")),
+        current_user=user,
+        db=db,
+    )
+    assert balance_update.opening_outstanding == Decimal("250.00")
+
+
+def test_customer_edit_duplicate_checks_are_factory_scoped_and_exclude_self():
+    db = _session()
+    f1 = Factory(name="Factory 1")
+    f2 = Factory(name="Factory 2")
+    db.add_all([f1, f2])
+    db.flush()
+    user1 = SimpleNamespace(id=1, username="owner1", role="Owner", factory_id=f1.id, full_name="Owner F1")
+    user2 = SimpleNamespace(id=2, username="owner2", role="Owner", factory_id=f2.id, full_name="Owner F2")
+
+    customer = create_sales_customer(
+        payload=CustomerCreate(
+            name="Cust A",
+            phone_number="123",
+            place="Delhi",
+            gst_number="07AAAAA1111A1Z1",
+            company_name="Alpha Cups",
+        ),
+        current_user=user1,
+        db=db,
+    )
+    create_sales_customer(
+        payload=CustomerCreate(
+            name="Cust B",
+            phone_number="456",
+            place="Noida",
+            gst_number="07BBBBB2222B2Z2",
+            company_name="Beta Cups",
+        ),
+        current_user=user1,
+        db=db,
+    )
+    other_factory_customer = create_sales_customer(
+        payload=CustomerCreate(name="Cust C", phone_number="789", place="Pune"),
+        current_user=user2,
+        db=db,
+    )
+
+    from routers.sales import CustomerUpdatePayload
+    with pytest.raises(HTTPException) as excinfo:
+        update_sales_customer(
+            customer_id=customer.id,
+            payload=CustomerUpdatePayload(phone_number="456"),
+            current_user=user1,
+            db=db,
+        )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == "Phone number already in use by another customer"
+
+    duplicate_cases = [
+        (CustomerUpdatePayload(name="Cust B"), "Customer name already in use by another customer"),
+        (CustomerUpdatePayload(gst_number="07BBBBB2222B2Z2"), "GST number already in use by another customer"),
+        (CustomerUpdatePayload(company_name="Beta Cups"), "Company name already in use by another customer"),
+    ]
+    for update_payload, expected_detail in duplicate_cases:
+        with pytest.raises(HTTPException) as duplicate_exc:
+            update_sales_customer(
+                customer_id=customer.id,
+                payload=update_payload,
+                current_user=user1,
+                db=db,
+            )
+        assert duplicate_exc.value.status_code == 409
+        assert duplicate_exc.value.detail == expected_detail
+
+    cross_factory_update = update_sales_customer(
+        customer_id=other_factory_customer.id,
+        payload=CustomerUpdatePayload(phone_number="123"),
+        current_user=user2,
+        db=db,
+    )
+    assert cross_factory_update.phone_number == "123"
+
 def test_invoice_and_advance_deductions():
     db = _session()
     f1 = Factory(name="Test Factory 1", invoice_prefix="T-", next_tax_invoice_number=1)

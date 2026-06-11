@@ -1506,31 +1506,62 @@ def update_sales_customer(
     changes = []
 
     if payload.name is not None:
-        customer.name = payload.name.strip()
+        new_name = payload.name.strip()
+        existing = (
+            db.query(Customer)
+            .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+            .filter(Customer.id != customer_id)
+            .filter(sql_func.lower(Customer.name) == new_name.lower())
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer name already in use by another customer")
+        customer.name = new_name
     if payload.phone_number is not None:
         new_phone = payload.phone_number.strip()
-        if new_phone != (customer.phone_number or ""):
-            existing = (
-                db.query(Customer)
-                .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-                .filter(Customer.phone_number == new_phone)
-                .filter(Customer.id != customer_id)
-                .first()
-            )
-            if existing is not None:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already in use by another customer")
-            customer.phone_number = new_phone
-            customer.phone = new_phone
-            customer.contact_number = new_phone
+        existing = (
+            db.query(Customer)
+            .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+            .filter(Customer.id != customer_id)
+            .filter(Customer.phone_number == new_phone)
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already in use by another customer")
+        customer.phone_number = new_phone
+        customer.phone = new_phone
+        customer.contact_number = new_phone
     if payload.place is not None:
         customer.place = payload.place.strip()
         customer.address = payload.place.strip()
     if payload.address is not None:
         customer.address = payload.address.strip()
     if payload.gst_number is not None:
-        customer.gst_number = payload.gst_number.strip() or None
+        new_gst_number = payload.gst_number.strip() or None
+        if new_gst_number is not None:
+            existing = (
+                db.query(Customer)
+                .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+                .filter(Customer.id != customer_id)
+                .filter(sql_func.lower(Customer.gst_number) == new_gst_number.lower())
+                .first()
+            )
+            if existing is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="GST number already in use by another customer")
+        customer.gst_number = new_gst_number
     if payload.company_name is not None:
-        customer.firm_name = payload.company_name.strip() or None
+        new_company_name = payload.company_name.strip() or None
+        if new_company_name is not None:
+            existing = (
+                db.query(Customer)
+                .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+                .filter(Customer.id != customer_id)
+                .filter(sql_func.lower(Customer.firm_name) == new_company_name.lower())
+                .first()
+            )
+            if existing is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Company name already in use by another customer")
+        customer.firm_name = new_company_name
 
     # Handle opening balance update
     new_outstanding = payload.opening_outstanding if payload.opening_outstanding is not None else payload.previous_due

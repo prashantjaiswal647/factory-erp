@@ -117,8 +117,9 @@ export default function CustomersPage() {
       setToast(`Customer "${editForm.name}" updated successfully.`);
       setEditingCustomer(null);
       await loadCustomers();
-    } catch {
-      setEditError("Update failed. Phone number might already be in use.");
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      setEditError(typeof detail === "string" ? detail : "Customer update failed.");
     } finally {
       setIsUpdating(false);
     }
