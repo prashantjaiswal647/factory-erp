@@ -12,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from db import SessionLocal
-from models import Factory, OutstandingBill, PaymentCollection
+from models import Factory
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     invoice = payload.get("invoice") or {}
     items = payload.get("items") or []
     factory_id = payload.get("factory_id") or invoice.get("factory_id") or ""
+    payments_history = payload.get("payment_history") or []
 
     # Fetch Factory details from database
     factory_name = "Munshi AI Factory"
@@ -267,6 +268,29 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
         invoice.get("advance_adjusted") is not None
     )
 
+    invoice_total = Decimal(str(
+        payload.get("invoice_total")
+        or invoice.get("bill_total")
+        or payload.get("bill_total")
+        or total_val_num
+    )).quantize(Decimal("0.01"))
+    total_paid_against_invoice = Decimal(str(
+        payload.get("total_paid_against_invoice")
+        if payload.get("total_paid_against_invoice") is not None
+        else invoice.get("amount_paid") or payload.get("amount_paid") or 0
+    )).quantize(Decimal("0.01"))
+    remaining_balance = Decimal(str(
+        payload.get("remaining_balance")
+        if payload.get("remaining_balance") is not None
+        else invoice.get("customer_total_due") or payload.get("customer_total_due") or 0
+    )).quantize(Decimal("0.01"))
+    if remaining_balance <= 0:
+        payment_status = "Paid"
+    elif total_paid_against_invoice > 0:
+        payment_status = "Partial Paid"
+    else:
+        payment_status = "Unpaid"
+
     if has_opening_or_advance:
         rem_payable_val = float(invoice.get("remaining_payable") or total_val_num)
         amount_in_words = number_to_words_in_words(rem_payable_val)
@@ -305,9 +329,13 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
         summary_rows.append(["Remaining Payable", _money(rem_pay)])
         if adv_rem > 0:
             summary_rows.append(["Advance Balance Remaining", _money(adv_rem)])
-    else:
-        summary_rows.append(["Amount Paid / Advance", _money(invoice.get("amount_paid") or payload.get("amount_paid") or 0)])
-        summary_rows.append(["Balance Due Amount", _money(invoice.get("customer_total_due") or payload.get("customer_total_due") or 0)])
+
+    summary_rows.extend([
+        ["Invoice Total", _money(invoice_total)],
+        ["Total Paid Against This Invoice", _money(total_paid_against_invoice)],
+        ["Remaining Balance", _money(remaining_balance)],
+        ["Payment Status", payment_status],
+    ])
 
     summary = Table(summary_rows, colWidths=[165, 95], hAlign="RIGHT")
     summary.setStyle(
@@ -350,26 +378,6 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
         )
     )
     
-    # Fetch partial payments history
-    payments_history = []
-    invoice_id = payload.get("id")
-    if factory_id and invoice_id:
-        db = SessionLocal()
-        try:
-            bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice_id).first()
-            if bill:
-                collections = db.query(PaymentCollection).filter(PaymentCollection.outstanding_bill_id == bill.id).order_by(PaymentCollection.collection_date.asc()).all()
-                for col in collections:
-                    payments_history.append([
-                        col.collection_date.isoformat(),
-                        col.payment_mode,
-                        _money(col.amount_collected)
-                    ])
-        except Exception:
-            logger.warning("Error fetching payments in PDF build", exc_info=True)
-        finally:
-            db.close()
-
     story.extend([bottom_table, Spacer(1, 15)])
 
     notes = str(payload.get("notes") or "").strip()
@@ -380,22 +388,32 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
             Spacer(1, 12),
         ])
 
+    history_header = ParagraphStyle(
+        "HistoryHeader",
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=12,
+        textColor=colors.HexColor("#4C1D95")
+    )
+    story.append(Paragraph("<b>Payment History / Receipts</b>", history_header))
+    story.append(Spacer(1, 4))
+
     if payments_history:
-        history_header = ParagraphStyle(
-            "HistoryHeader",
-            fontName="Helvetica-Bold",
-            fontSize=10,
-            leading=12,
-            textColor=colors.HexColor("#4C1D95")
-        )
-        story.append(Paragraph("<b>Payment Collection History</b>", history_header))
-        story.append(Spacer(1, 4))
-        
-        history_rows = [["Date", "Payment Mode", "Amount Contributed"]]
-        for p in payments_history:
-            history_rows.append(p)
-            
-        history_table = Table(history_rows, colWidths=[150, 150, 220])
+        history_rows = [[
+            "Date", "Amount Paid", "Payment Mode", "Received By",
+            "Note / Reference", "Remaining After Payment",
+        ]]
+        for payment in payments_history:
+            history_rows.append([
+                _date_text(payment.get("date")),
+                _money(payment.get("amount_paid")),
+                str(payment.get("payment_mode") or "-"),
+                str(payment.get("received_by") or "-"),
+                str(payment.get("note_reference") or "-"),
+                _money(payment.get("remaining_after_payment")),
+            ])
+
+        history_table = Table(history_rows, colWidths=[62, 72, 68, 92, 130, 96], repeatRows=1)
         history_table.setStyle(
             TableStyle(
                 [
@@ -405,14 +423,19 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
                     ("FONTSIZE", (0, 0), (-1, -1), 8),
                     ("PADDING", (0, 0), (-1, -1), 5),
-                    ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+                    ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+                    ("ALIGN", (5, 1), (5, -1), "RIGHT"),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ]
             )
         )
         story.append(history_table)
         story.append(Spacer(1, 15))
     else:
-        story.append(Spacer(1, 20))
+        story.extend([
+            Paragraph("No payment received against this invoice yet.", company_text_style),
+            Spacer(1, 15),
+        ])
     
     # Signatory line
     sig_style = ParagraphStyle(

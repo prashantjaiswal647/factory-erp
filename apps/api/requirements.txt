@@ -21,6 +21,7 @@ razorpay
 httpx<0.28
 pytest
 reportlab
+pypdf
 fastapi-mail
 redis
 Pillow

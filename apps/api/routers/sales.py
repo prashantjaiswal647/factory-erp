@@ -2155,18 +2155,7 @@ def download_invoice_pdf(
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
-    bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice.id).first()
-    payload = invoice.payload_json or {}
-    if "invoice" in payload:
-        if bill:
-            payload["invoice"]["amount_paid"] = float(bill.amount_paid)
-            payload["invoice"]["customer_total_due"] = float(bill.balance_amount)
-        else:
-            payload["invoice"]["amount_paid"] = float(invoice.amount_paid)
-            payload["invoice"]["customer_total_due"] = float(invoice.customer_total_due)
-        payload["id"] = invoice.id
-
-    pdf_bytes = build_invoice_pdf_bytes(payload)
+    pdf_bytes = _invoice_pdf_snapshot(db, invoice)
     invoice.pdf_generated_count = (invoice.pdf_generated_count or 0) + 1
     invoice.last_pdf_generated_at = datetime.now(timezone.utc)
     db.add(
@@ -2200,14 +2189,58 @@ def _invoice_for_factory(db: Session, factory_id: int, invoice_document_id: int)
 
 
 def _invoice_pdf_snapshot(db: Session, invoice: InvoiceDocument) -> bytes:
-    bill = db.query(OutstandingBill).filter(OutstandingBill.invoice_document_id == invoice.id).first()
+    bill = db.query(OutstandingBill).filter(
+        OutstandingBill.factory_id == invoice.factory_id,
+        OutstandingBill.invoice_document_id == invoice.id,
+    ).first()
     payload = dict(invoice.payload_json or {})
     payload["id"] = invoice.id
     invoice_payload = dict(payload.get("invoice") or {})
     invoice_payload["amount_paid"] = float(bill.amount_paid if bill else invoice.amount_paid)
     invoice_payload["customer_total_due"] = float(bill.balance_amount if bill else invoice.customer_total_due)
     payload["invoice"] = invoice_payload
+    payload["invoice_total"] = float(bill.bill_amount if bill else invoice.bill_total)
+    payload["total_paid_against_invoice"] = float(bill.amount_paid if bill else invoice.amount_paid)
+    payload["remaining_balance"] = float(bill.balance_amount if bill else invoice.customer_total_due)
+    payload["payment_history"] = _invoice_payment_history(db, invoice, bill)
     return build_invoice_pdf_bytes(payload)
+
+
+def _invoice_payment_history(
+    db: Session,
+    invoice: InvoiceDocument,
+    bill: OutstandingBill | None,
+) -> list[dict[str, object]]:
+    if bill is None:
+        return []
+
+    collections = (
+        db.query(PaymentCollection)
+        .filter(
+            PaymentCollection.factory_id == invoice.factory_id,
+            PaymentCollection.outstanding_bill_id == bill.id,
+        )
+        .order_by(PaymentCollection.collection_date.asc(), PaymentCollection.created_at.asc(), PaymentCollection.id.asc())
+        .all()
+    )
+    remaining = to_money(bill.bill_amount)
+    history = []
+    for collection in collections:
+        allocated = to_money(collection.amount_collected)
+        remaining = max(to_money(remaining - allocated), Decimal("0.00"))
+        receiver = collection.created_by
+        receiver_name = receiver.full_name or receiver.username if receiver else None
+        receiver_role = receiver.role if receiver else None
+        received_by = " ".join(part for part in [receiver_role, receiver_name] if part) or "System"
+        history.append({
+            "date": collection.collection_date,
+            "amount_paid": allocated,
+            "payment_mode": collection.payment_mode,
+            "received_by": received_by,
+            "note_reference": collection.reference_number or "-",
+            "remaining_after_payment": remaining,
+        })
+    return history
 
 
 def _record_invoice_delivery(
