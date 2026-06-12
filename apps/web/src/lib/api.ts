@@ -723,6 +723,9 @@ export type CustomerSearchResult = {
   previous_due?: number;
   opening_outstanding?: number;
   current_outstanding?: number;
+  opening_outstanding_remaining?: number;
+  invoice_outstanding_remaining?: number;
+  manual_adjustment_remaining?: number;
   opening_outstanding_note?: string | null;
   opening_outstanding_date?: string | null;
   advance_balance?: number;
@@ -807,11 +810,20 @@ export type OutstandingBill = {
   amount_paid: string;
   remaining_balance: string;
   status: string;
+  source_type?: "opening_outstanding" | "invoice" | "manual_adjustment" | string;
+  source_label?: string;
+  stock_impact?: boolean;
+  note?: string | null;
   payments?: BillPaymentLog[];
 };
 
 export type OutstandingResponse = {
   grand_total_outstanding: string;
+  source_totals?: {
+    opening_outstanding: string;
+    invoice: string;
+    manual_adjustment: string;
+  };
   customers: OutstandingCustomer[];
 };
 
@@ -1209,6 +1221,45 @@ export interface CollectionWarRoomResponse {
   aging_buckets: CollectionWarRoomAgingBucket;
   high_risk_customers: number;
   due_trend: CollectionWarRoomDueTrendPoint[];
+  total_due_customers?: number;
+  source_totals?: {
+    opening_outstanding: number;
+    invoice: number;
+    manual_adjustment: number;
+  };
+  customer_advances?: number;
+}
+
+export type CustomerLedgerEntry = {
+  date_time: string;
+  type: string;
+  debit: string;
+  credit: string;
+  amount: string;
+  running_balance: string;
+  source: string;
+  created_by?: string | null;
+  notes?: string | null;
+  stock_impact: boolean;
+};
+
+export function getCustomerLedger(customerId: number) {
+  return api.get<{ customer_id: number; customer_name: string; current_balance: string; entries: CustomerLedgerEntry[] }>(
+    `/api/sales/customers/${customerId}/ledger`,
+  );
+}
+
+export function updateOpeningOutstanding(customerId: number, openingId: number, newAmount: number, reason: string) {
+  return api.patch(`/api/sales/customers/${customerId}/opening-outstanding/${openingId}`, {
+    new_amount: newAmount,
+    reason,
+  });
+}
+
+export function deleteOpeningOutstanding(customerId: number, openingId: number, reason: string) {
+  return api.delete(`/api/sales/customers/${customerId}/opening-outstanding/${openingId}`, {
+    params: { reason },
+  });
 }
 
 export function getCollectionWarRoom() {

@@ -1,9 +1,8 @@
 import { Check, Edit, FileText, Search, UserRound, Share2, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 
-import { createCustomerLedgerAdjustment, createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, updateSalesCustomer } from "../lib/api";
-import type { CustomerCreate, CustomerSearchResult, CustomerUpdate } from "../lib/api";
+import { createCustomerLedgerAdjustment, createSalesCustomer, searchCustomers, generateCustomerPortalLink, deleteDashboardCustomer, getCustomerLedger, updateSalesCustomer } from "../lib/api";
+import type { CustomerCreate, CustomerLedgerEntry, CustomerSearchResult, CustomerUpdate } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { formatMoney, toNumber } from "../lib/format";
 
@@ -26,7 +25,6 @@ const initialForm: CustomerCreate = {
 };
 
 export default function CustomersPage() {
-  const navigate = useNavigate();
   const { refreshVersion, triggerDataRefresh } = useDataRefresh();
   const [form, setForm] = useState<CustomerCreate>(initialForm);
   const [toast, setToast] = useState("");
@@ -51,6 +49,9 @@ export default function CustomersPage() {
   const [adjustmentReason, setAdjustmentReason] = useState("");
   const [adjustmentError, setAdjustmentError] = useState("");
   const [isAdjusting, setIsAdjusting] = useState(false);
+  const [ledgerCustomer, setLedgerCustomer] = useState<CustomerSearchResult | null>(null);
+  const [ledgerEntries, setLedgerEntries] = useState<CustomerLedgerEntry[]>([]);
+  const [isLedgerLoading, setIsLedgerLoading] = useState(false);
 
   async function handleSharePortal(customer: CustomerSearchResult) {
     setSharingCustomer(customer);
@@ -175,6 +176,18 @@ export default function CustomersPage() {
       setAdjustmentError(typeof detail === "string" ? detail : "Balance adjustment failed.");
     } finally {
       setIsAdjusting(false);
+    }
+  }
+
+  async function openLedger(customer: CustomerSearchResult) {
+    setLedgerCustomer(customer);
+    setLedgerEntries([]);
+    setIsLedgerLoading(true);
+    try {
+      const response = await getCustomerLedger(customer.id);
+      setLedgerEntries(response.data.entries || []);
+    } finally {
+      setIsLedgerLoading(false);
     }
   }
 
@@ -363,6 +376,9 @@ export default function CustomersPage() {
                           <div className="min-w-0">
                             <span className="text-xs font-medium uppercase text-zinc-400 lg:hidden">Net Balance</span>
                             <div className="break-words text-sm font-semibold text-zinc-800">{netBalanceText}</div>
+                            <div className="mt-1 text-[10px] leading-4 text-zinc-500">
+                              Old {formatMoney(customer.opening_outstanding_remaining || 0)} · Invoice {formatMoney(customer.invoice_outstanding_remaining || 0)} · Manual {formatMoney(customer.manual_adjustment_remaining || 0)}
+                            </div>
                             <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeColor}`}>
                               {statusText}
                             </span>
@@ -377,7 +393,7 @@ export default function CustomersPage() {
                               Portal
                             </button>
                             <button
-                              onClick={() => navigate("/outstanding")}
+                              onClick={() => void openLedger(customer)}
                               className="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
                               type="button"
                             >
@@ -549,6 +565,52 @@ export default function CustomersPage() {
                 {isAdjusting ? "Updating..." : "Confirm Adjustment"}
               </button>
             </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {ledgerCustomer && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-[95vw] max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-zinc-200 p-5">
+              <div>
+                <h3 className="text-lg font-bold text-zinc-950">Customer Ledger</h3>
+                <p className="text-sm text-zinc-500">{ledgerCustomer.name}</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-md border border-zinc-200" type="button" onClick={() => setLedgerCustomer(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto overflow-x-hidden p-5">
+              {isLedgerLoading ? (
+                <p className="text-sm text-zinc-500">Loading ledger...</p>
+              ) : ledgerEntries.length === 0 ? (
+                <p className="text-sm text-zinc-500">No ledger entries.</p>
+              ) : (
+                <div className="space-y-3">
+                  {ledgerEntries.map((entry, index) => (
+                    <div key={`${entry.source}-${entry.date_time}-${index}`} className="grid min-w-0 gap-2 rounded-lg border border-zinc-200 p-4 md:grid-cols-[140px_minmax(0,1fr)_120px_120px]">
+                      <div className="text-xs text-zinc-500">{new Date(entry.date_time).toLocaleString("en-IN")}</div>
+                      <div className="min-w-0">
+                        <div className="font-semibold capitalize text-zinc-900">{entry.type.replace(/_/g, " ")}</div>
+                        <div className="break-words text-xs text-zinc-500">{entry.source} · {entry.notes || "No notes"}</div>
+                        <div className="text-[10px] text-zinc-400">By {entry.created_by || "System"} · Stock impact: {entry.stock_impact ? "Yes" : "No"}</div>
+                      </div>
+                      <div className="text-sm">
+                        <span className="block text-[10px] uppercase text-zinc-400">{Number(entry.debit) > 0 ? "Debit" : "Credit"}</span>
+                        <span className={Number(entry.debit) > 0 ? "font-semibold text-red-700" : "font-semibold text-emerald-700"}>
+                          {formatMoney(Number(entry.debit) > 0 ? entry.debit : entry.credit)}
+                        </span>
+                      </div>
+                      <div className="text-sm font-semibold text-zinc-900">
+                        <span className="block text-[10px] uppercase text-zinc-400">Running Balance</span>
+                        {formatMoney(entry.running_balance)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

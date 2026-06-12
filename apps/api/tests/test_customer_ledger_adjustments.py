@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -10,8 +11,18 @@ from sqlalchemy.pool import StaticPool
 
 from db import Base
 from models import Customer, CustomerLedgerAdjustment, Factory, OutstandingBill, User
-from routers.sales import LedgerAdjustmentCreate, create_customer_adjustment
-from services.accounting import create_outstanding_bill, sync_customer_balance_from_bills
+from routers.sales import (
+    LedgerAdjustmentCreate,
+    OpeningOutstandingCreate,
+    OpeningOutstandingUpdate,
+    create_customer_adjustment,
+    create_opening_outstanding,
+    delete_opening_outstanding,
+    get_customer_ledger,
+    get_sales_outstanding,
+    update_opening_outstanding,
+)
+from services.accounting import apply_payment_to_outstanding_bills, create_outstanding_bill, sync_customer_balance_from_bills
 
 
 def _db():
@@ -160,3 +171,85 @@ def test_adjustment_reason_is_required():
             amount=Decimal("100.00"),
             reason="   ",
         )
+
+
+def test_opening_outstanding_is_source_aware_editable_and_soft_deletable():
+    db = _db()
+    customer = _setup_customer(db)
+    owner = _owner()
+    created = create_opening_outstanding(
+        customer.id,
+        OpeningOutstandingCreate(amount=Decimal("10000.00"), date=date.today(), reason="Old bill balance"),
+        owner,
+        db,
+    )
+    bill = db.query(OutstandingBill).filter(OutstandingBill.id == created.id).one()
+    assert bill.source_type == "opening_outstanding"
+    assert bill.invoice_document_id is None
+    assert bill.order_id is None
+
+    updated = update_opening_outstanding(
+        customer.id,
+        bill.id,
+        OpeningOutstandingUpdate(new_amount=Decimal("8000.00"), reason="Onboarding correction"),
+        owner,
+        db,
+    )
+    assert updated.difference == Decimal("-2000.00")
+    assert updated.stock_impact is False
+
+    deleted = delete_opening_outstanding(customer.id, bill.id, "Duplicate old balance", owner, db)
+    assert deleted.customer_total_outstanding == Decimal("0.00")
+    db.refresh(bill)
+    assert bill.deleted_at is not None
+    assert bill.status == "cancelled"
+
+
+def test_payment_allocation_prioritizes_opening_before_older_invoice():
+    db = _db()
+    customer = _setup_customer(db)
+    invoice = create_outstanding_bill(
+        db, factory_id=1, customer_id=customer.id, source_type="invoice",
+        tracking_number="INV-OLD", bill_date=date.today() - timedelta(days=30),
+        bill_amount=Decimal("5000.00"),
+    )
+    opening = create_outstanding_bill(
+        db, factory_id=1, customer_id=customer.id, source_type="opening_outstanding",
+        tracking_number="OPEN-NEWER", bill_date=date.today(), bill_amount=Decimal("10000.00"),
+    )
+    apply_payment_to_outstanding_bills(
+        db, factory_id=1, customer_id=customer.id, amount=Decimal("12000.00"),
+        payment_mode="Cash", collection_date=date.today(), created_by_user_id=1,
+    )
+    assert opening.balance_amount == Decimal("0.00")
+    assert invoice.balance_amount == Decimal("3000.00")
+    assert sum(payment.amount_allocated for payment in opening.payments) == Decimal("10000.00")
+    assert sum(payment.amount_allocated for payment in invoice.payments) == Decimal("2000.00")
+
+
+def test_outstanding_grouping_and_customer_ledger_timeline():
+    db = _db()
+    customer = _setup_customer(db)
+    owner = _owner()
+    create_opening_outstanding(
+        customer.id,
+        OpeningOutstandingCreate(amount=Decimal("1000.00"), reason="Old balance"),
+        owner,
+        db,
+    )
+    create_customer_adjustment(
+        customer.id,
+        LedgerAdjustmentCreate(adjustment_type="add_balance", amount=Decimal("500.00"), reason="Rate correction"),
+        owner,
+        db,
+    )
+    response = get_sales_outstanding(owner, db)
+    assert response.source_totals["opening_outstanding"] == Decimal("1000.00")
+    assert response.source_totals["manual_adjustment"] == Decimal("500.00")
+    labels = {bill.source_label for bill in response.customers[0].bills}
+    assert "Opening Outstanding / Old Balance" in labels
+    assert "Manual Adjustment" in labels
+
+    ledger = get_customer_ledger(customer.id, owner, db)
+    assert ledger["current_balance"] == Decimal("1500.00")
+    assert {entry["type"] for entry in ledger["entries"]} >= {"opening_outstanding", "manual_adjustment"}

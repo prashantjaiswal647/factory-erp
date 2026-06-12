@@ -347,6 +347,18 @@ Follow this sequence unless a P0 incident overrides it.
 - `invoice_delivery_logs` records download, reprint, Telegram, and email activity without changing invoice accounting data.
 - Invoice PDFs and delivery/history endpoints must always verify `factory_id`.
 
+## 23A. Source-Aware Customer Ledger
+
+- `outstanding_bills` is the canonical receivable source ledger; do not create a parallel balance table that double-counts it.
+- Canonical source types are `opening_outstanding`, `invoice`, and `manual_adjustment`; legacy `opening_balance` rows remain readable and migrate in place.
+- Opening outstanding is onboarding debt, never a generated invoice, and never changes stock.
+- Opening outstanding edit/delete requires a reason, is audit logged, and delete is soft through `deleted_at`.
+- Customer payments allocate in this order: opening outstanding, oldest invoice, manual adjustment, then other/newer receivables.
+- `BillPayment` and `PaymentCollection.outstanding_bill_id` preserve source-level allocation history.
+- Manual adjustments and payments never change stock. Only invoice creation and explicit invoice mistake reversal may change finished-goods stock.
+- `/api/sales/outstanding` returns source labels, stock-impact flags, and source totals.
+- `/api/sales/customers/{customer_id}/ledger` is the factory-scoped customer ledger timeline.
+
 ## 24. Telegram Nested ERP Menu
 
 - `/menu` displays exactly four top-level inline buttons: Dekho, Kaam Karo, Alerts, and Settings.

@@ -496,6 +496,11 @@ def get_collection_war_room(current_user=Depends(get_current_active_user), db: S
 
     total_outstanding = Decimal("0.00")
     overdue_amount = Decimal("0.00")
+    source_totals = {
+        "opening_outstanding": Decimal("0.00"),
+        "invoice": Decimal("0.00"),
+        "manual_adjustment": Decimal("0.00"),
+    }
     
     # Buckets initialization
     aging_buckets = {
@@ -511,6 +516,10 @@ def get_collection_war_room(current_user=Depends(get_current_active_user), db: S
 
     for bill in bills:
         total_outstanding += bill.balance_amount
+        source = "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type
+        if source not in source_totals:
+            source = "invoice"
+        source_totals[source] += bill.balance_amount
         days_old = (today - bill.bill_date).days
 
         # Overdue logic (older than standard 15 days credit term)
@@ -577,6 +586,13 @@ def get_collection_war_room(current_user=Depends(get_current_active_user), db: S
         ],
         "aging_buckets": {k: float(v) for k, v in aging_buckets.items()},
         "high_risk_customers": high_risk_count,
+        "total_due_customers": len(customer_dues),
+        "source_totals": {k: float(v) for k, v in source_totals.items()},
+        "customer_advances": float(
+            db.query(sql_func.coalesce(sql_func.sum(Customer.advance_balance), 0))
+            .filter(Customer.factory_id == factory_id)
+            .scalar() or 0
+        ),
         "due_trend": due_trend
     }
 

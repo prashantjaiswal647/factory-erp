@@ -1018,7 +1018,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                     db.query(OutstandingBill)
                     .filter(OutstandingBill.factory_id == factory_id)
                     .filter(OutstandingBill.customer_id == customer.id)
-                    .filter(OutstandingBill.source_type == "opening_balance")
+                    .filter(OutstandingBill.source_type.in_(("opening_balance", "opening_outstanding")))
                     .first()
                 )
                 if not open_bill:
@@ -1026,7 +1026,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                         db,
                         factory_id=factory_id,
                         customer_id=customer.id,
-                        source_type="opening_balance",
+                        source_type="opening_outstanding",
                         tracking_number=f"OPEN-{customer.id}",
                         bill_date=date.today(),
                         bill_amount=previous_due,

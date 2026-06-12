@@ -1156,12 +1156,20 @@ class OutstandingBill(TenantMixin, Base):
     amount_paid = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     balance_amount = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     status = Column(String(50), nullable=False, default="active", server_default="active", index=True)
+    note = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    deletion_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     customer = relationship("Customer")
     order = relationship("Order")
     invoice_document = relationship("InvoiceDocument")
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+    updated_by = relationship("User", foreign_keys=[updated_by_user_id])
     payments = relationship("BillPayment", back_populates="bill", cascade="all, delete-orphan")
 
     __table_args__ = (

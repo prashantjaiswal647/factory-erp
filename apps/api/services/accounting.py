@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
-from sqlalchemy import func as sql_func
+from sqlalchemy import case, func as sql_func
 from sqlalchemy.orm import Session
 
 from models import Customer, OutstandingBill, PaymentCollection, BillPayment, User
@@ -28,6 +28,8 @@ def create_outstanding_bill(
     source_type: str = "invoice",
     order_id: int | None = None,
     invoice_document_id: int | None = None,
+    note: str | None = None,
+    created_by_user_id: int | None = None,
 ) -> OutstandingBill | None:
     bill_total = to_money(bill_amount)
     paid = min(to_money(amount_paid), bill_total)
@@ -47,6 +49,8 @@ def create_outstanding_bill(
         amount_paid=paid,
         balance_amount=balance,
         status="closed" if balance <= 0 else "active",
+        note=note,
+        created_by_user_id=created_by_user_id,
     )
     db.add(bill)
     db.flush()
@@ -60,6 +64,7 @@ def active_customer_outstanding(db: Session, factory_id: int | str, customer_id:
         .filter(OutstandingBill.customer_id == customer_id)
         .filter(OutstandingBill.balance_amount > 0)
         .filter(OutstandingBill.status.in_(ACTIVE_BILL_STATUSES))
+        .filter(OutstandingBill.deleted_at.is_(None))
         .scalar()
     )
 
@@ -92,12 +97,19 @@ def apply_payment_to_outstanding_bills(
         .filter(OutstandingBill.customer_id == customer_id)
         .filter(OutstandingBill.balance_amount > 0)
         .filter(OutstandingBill.status.in_(ACTIVE_BILL_STATUSES))
+        .filter(OutstandingBill.deleted_at.is_(None))
         .with_for_update()
     )
     if selected_order_id is not None:
         query = query.filter(OutstandingBill.order_id == selected_order_id)
 
-    bills = query.order_by(OutstandingBill.bill_date.asc(), OutstandingBill.id.asc()).all()
+    source_priority = case(
+        (OutstandingBill.source_type.in_(("opening_outstanding", "opening_balance")), 1),
+        (OutstandingBill.source_type == "invoice", 2),
+        (OutstandingBill.source_type == "manual_adjustment", 3),
+        else_=4,
+    )
+    bills = query.order_by(source_priority.asc(), OutstandingBill.bill_date.asc(), OutstandingBill.id.asc()).all()
     if selected_order_id is not None and not bills:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outstanding bill not found")
     if selected_order_id is not None and bills and remaining > to_money(bills[0].balance_amount):

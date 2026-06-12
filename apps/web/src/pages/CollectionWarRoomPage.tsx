@@ -365,6 +365,11 @@ export default function CollectionWarRoomPage() {
           }
         />
       </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Card label="Opening Old Balances" value={inr(data.source_totals?.opening_outstanding)} hint="No stock impact" />
+        <Card label="Invoice Outstanding" value={inr(data.source_totals?.invoice)} hint="Generated invoices" />
+        <Card label="Manual Adjustments" value={inr(data.source_totals?.manual_adjustment)} hint="No stock impact" />
+      </div>
 
       {/* Due trend chart */}
       <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">

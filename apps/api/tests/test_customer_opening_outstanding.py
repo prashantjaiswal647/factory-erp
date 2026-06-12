@@ -50,7 +50,7 @@ def test_customer_creation_balances():
     bill = db.query(OutstandingBill).filter(OutstandingBill.customer_id == c1.id).first()
     assert bill is not None
     assert bill.bill_amount == Decimal("1000.00")
-    assert bill.source_type == "opening_balance"
+    assert bill.source_type == "opening_outstanding"
 
     # 2. Customer create with advance_balance
     payload = CustomerCreate(

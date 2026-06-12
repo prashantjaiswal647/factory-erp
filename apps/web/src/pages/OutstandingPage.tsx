@@ -1,7 +1,7 @@
 import { BellRing, ChevronDown, IndianRupee, Search, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { clearOutstandingBill, createCustomerLedgerAdjustment, getOutstandingDues, recordPayment, sendOutstandingReminder } from "../lib/api";
+import { clearOutstandingBill, createCustomerLedgerAdjustment, deleteOpeningOutstanding, getOutstandingDues, recordPayment, sendOutstandingReminder, updateOpeningOutstanding } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import type { OutstandingBill, OutstandingCustomer, PaymentCreate } from "../lib/api";
@@ -160,6 +160,42 @@ export default function OutstandingPage() {
     }
   }
 
+  async function editOpeningBalance(row: OutstandingCustomer, bill: OutstandingBill) {
+    const current = toNumber(bill.bill_amount);
+    const amountText = window.prompt(
+      `Old Opening Outstanding: ${formatMoney(current)}\nStock impact: No\nEnter corrected original amount:`,
+      String(current),
+    );
+    if (amountText === null) return;
+    const newAmount = Number(amountText);
+    if (!Number.isFinite(newAmount) || newAmount < 0) {
+      setError("Enter a valid opening outstanding amount.");
+      return;
+    }
+    const reason = window.prompt("Reason for changing old onboarding outstanding:");
+    if (!reason?.trim()) return;
+    const newNet = toNumber(row.current_pending_balance) + (newAmount - current);
+    if (!window.confirm(
+      `Customer: ${row.customer_name}\nOld Opening Outstanding: ${formatMoney(current)}\nNew Opening Outstanding: ${formatMoney(newAmount)}\nDifference: ${formatMoney(newAmount - current)}\nNew Net Balance: ${formatMoney(newNet)}\n\nThis is an old onboarding outstanding, not a generated invoice. Stock will not change.`,
+    )) return;
+    await updateOpeningOutstanding(row.customer_id, bill.bill_id || 0, newAmount, reason.trim());
+    setToast("Opening outstanding updated. Stock was not changed.");
+    triggerDataRefresh();
+    await load();
+  }
+
+  async function removeOpeningBalance(row: OutstandingCustomer, bill: OutstandingBill) {
+    const reason = window.prompt("Reason for deleting old onboarding outstanding:");
+    if (!reason?.trim()) return;
+    if (!window.confirm(
+      `You are deleting old onboarding outstanding. This will reduce customer receivable by ${formatMoney(bill.remaining_balance)}. No stock will be changed.`,
+    )) return;
+    await deleteOpeningOutstanding(row.customer_id, bill.bill_id || 0, reason.trim());
+    setToast("Opening outstanding deleted. Stock was not changed.");
+    triggerDataRefresh();
+    await load();
+  }
+
   function initiateDeleteBill(row: OutstandingCustomer, bill: OutstandingBill) {
     if (!canDeleteOutstanding) {
       setError("Access Denied: Only the Factory Owner is authorized to delete entries.");
@@ -301,7 +337,7 @@ export default function OutstandingPage() {
                           <table className="min-w-full divide-y divide-zinc-200 text-sm">
                             <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
                               <tr>
-                                <th className="px-4 py-3">Order ID</th>
+                                <th className="px-4 py-3">Source</th>
                                 <th className="px-4 py-3">Date</th>
                                 <th className="px-4 py-3 text-right">Bill Amount</th>
                                 <th className="px-4 py-3 text-right">Remaining</th>
@@ -314,7 +350,12 @@ export default function OutstandingPage() {
                                 return (
                                   <div key={bill.bill_id ?? bill.order_id} style={{ display: "contents" }}>
                                     <tr className={isHistoryExpanded ? "bg-zinc-50/30" : ""}>
-                                      <td className="px-4 py-3 font-medium text-zinc-950">#{bill.order_id ?? bill.bill_id}</td>
+                                      <td className="px-4 py-3 font-medium text-zinc-950">
+                                        <div>{bill.source_label || "Generated Invoice"}</div>
+                                        <div className="text-[10px] font-normal text-zinc-500">
+                                          {bill.stock_impact ? "Stock impact: Yes" : "Stock impact: No"}
+                                        </div>
+                                      </td>
                                       <td className="px-4 py-3 text-zinc-600">{formatDateTime(bill.order_date)}</td>
                                       <td className="px-4 py-3 text-right text-zinc-700">{money(bill.bill_amount)}</td>
                                       <td className="px-4 py-3 text-right font-semibold text-red-700">{money(bill.remaining_balance)}</td>
@@ -332,9 +373,15 @@ export default function OutstandingPage() {
                                             {isHistoryExpanded ? "Hide History" : "History"}
                                           </button>
                                           <button className="rounded-md bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700" type="button" onClick={() => openPaymentModal(row, bill)}>
-                                            Pay Bill
+                                            {bill.source_type === "opening_outstanding" ? "Add Payment" : "Pay"}
                                           </button>
-                                          {canDeleteOutstanding ? (
+                                          {canDeleteOutstanding && bill.source_type === "opening_outstanding" ? (
+                                            <>
+                                              <button className="rounded-md border border-zinc-200 px-3 py-2 text-xs font-semibold" type="button" onClick={() => void editOpeningBalance(row, bill)}>Edit</button>
+                                              <button className="rounded-md border border-red-200 px-3 py-2 text-xs font-semibold text-red-700" type="button" onClick={() => void removeOpeningBalance(row, bill)}>Delete</button>
+                                            </>
+                                          ) : null}
+                                          {canDeleteOutstanding && bill.source_type !== "opening_outstanding" ? (
                                             <button className="grid h-8 w-8 place-items-center rounded-md text-red-600 hover:bg-red-50" type="button" title="Clear outstanding bill" onClick={() => initiateDeleteBill(row, bill)}>
                                               <Trash2 className="h-4 w-4" />
                                             </button>

@@ -362,6 +362,9 @@ class CustomerSearchResponse(BaseModel):
     previous_due: Decimal = Decimal("0.00")
     opening_outstanding: Decimal = Decimal("0.00")
     current_outstanding: Decimal = Decimal("0.00")
+    opening_outstanding_remaining: Decimal = Decimal("0.00")
+    invoice_outstanding_remaining: Decimal = Decimal("0.00")
+    manual_adjustment_remaining: Decimal = Decimal("0.00")
     opening_outstanding_note: str | None = None
     opening_outstanding_date: date | None = None
     advance_balance: Decimal = Decimal("0.00")
@@ -446,6 +449,10 @@ class OutstandingBillResponse(BaseModel):
     amount_paid: Decimal
     remaining_balance: Decimal
     status: str
+    source_type: str = "invoice"
+    source_label: str = "Invoice"
+    stock_impact: bool = False
+    note: str | None = None
     payments: list[BillPaymentLogResponse] = []
 
 
@@ -459,11 +466,15 @@ class OutstandingCustomerBillsResponse(BaseModel):
     current_pending_balance: Decimal
     opening_outstanding: Decimal = Decimal("0.00")
     advance_balance: Decimal = Decimal("0.00")
+    opening_outstanding_remaining: Decimal = Decimal("0.00")
+    invoice_outstanding_remaining: Decimal = Decimal("0.00")
+    manual_adjustment_remaining: Decimal = Decimal("0.00")
     bills: list[OutstandingBillResponse]
 
 
 class SalesOutstandingResponse(BaseModel):
     grand_total_outstanding: Decimal
+    source_totals: dict[str, Decimal] = {}
     customers: list[OutstandingCustomerBillsResponse]
 
 
@@ -1442,7 +1453,7 @@ def create_sales_customer(
                     db,
                     factory_id=current_user.factory_id,
                     customer_id=customer.id,
-                    source_type="opening_balance",
+                    source_type="opening_outstanding",
                     tracking_number=f"OPEN-{customer.id}",
                     bill_date=payload.opening_outstanding_date or datetime.now(timezone.utc).date(),
                     bill_amount=opening_due,
@@ -1613,7 +1624,7 @@ def update_sales_customer(
             db.query(OutstandingBill)
             .filter(OutstandingBill.factory_id == current_user.factory_id)
             .filter(OutstandingBill.customer_id == customer.id)
-            .filter(OutstandingBill.source_type == "opening_balance")
+            .filter(OutstandingBill.source_type.in_(("opening_balance", "opening_outstanding")))
             .first()
         )
         if open_bill:
@@ -1628,7 +1639,7 @@ def update_sales_customer(
                 db,
                 factory_id=current_user.factory_id,
                 customer_id=customer.id,
-                source_type="opening_balance",
+                source_type="opening_outstanding",
                 tracking_number=f"OPEN-{customer.id}",
                 bill_date=payload.opening_outstanding_date or datetime.now(timezone.utc).date(),
                 bill_amount=new_opening,
@@ -1748,8 +1759,29 @@ def search_customers(
             )
         )
     customers = query.order_by(Customer.name.asc()).limit(20).all()
-    return [
-        CustomerSearchResponse(
+    results = []
+    for customer in customers:
+        source_rows = (
+            db.query(
+                OutstandingBill.source_type,
+                sql_func.coalesce(sql_func.sum(OutstandingBill.balance_amount), 0),
+            )
+            .filter(
+                OutstandingBill.factory_id == int(current_user.factory_id),
+                OutstandingBill.customer_id == customer.id,
+                OutstandingBill.deleted_at.is_(None),
+                OutstandingBill.status.in_(("active", "partial")),
+            )
+            .group_by(OutstandingBill.source_type)
+            .all()
+        )
+        source_map = {"opening_outstanding": Decimal("0.00"), "invoice": Decimal("0.00"), "manual_adjustment": Decimal("0.00")}
+        for source_type, amount in source_rows:
+            source = "opening_outstanding" if source_type in ("opening_balance", "opening_outstanding") else source_type
+            if source not in source_map:
+                source = "invoice"
+            source_map[source] += to_money(amount)
+        results.append(CustomerSearchResponse(
             id=customer.id,
             name=customer.name,
             place=customer.place or customer.address or "",
@@ -1764,9 +1796,11 @@ def search_customers(
             advance_balance=customer.advance_balance,
             advance_balance_note=customer.advance_balance_note,
             advance_balance_date=customer.advance_balance_date,
-        )
-        for customer in customers
-    ]
+            opening_outstanding_remaining=source_map["opening_outstanding"],
+            invoice_outstanding_remaining=source_map["invoice"],
+            manual_adjustment_remaining=source_map["manual_adjustment"],
+        ))
+    return results
 
 
 @router.get("/bill-customers", response_model=list[BillCustomerOption])
@@ -2576,12 +2610,18 @@ def get_sales_outstanding(
         .filter(factory_id_filter(OutstandingBill.factory_id, current_user.factory_id))
         .filter(OutstandingBill.balance_amount > 0)
         .filter(OutstandingBill.status.in_(["active", "partial"]))
+        .filter(OutstandingBill.deleted_at.is_(None))
         .order_by(OutstandingBill.customer_id.asc(), OutstandingBill.bill_date.asc(), OutstandingBill.id.asc())
         .all()
     )
     if ledger_bills:
         grouped: dict[int, OutstandingCustomerBillsResponse] = {}
         grand_total = Decimal("0.00")
+        source_totals = {
+            "opening_outstanding": Decimal("0.00"),
+            "invoice": Decimal("0.00"),
+            "manual_adjustment": Decimal("0.00"),
+        }
         for bill in ledger_bills:
             if bill.customer is None:
                 continue
@@ -2603,6 +2643,15 @@ def get_sales_outstanding(
             row.total_bill_amount = to_money(row.total_bill_amount + to_money(bill.bill_amount))
             row.total_paid = to_money(row.total_paid + to_money(bill.amount_paid))
             row.current_pending_balance = to_money(row.current_pending_balance + to_money(bill.balance_amount))
+            normalized_source = "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type
+            if normalized_source == "opening_outstanding":
+                row.opening_outstanding_remaining = to_money(row.opening_outstanding_remaining + bill.balance_amount)
+            elif normalized_source == "manual_adjustment":
+                row.manual_adjustment_remaining = to_money(row.manual_adjustment_remaining + bill.balance_amount)
+            else:
+                row.invoice_outstanding_remaining = to_money(row.invoice_outstanding_remaining + bill.balance_amount)
+                normalized_source = "invoice"
+            source_totals[normalized_source] = to_money(source_totals[normalized_source] + bill.balance_amount)
             row.bills.append(
                 OutstandingBillResponse(
                     bill_id=bill.id,
@@ -2612,6 +2661,13 @@ def get_sales_outstanding(
                     amount_paid=to_money(bill.amount_paid),
                     remaining_balance=to_money(bill.balance_amount),
                     status=bill.status,
+                    source_type=normalized_source,
+                    source_label={
+                        "opening_outstanding": "Opening Outstanding / Old Balance",
+                        "manual_adjustment": "Manual Adjustment",
+                    }.get(normalized_source, "Generated Invoice"),
+                    stock_impact=normalized_source == "invoice",
+                    note=bill.note,
                     payments=[
                         BillPaymentLogResponse(
                             id=p.id,
@@ -2647,7 +2703,11 @@ def get_sales_outstanding(
                     advance_balance=to_money(cust.advance_balance or 0),
                     bills=[],
                 )
-        return SalesOutstandingResponse(grand_total_outstanding=grand_total, customers=list(grouped.values()))
+        return SalesOutstandingResponse(
+            grand_total_outstanding=grand_total,
+            source_totals=source_totals,
+            customers=list(grouped.values()),
+        )
 
     orders = (
         db.query(Order)
@@ -3382,6 +3442,246 @@ class LedgerAdjustmentResponse(BaseModel):
     reason: str
 
 
+class OpeningOutstandingCreate(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+    opening_date: date | None = Field(default=None, alias="date")
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Reason is required")
+        return cleaned
+
+
+class OpeningOutstandingUpdate(BaseModel):
+    new_amount: Decimal = Field(..., ge=0)
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_update_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Reason is required")
+        return cleaned
+
+
+class OpeningOutstandingResponse(BaseModel):
+    id: int
+    previous_outstanding: Decimal
+    new_outstanding: Decimal
+    difference: Decimal
+    customer_total_outstanding: Decimal
+    stock_impact: bool = False
+
+
+@router.post("/customers/{customer_id}/opening-outstanding", response_model=OpeningOutstandingResponse)
+def create_opening_outstanding(
+    customer_id: int,
+    payload: OpeningOutstandingCreate,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = db.query(Customer).filter(
+        factory_id_filter(Customer.factory_id, current_user.factory_id),
+        Customer.id == customer_id,
+    ).with_for_update().first()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    previous = active_customer_outstanding(db, current_user.factory_id, customer.id)
+    bill = create_outstanding_bill(
+        db,
+        factory_id=current_user.factory_id,
+        customer_id=customer.id,
+        source_type="opening_outstanding",
+        tracking_number=f"OPEN-{customer.id}-{int(datetime.now(timezone.utc).timestamp())}",
+        bill_date=payload.opening_date or datetime.now(timezone.utc).date(),
+        bill_amount=payload.amount,
+        note=payload.reason,
+        created_by_user_id=current_user.id,
+    )
+    customer.previous_due = to_money(customer.previous_due) + to_money(payload.amount)
+    customer.opening_outstanding_note = payload.reason
+    customer.opening_outstanding_date = payload.opening_date or datetime.now(timezone.utc).date()
+    new_total = sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+    log_activity(
+        db, int(current_user.factory_id), current_user.id,
+        current_user.full_name or current_user.username, current_user.role,
+        "OPENING_OUTSTANDING_CREATED", f"Opening outstanding added for {customer.name}",
+        "opening_outstanding", bill.id,
+        {"old_balance": float(previous), "amount": float(payload.amount), "new_balance": float(new_total), "reason": payload.reason},
+    )
+    db.commit()
+    return OpeningOutstandingResponse(
+        id=bill.id, previous_outstanding=previous, new_outstanding=payload.amount,
+        difference=payload.amount, customer_total_outstanding=new_total,
+    )
+
+
+@router.patch("/customers/{customer_id}/opening-outstanding/{opening_id}", response_model=OpeningOutstandingResponse)
+def update_opening_outstanding(
+    customer_id: int,
+    opening_id: int,
+    payload: OpeningOutstandingUpdate,
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = db.query(Customer).filter(
+        factory_id_filter(Customer.factory_id, current_user.factory_id), Customer.id == customer_id
+    ).with_for_update().first()
+    bill = db.query(OutstandingBill).filter(
+        OutstandingBill.factory_id == int(current_user.factory_id),
+        OutstandingBill.customer_id == customer_id,
+        OutstandingBill.id == opening_id,
+        OutstandingBill.source_type.in_(("opening_balance", "opening_outstanding")),
+        OutstandingBill.deleted_at.is_(None),
+    ).with_for_update().first()
+    if customer is None or bill is None:
+        raise HTTPException(status_code=404, detail="Opening outstanding not found")
+    paid = to_money(bill.amount_paid)
+    if payload.new_amount < paid:
+        raise HTTPException(status_code=400, detail="Opening outstanding cannot be lower than amount already paid")
+    old_original = to_money(bill.bill_amount)
+    old_total = active_customer_outstanding(db, current_user.factory_id, customer.id)
+    bill.bill_amount = to_money(payload.new_amount)
+    bill.balance_amount = to_money(payload.new_amount) - paid
+    bill.status = "closed" if bill.balance_amount <= 0 else ("partial" if paid > 0 else "active")
+    bill.note = payload.reason
+    bill.updated_by_user_id = current_user.id
+    customer.previous_due = max(Decimal("0.00"), to_money(customer.previous_due) + (to_money(payload.new_amount) - old_original))
+    new_total = sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+    log_activity(
+        db, int(current_user.factory_id), current_user.id,
+        current_user.full_name or current_user.username, current_user.role,
+        "OPENING_OUTSTANDING_UPDATED", f"Opening outstanding updated for {customer.name}",
+        "opening_outstanding", bill.id,
+        {"old_value": float(old_original), "new_value": float(payload.new_amount), "old_balance": float(old_total), "new_balance": float(new_total), "reason": payload.reason},
+    )
+    db.commit()
+    return OpeningOutstandingResponse(
+        id=bill.id, previous_outstanding=old_original, new_outstanding=payload.new_amount,
+        difference=to_money(payload.new_amount) - old_original, customer_total_outstanding=new_total,
+    )
+
+
+@router.delete("/customers/{customer_id}/opening-outstanding/{opening_id}", response_model=OpeningOutstandingResponse)
+def delete_opening_outstanding(
+    customer_id: int,
+    opening_id: int,
+    reason: str = Query(..., min_length=1),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = db.query(Customer).filter(
+        factory_id_filter(Customer.factory_id, current_user.factory_id), Customer.id == customer_id
+    ).with_for_update().first()
+    bill = db.query(OutstandingBill).filter(
+        OutstandingBill.factory_id == int(current_user.factory_id),
+        OutstandingBill.customer_id == customer_id,
+        OutstandingBill.id == opening_id,
+        OutstandingBill.source_type.in_(("opening_balance", "opening_outstanding")),
+        OutstandingBill.deleted_at.is_(None),
+    ).with_for_update().first()
+    if customer is None or bill is None:
+        raise HTTPException(status_code=404, detail="Opening outstanding not found")
+    if to_money(bill.amount_paid) > 0:
+        raise HTTPException(status_code=400, detail="Paid opening outstanding cannot be deleted; reduce it instead")
+    old_total = active_customer_outstanding(db, current_user.factory_id, customer.id)
+    removed = to_money(bill.balance_amount)
+    bill.deleted_at = datetime.now(timezone.utc)
+    bill.deleted_by_user_id = current_user.id
+    bill.deletion_reason = reason.strip()
+    bill.status = "cancelled"
+    customer.previous_due = max(Decimal("0.00"), to_money(customer.previous_due) - to_money(bill.bill_amount))
+    new_total = sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+    log_activity(
+        db, int(current_user.factory_id), current_user.id,
+        current_user.full_name or current_user.username, current_user.role,
+        "OPENING_OUTSTANDING_DELETED", f"Opening outstanding deleted for {customer.name}",
+        "opening_outstanding", bill.id,
+        {"removed": float(removed), "old_balance": float(old_total), "new_balance": float(new_total), "reason": reason.strip(), "stock_impact": False},
+    )
+    db.commit()
+    return OpeningOutstandingResponse(
+        id=bill.id, previous_outstanding=removed, new_outstanding=Decimal("0.00"),
+        difference=-removed, customer_total_outstanding=new_total,
+    )
+
+
+@router.get("/customers/{customer_id}/ledger")
+def get_customer_ledger(
+    customer_id: int,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = db.query(Customer).filter(
+        factory_id_filter(Customer.factory_id, current_user.factory_id), Customer.id == customer_id
+    ).first()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    bills = db.query(OutstandingBill).options(joinedload(OutstandingBill.payments)).filter(
+        OutstandingBill.factory_id == int(current_user.factory_id),
+        OutstandingBill.customer_id == customer_id,
+    ).order_by(OutstandingBill.created_at.asc(), OutstandingBill.id.asc()).all()
+    entries = []
+    running = Decimal("0.00")
+    for bill in bills:
+        source = "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type
+        running += to_money(bill.bill_amount)
+        entries.append({
+            "date_time": bill.created_at, "type": source, "debit": to_money(bill.bill_amount),
+            "credit": Decimal("0.00"), "amount": to_money(bill.bill_amount), "running_balance": to_money(running),
+            "source": bill.tracking_number, "created_by": getattr(bill.created_by, "username", None),
+            "notes": bill.note, "stock_impact": source == "invoice",
+        })
+        for payment in sorted(bill.payments or [], key=lambda item: (item.payment_date, item.id)):
+            running -= to_money(payment.amount_allocated)
+            entries.append({
+                "date_time": payment.created_at, "type": "payment_allocation", "debit": Decimal("0.00"),
+                "credit": to_money(payment.amount_allocated), "amount": to_money(payment.amount_allocated),
+                "running_balance": to_money(running), "source": bill.tracking_number,
+                "created_by": payment.received_by_name, "notes": f"Allocated to {source}", "stock_impact": False,
+            })
+        if bill.deleted_at is not None:
+            running -= to_money(bill.balance_amount)
+            entries.append({
+                "date_time": bill.deleted_at, "type": "opening_outstanding_deleted",
+                "debit": Decimal("0.00"), "credit": to_money(bill.balance_amount),
+                "amount": to_money(bill.balance_amount), "running_balance": to_money(running),
+                "source": bill.tracking_number, "created_by": None,
+                "notes": bill.deletion_reason, "stock_impact": False,
+            })
+    from models import CustomerLedgerAdjustment
+    adjustments = db.query(CustomerLedgerAdjustment).filter(
+        CustomerLedgerAdjustment.factory_id == int(current_user.factory_id),
+        CustomerLedgerAdjustment.customer_id == customer_id,
+    ).order_by(CustomerLedgerAdjustment.created_at.asc(), CustomerLedgerAdjustment.id.asc()).all()
+    for adjustment in adjustments:
+        if adjustment.adjustment_type == "add_balance" and adjustment.linked_bill_id is not None:
+            continue
+        entries.append({
+            "date_time": adjustment.created_at,
+            "type": adjustment.adjustment_type,
+            "debit": to_money(adjustment.amount) if adjustment.adjustment_type == "add_balance" else Decimal("0.00"),
+            "credit": to_money(adjustment.amount) if adjustment.adjustment_type == "reduce_balance" else Decimal("0.00"),
+            "amount": to_money(adjustment.amount),
+            "running_balance": None,
+            "source": f"ADJ-{adjustment.id}",
+            "created_by": adjustment.created_by_name,
+            "notes": adjustment.reason,
+            "stock_impact": False,
+        })
+    entries.sort(key=lambda entry: (entry["date_time"] or datetime.min.replace(tzinfo=timezone.utc), entry["source"]))
+    running = Decimal("0.00")
+    for entry in entries:
+        running += to_money(entry["debit"]) - to_money(entry["credit"])
+        entry["running_balance"] = max(Decimal("0.00"), to_money(running))
+    return {"customer_id": customer.id, "customer_name": customer.name, "current_balance": active_customer_outstanding(db, current_user.factory_id, customer.id), "entries": entries}
+
+
 @router.post("/customers/{customer_id}/ledger-adjustments", response_model=LedgerAdjustmentResponse)
 def create_customer_adjustment(
     customer_id: int,
@@ -3438,6 +3738,8 @@ def create_customer_adjustment(
                 bill_date=datetime.now(timezone.utc).date(),
                 bill_amount=payload.amount,
                 amount_paid=Decimal("0.00"),
+                note=payload.reason,
+                created_by_user_id=current_user.id,
             )
             adjustment.linked_bill_id = manual_bill.id if manual_bill is not None else None
         else:
