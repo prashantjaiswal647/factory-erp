@@ -209,6 +209,26 @@ def average_bottom_weight_per_roll(bottom_stock: BottomStock) -> Decimal:
     return to_qty(total_weight / Decimal(total_rolls))
 
 
+def require_available_stock(material: str, available, required, unit: str) -> None:
+    available_value = Decimal(str(available or 0))
+    required_value = Decimal(str(required or 0))
+    if required_value <= available_value:
+        return
+
+    def display(value: Decimal) -> str:
+        return format(value.normalize(), "f")
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"Insufficient {material} Stock.\n"
+            f"Available: {display(available_value)} {unit}\n"
+            f"Required: {display(required_value)} {unit}\n"
+            "Please update inventory first."
+        ),
+    )
+
+
 def mark_worker_present_for_production(
     db: Session,
     *,
@@ -345,28 +365,6 @@ def create_daily_production(
             .with_for_update()
             .first()
         )
-        if blank_stock is None:
-            # Copy weight_per_bora_kg from an existing same-size blank stock if available
-            existing_same_size = (
-                db.query(BlankStock)
-                .filter(BlankStock.factory_id == factory_id)
-                .filter(BlankStock.blank_size_ml == product_size_ml)
-                .filter(BlankStock.weight_per_bora_kg > 0)
-                .first()
-            )
-            fallback_weight = existing_same_size.weight_per_bora_kg if existing_same_size else Decimal("20.000")
-            blank_stock = BlankStock(
-                factory_id=factory_id,
-                blank_size_ml=product_size_ml,
-                variety=variety,
-                linked_bottom_size_mm=machine_bottom_size_mm,
-                weight_per_bora_kg=fallback_weight,
-                total_boras=Decimal("0.000"),
-                total_qty_kg=Decimal("0.000"),
-            )
-            db.add(blank_stock)
-            db.flush()
-
         bottom_stock = (
             db.query(BottomStock)
             .filter(BottomStock.factory_id == factory_id)
@@ -375,31 +373,21 @@ def create_daily_production(
             .with_for_update()
             .first()
         )
-        if bottom_stock is None:
-            bottom_stock = BottomStock(
-                factory_id=factory_id,
-                bottom_size_mm=machine_bottom_size_mm,
-                variety=variety,
-                total_qty_kg=Decimal("0.000"),
-            )
-            db.add(bottom_stock)
-            db.flush()
-
         blank_used_bori = to_qty(payload.blank_used_bori)
-        blank_weight_per_bora = to_qty(blank_stock.weight_per_bora_kg)
+        blank_weight_per_bora = to_qty(blank_stock.weight_per_bora_kg if blank_stock is not None else 0)
         if blank_weight_per_bora <= 0 and blank_used_bori > 0:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Blank stock weight_per_bora_kg is not configured for this size",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Blank stock weight per bora is not configured for this size. Please update inventory first.",
             )
         blank_used_kg = to_qty(blank_used_bori * blank_weight_per_bora)
 
         bottom_used_rolls = payload.bottom_used_rolls or 0
         bottom_weight_per_roll = Decimal("0.000")
         if bottom_used_rolls > 0:
-            if bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
+            if bottom_stock is not None and bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
                 bottom_weight_per_roll = to_qty(Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag))
-            else:
+            elif bottom_stock is not None:
                 bottom_weight_per_roll = average_bottom_weight_per_roll(bottom_stock)
         bottom_used_kg = to_qty(Decimal(bottom_used_rolls) * bottom_weight_per_roll)
 
@@ -417,7 +405,7 @@ def create_daily_production(
             )
             if blank_yield and blank_yield.pieces_per_kg > 0:
                 blank_used_kg = to_qty(total_pieces / Decimal(blank_yield.pieces_per_kg))
-                if blank_stock.weight_per_bora_kg and blank_stock.weight_per_bora_kg > 0:
+                if blank_stock is not None and blank_stock.weight_per_bora_kg and blank_stock.weight_per_bora_kg > 0:
                     blank_used_bori = to_qty(blank_used_kg / Decimal(blank_stock.weight_per_bora_kg))
 
         # 2. Bottom Stock BOM Fallback
@@ -431,10 +419,57 @@ def create_daily_production(
             )
             if bottom_yield and bottom_yield.pieces_per_kg > 0:
                 bottom_used_kg = to_qty(total_pieces / Decimal(bottom_yield.pieces_per_kg))
-                if bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
+                if bottom_stock is not None and bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:
                     bottom_weight_per_roll = Decimal(bottom_stock.bag_weight_kg) / Decimal(bottom_stock.rolls_per_bag)
                     if bottom_weight_per_roll > 0:
                         bottom_used_rolls = int(bottom_used_kg / bottom_weight_per_roll)
+
+        require_available_stock(
+            "Blank",
+            blank_stock.total_qty_kg if blank_stock is not None else 0,
+            blank_used_kg,
+            "kg",
+        )
+        if blank_used_bori > 0:
+            require_available_stock(
+                "Blank",
+                blank_stock.total_boras if blank_stock is not None else 0,
+                blank_used_bori,
+                "boras",
+            )
+        require_available_stock(
+            "Bottom",
+            bottom_stock.total_qty_kg if bottom_stock is not None else 0,
+            bottom_used_kg,
+            "kg",
+        )
+        require_available_stock(
+            "Bottom",
+            bottom_stock.total_rolls if bottom_stock is not None else 0,
+            bottom_used_rolls,
+            "rolls",
+        )
+
+        if blank_stock is None:
+            blank_stock = BlankStock(
+                factory_id=factory_id,
+                blank_size_ml=product_size_ml,
+                variety=variety,
+                linked_bottom_size_mm=machine_bottom_size_mm,
+                total_boras=Decimal("0.000"),
+                total_qty_kg=Decimal("0.000"),
+            )
+            db.add(blank_stock)
+        if bottom_stock is None:
+            bottom_stock = BottomStock(
+                factory_id=factory_id,
+                bottom_size_mm=machine_bottom_size_mm,
+                variety=variety,
+                total_rolls=0,
+                total_weight_kg=Decimal("0.000"),
+                total_qty_kg=Decimal("0.000"),
+            )
+            db.add(bottom_stock)
 
         blank_after = to_qty(blank_stock.total_qty_kg) - blank_used_kg
         bottom_after = to_qty(bottom_stock.total_qty_kg) - bottom_used_kg
@@ -482,16 +517,17 @@ def create_daily_production(
             .with_for_update()
             .first()
         )
+        box_stock_available = box_stock.total_boxes if box_stock is not None else 0
+        require_available_stock("Box", box_stock_available, boxes_packed_this_entry, "boxes")
         if box_stock is None:
             box_stock = BoxStock(
                 factory_id=factory_id,
                 packaging_size_name=packaging_size_name.strip(),
                 total_boxes=0,
+                quantity=0,
             )
             db.add(box_stock)
-            db.flush()
-
-        box_stock_after = (box_stock.total_boxes or 0) - boxes_packed_this_entry
+        box_stock_after = box_stock_available - boxes_packed_this_entry
         total_raw_material_kg = to_qty(blank_used_kg + bottom_used_kg)
         wastage_kg = to_qty(payload.wastage_kg)
         wastage_limit = to_qty(total_raw_material_kg * Decimal("0.02"))

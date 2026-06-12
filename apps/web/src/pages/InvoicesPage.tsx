@@ -1,7 +1,7 @@
 import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X, Mail, Send, Printer, Search, Archive } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { deleteInvoice, downloadInvoicePdf, downloadMonthlyInvoices, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
+import { deleteInvoice, downloadInvoicePdf, downloadMonthlyInvoices, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api, hardDeleteInvoice } from "../lib/api";
 import type { InvoiceDashboardResponse, InvoiceDeliveryHistoryItem, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toNumber } from "../lib/format";
@@ -107,9 +107,12 @@ export default function InvoicesPage() {
   const [deleteTarget, setDeleteTarget] = useState<InvoiceDocumentSummary | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteAction, setDeleteAction] = useState<"reverse" | "archive">("reverse");
+  const [deleteAction, setDeleteAction] = useState<"reverse" | "archive" | "hard_delete">("reverse");
   const [showAllocations, setShowAllocations] = useState(false);
   const [showBulkDownload, setShowBulkDownload] = useState(false);
+  const [hardDeleteReason, setHardDeleteReason] = useState("");
+  const [confirmTestCheckbox, setConfirmTestCheckbox] = useState(false);
+  const [reversePayments, setReversePayments] = useState(true);
   const [bulkMonth, setBulkMonth] = useState(new Date().getMonth() + 1);
   const [bulkYear, setBulkYear] = useState(new Date().getFullYear());
   const [bulkType, setBulkType] = useState<"all" | "tax_invoice" | "bill_of_supply" | "simple_bill_of_supply">("all");
@@ -263,6 +266,32 @@ export default function InvoicesPage() {
 
   async function confirmDeleteInvoice() {
     if (!deleteTarget) return;
+    if (deleteAction === "hard_delete") {
+      if (deleteConfirmation !== deleteTarget.invoice_number) return;
+      if (!confirmTestCheckbox) return;
+      if (!hardDeleteReason.trim()) return;
+      setIsDeleting(true);
+      try {
+        await hardDeleteInvoice(deleteTarget.id, {
+          reason: hardDeleteReason,
+          confirm_invoice_number: deleteConfirmation,
+          confirm_test_invoice: confirmTestCheckbox,
+          reverse_payments: reversePayments,
+        });
+        setMessage(`Invoice ${deleteTarget.invoice_number} permanently deleted.`);
+        setDeleteTarget(null);
+        setDeleteConfirmation("");
+        setHardDeleteReason("");
+        setConfirmTestCheckbox(false);
+        await loadInvoices();
+        await loadCustomers();
+      } catch (error) {
+        setMessage(apiErrorMessage(error));
+      } finally {
+        setIsDeleting(false);
+      }
+      return;
+    }
     const requiredConf = deleteAction === "archive" ? "ARCHIVE INVOICE" : "DELETE INVOICE";
     if (deleteConfirmation !== requiredConf) return;
     setIsDeleting(true);
@@ -639,15 +668,14 @@ export default function InvoicesPage() {
                             <Mail className="h-4 w-4" /> Email
                           </button>
                           {user?.role === "Owner" ? (
-                            toNumber(invoice.customer_total_due) <= 0 && toNumber(invoice.bill_total) > 0 ? (
+                            <>
                               <button className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("archive"); setShowAllocations(false); }}>
                                 <Archive className="h-4 w-4" /> Archive Invoice
                               </button>
-                            ) : (
-                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 px-2 text-xs font-semibold text-red-700 hover:bg-red-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("reverse"); setShowAllocations(false); }}>
-                                <Trash2 className="h-4 w-4" /> Delete Invoice
+                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 px-2 text-xs font-semibold text-red-700 hover:bg-red-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("hard_delete"); setHardDeleteReason(""); setConfirmTestCheckbox(false); setReversePayments(true); }}>
+                                <Trash2 className="h-4 w-4" /> Delete Test Invoice
                               </button>
-                            )
+                            </>
                           ) : null}
                         </div>
                       </td>
@@ -741,7 +769,7 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {deleteTarget && (
+      {deleteTarget && deleteAction !== "hard_delete" && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 px-4 backdrop-blur-sm">
           <div className="w-full max-w-xl space-y-5 rounded-2xl bg-white p-6 shadow-2xl border border-zinc-100 animate-in fade-in duration-200">
             <div>
@@ -860,6 +888,111 @@ export default function InvoicesPage() {
                 onClick={() => void confirmDeleteInvoice()}
               >
                 {isDeleting ? "Processing..." : deleteAction === "archive" ? "Archive Invoice" : "Delete Invoice"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && deleteAction === "hard_delete" && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl space-y-5 rounded-2xl bg-white p-6 shadow-2xl border border-zinc-100 animate-in fade-in duration-200">
+            <div>
+              <h2 className="text-xl font-bold text-red-600 flex items-center gap-2">
+                <Trash2 className="h-5 w-5 text-red-600" />
+                Permanently Delete Invoice?
+              </h2>
+              <p className="text-xs text-zinc-500 mt-1">Invoice: #{deleteTarget.invoice_number} · Customer: {deleteTarget.customer_name}</p>
+            </div>
+
+            {/* Metrics summary */}
+            <div className="grid grid-cols-3 gap-3 bg-zinc-50 p-3 rounded-lg border border-zinc-100 text-center text-sm">
+              <div>
+                <div className="text-[10px] font-bold text-zinc-500 uppercase">Invoice Amount</div>
+                <div className="font-semibold text-zinc-800 mt-0.5">{money(deleteTarget.bill_total)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold text-zinc-500 uppercase">Total Paid</div>
+                <div className="font-semibold text-emerald-700 mt-0.5">{money(deleteTarget.amount_paid)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold text-zinc-500 uppercase">Outstanding</div>
+                <div className="font-semibold text-red-700 mt-0.5">{money(deleteTarget.customer_total_due)}</div>
+              </div>
+            </div>
+
+            {/* Warning text */}
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-1">
+              <p className="font-bold">⚠️ Warning</p>
+              <p>This invoice may already be part of accounting/payment records. If you delete it, invoice, payment allocation and outstanding history related to this invoice will be removed/reversed. Use this only for test or wrongly generated invoices.</p>
+            </div>
+
+            <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-900 space-y-1">
+              <p className="font-bold">⚠️ Secondary Warning</p>
+              <p>Deleting this invoice will allow this invoice number to be reused. Make sure this invoice was not shared with customer/accountant/GST records.</p>
+            </div>
+
+            {/* Form details */}
+            <div className="space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-600 mb-1">Mandatory Deletion Reason</label>
+                <textarea
+                  value={hardDeleteReason}
+                  onChange={(e) => setHardDeleteReason(e.target.value)}
+                  placeholder="Why are you deleting this invoice?"
+                  className="w-full rounded-md border border-zinc-300 p-2 text-sm outline-none focus:border-zinc-500"
+                  rows={2}
+                />
+              </div>
+
+              {toNumber(deleteTarget.amount_paid) > 0 && (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={reversePayments}
+                    onChange={(e) => setReversePayments(e.target.checked)}
+                    className="h-4 w-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
+                  />
+                  <span className="text-xs text-zinc-700">Reverse/delete payment allocations ({money(deleteTarget.amount_paid)} allocated)</span>
+                </label>
+              )}
+
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={confirmTestCheckbox}
+                  onChange={(e) => setConfirmTestCheckbox(e.target.checked)}
+                  className="h-4 w-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
+                />
+                <span className="text-xs text-zinc-700">I understand this is a test/wrong invoice and want to delete it.</span>
+              </label>
+
+              <label className="block">
+                <span className="block text-xs font-semibold text-zinc-700 mb-1">
+                  Type <span className="font-bold text-zinc-900">{deleteTarget.invoice_number}</span> to confirm
+                </span>
+                <input
+                  className="h-10 w-full rounded-md border border-zinc-300 px-3 text-sm focus:border-zinc-500 focus:outline-none"
+                  value={deleteConfirmation}
+                  onChange={(event) => setDeleteConfirmation(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold hover:bg-zinc-50 transition" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }}>Cancel</button>
+              <button
+                type="button"
+                disabled={
+                  deleteConfirmation !== deleteTarget.invoice_number ||
+                  isDeleting ||
+                  !confirmTestCheckbox ||
+                  !hardDeleteReason.trim()
+                }
+                className="h-10 rounded-md px-4 text-sm font-bold text-white transition disabled:bg-zinc-200 disabled:text-zinc-400 bg-red-600 hover:bg-red-700"
+                onClick={() => void confirmDeleteInvoice()}
+              >
+                {isDeleting ? "Processing..." : "Delete Invoice Permanently"}
               </button>
             </div>
           </div>

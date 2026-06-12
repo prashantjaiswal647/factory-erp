@@ -555,6 +555,13 @@ class InvoiceDeleteRequest(BaseModel):
     action: str | None = "reverse"  # "reverse" or "archive"
 
 
+class InvoiceHardDeleteRequest(BaseModel):
+    reason: str
+    confirm_invoice_number: str
+    confirm_test_invoice: bool
+    reverse_payments: bool = True
+
+
 class InvoiceDeliveryResponse(BaseModel):
     status: str
     channel: str
@@ -2689,6 +2696,248 @@ def delete_invoice_document(
         raise HTTPException(status_code=409, detail="Invoice could not be deleted safely") from exc
 
     return {"status": "deleted", "invoice_id": invoice_document_id, "invoice_number": invoice_number}
+
+
+@router.delete("/invoices/{invoice_id}/hard-delete")
+def hard_delete_invoice_document(
+    invoice_id: int,
+    payload: InvoiceHardDeleteRequest,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "Owner":
+        raise HTTPException(status_code=403, detail="Only Owner can delete invoices")
+    
+    if not payload.confirm_test_invoice:
+        raise HTTPException(status_code=422, detail="confirm_test_invoice must be true to verify test invoice deletion")
+    if not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="Deletion reason is mandatory")
+        
+    invoice = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, current_user.factory_id))
+        .filter(InvoiceDocument.id == invoice_id)
+        .with_for_update()
+        .first()
+    )
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    if payload.confirm_invoice_number != invoice.invoice_number:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invoice number confirmation mismatch: expected '{invoice.invoice_number}', got '{payload.confirm_invoice_number}'"
+        )
+        
+    if getattr(invoice, "accounting_locked", False) or invoice.exported_at or invoice.shared_at or invoice.emailed_at or invoice.printed_at:
+        raise HTTPException(status_code=409, detail="Invoice is locked for accounting and cannot be hard deleted. You can only archive or cancel it.")
+        
+    bill = db.query(OutstandingBill).filter(
+        factory_id_filter(OutstandingBill.factory_id, current_user.factory_id),
+        OutstandingBill.invoice_document_id == invoice.id,
+    ).with_for_update().first()
+
+    has_real_payment = False
+    if bill is not None:
+        if to_money(bill.amount_paid) > 0 or len(bill.payments) > 0:
+            has_real_payment = True
+        
+        coll_exists = db.query(PaymentCollection).filter(
+            PaymentCollection.factory_id == current_user.factory_id,
+            PaymentCollection.outstanding_bill_id == bill.id,
+        ).first()
+        if coll_exists is not None:
+            has_real_payment = True
+
+    payload_json = invoice.payload_json or {}
+    sale_ids = list((payload_json.get("invoice") or {}).get("sale_ids") or [])
+    item_rows = list(payload_json.get("items") or [])
+
+    if sale_ids:
+        sale_payments = db.query(Payment).filter(
+            factory_id_filter(Payment.factory_id, current_user.factory_id),
+            Payment.sale_id.in_(sale_ids),
+        ).all()
+        for sp in sale_payments:
+            if to_money(sp.amount_paid) > 0:
+                has_real_payment = True
+            coll_exists = db.query(PaymentCollection).filter(
+                PaymentCollection.factory_id == current_user.factory_id,
+                PaymentCollection.payment_id == sp.id,
+            ).first()
+            if coll_exists is not None:
+                has_real_payment = True
+
+    if has_real_payment and not payload.reverse_payments:
+        raise HTTPException(
+            status_code=409,
+            detail="Invoice has payment entries. Either allow reverse_payments or delete payments first."
+        )
+
+    # Determine if this is the latest invoice number
+    import re
+    match = re.search(r"(\d+)$", invoice.invoice_number or "")
+    is_latest = True
+    deleted_seq = None
+    if match:
+        deleted_seq = int(match.group(1))
+        prefix_part = invoice.invoice_number[:match.start()]
+        other_invoices = db.query(InvoiceDocument.invoice_number).filter(
+            InvoiceDocument.factory_id == current_user.factory_id,
+            InvoiceDocument.id != invoice.id,
+            InvoiceDocument.invoice_number.like(f"{prefix_part}%")
+        ).all()
+        for (other_num,) in other_invoices:
+            other_match = re.search(r"(\d+)$", other_num or "")
+            if other_match:
+                other_seq = int(other_match.group(1))
+                if other_seq > deleted_seq:
+                    is_latest = False
+                    break
+
+    if not is_latest:
+        raise HTTPException(
+            status_code=400,
+            detail="This is not the latest invoice. Deleting it will create a numbering gap. You can archive/cancel it instead, or super admin can reset sequence manually."
+        )
+
+    invoice_number = invoice.invoice_number
+    customer_name = invoice.customer_name
+    invoice_amount = to_money(invoice.bill_total)
+    customer_id = invoice.customer_id
+
+    try:
+        from models import CustomerLedgerAdjustment, BillPayment
+
+        if bill is not None:
+            # Delete BillPayment associations
+            db.query(BillPayment).filter(
+                BillPayment.factory_id == current_user.factory_id,
+                BillPayment.bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
+            # Delete customer ledger adjustments referencing this bill
+            db.query(CustomerLedgerAdjustment).filter(
+                CustomerLedgerAdjustment.factory_id == current_user.factory_id,
+                CustomerLedgerAdjustment.linked_bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
+            # Delete payment collections referencing this bill
+            db.query(PaymentCollection).filter(
+                PaymentCollection.factory_id == current_user.factory_id,
+                PaymentCollection.outstanding_bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
+            db.delete(bill)
+            db.flush()
+
+        db.query(InvoiceDeliveryLog).filter(
+            InvoiceDeliveryLog.factory_id == current_user.factory_id,
+            InvoiceDeliveryLog.invoice_document_id == invoice.id,
+        ).delete(synchronize_session=False)
+        db.delete(invoice)
+        db.flush()
+
+        if sale_ids:
+            # First find and delete collections referencing payments of these sales
+            sale_payment_ids = [p.id for p in db.query(Payment.id).filter(
+                factory_id_filter(Payment.factory_id, current_user.factory_id),
+                Payment.sale_id.in_(sale_ids),
+            ).all()]
+            if sale_payment_ids:
+                db.query(PaymentCollection).filter(
+                    PaymentCollection.factory_id == current_user.factory_id,
+                    PaymentCollection.payment_id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+                db.query(Payment).filter(
+                    factory_id_filter(Payment.factory_id, current_user.factory_id),
+                    Payment.id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+
+            db.query(DailySale).filter(
+                factory_id_filter(DailySale.factory_id, current_user.factory_id),
+                DailySale.id.in_(sale_ids),
+            ).delete(synchronize_session=False)
+
+        # Restore stock impact
+        from routers.inventory import recalculate_and_sync_sku_stock
+        seen_skus = set()
+        for item in item_rows:
+            sku = (
+                item.get("product_size_ml"),
+                (item.get("variety") or "").strip(),
+                (item.get("packaging_size_name") or "").strip(),
+            )
+            if not all(sku) or sku in seen_skus:
+                continue
+            seen_skus.add(sku)
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
+                product_size_ml=sku[0],
+                variety=sku[1],
+                packaging_size_name=sku[2],
+            )
+
+        # Update invoice sequence
+        if is_latest and deleted_seq is not None:
+            # Delete from RecycledInvoice if it exists
+            db.query(RecycledInvoice).filter(
+                RecycledInvoice.factory_id == current_user.factory_id,
+                RecycledInvoice.recycled_number == deleted_seq
+            ).delete(synchronize_session=False)
+
+            invoice_type = payload_json.get("document_policy", {}).get("legal_invoice_type") or "bill_of_supply"
+            attr = _invoice_counter_attr(invoice_type)
+            settings_attr = _settings_counter_attr(invoice_type)
+            settings = get_or_create_factory_settings(db, current_user.factory_id, for_update=True)
+            factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+            setattr(settings, settings_attr, deleted_seq)
+            setattr(factory, attr, deleted_seq)
+
+        if customer_id is not None:
+            customer = db.query(Customer).filter(
+                factory_id_filter(Customer.factory_id, current_user.factory_id),
+                Customer.id == customer_id,
+            ).first()
+            if customer is not None:
+                sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+
+        deleted_at = datetime.now(timezone.utc)
+        db.add(ActivityLog(
+            factory_id=int(current_user.factory_id),
+            event_type="invoice",
+            description=f"Invoice hard-deleted by owner. Reason: {payload.reason}",
+            log_date=deleted_at.date(),
+            user_id=current_user.id,
+            user_role=current_user.role,
+            user_name=current_user.full_name or current_user.username,
+            action_type="DELETE",
+            action_summary=f"Invoice {invoice_number} hard-deleted by owner. Reason: {payload.reason}",
+            entity_name=invoice_number,
+            entity_type="invoice",
+            entity_id=invoice_id,
+            short_statement="Invoice hard-deleted by owner",
+            committed_at=deleted_at,
+            metadata_json={
+                "invoice_number": invoice_number,
+                "customer_name": customer_name,
+                "amount": str(invoice_amount),
+                "deleted_by": current_user.full_name or current_user.username,
+                "deleted_at": deleted_at.isoformat(),
+                "reason": payload.reason,
+            },
+        ))
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Invoice hard-deletion failed: invoice_id=%s factory_id=%s", invoice_id, current_user.factory_id)
+        raise HTTPException(status_code=409, detail="Invoice could not be hard deleted safely") from exc
+
+    return {"status": "deleted", "invoice_id": invoice_id, "invoice_number": invoice_number}
 
 
 def _record_invoice_delivery(

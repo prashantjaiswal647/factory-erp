@@ -215,7 +215,7 @@ export default function ProductionPage() {
           : typeof detail === "string"
             ? detail
             : caught.message;
-        setError(`Production save failed: ${message}`);
+        setError(message);
       } else {
         console.error("daily production unexpected error", caught);
         setError(caught instanceof Error ? caught.message : "Production save failed");
@@ -368,6 +368,7 @@ export default function ProductionPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-5">
       {toast ? <Toast message={toast} onClose={() => setToast("")} /> : null}
+      {error ? <ErrorToast message={error} onClose={() => setError("")} /> : null}
       <header>
         <h1 className="text-2xl font-semibold text-zinc-950">Production Entry</h1>
         <p className="mt-1 text-sm text-zinc-500">Daily boxes, packets, sacks, and bottom rolls.</p>
@@ -761,6 +762,14 @@ function VariationSelectField({ label, value, options, onChange }: { label: stri
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   return (
     <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
+      {message}
+    </button>
+  );
+}
+
+function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <button className="fixed right-5 top-20 z-50 max-w-md whitespace-pre-line rounded-md bg-red-700 px-4 py-3 text-left text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
       {message}
     </button>
   );

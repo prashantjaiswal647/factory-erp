@@ -432,3 +432,104 @@ def test_e2e_erp_workflow(mock_n8n_sync):
         assert fp_stock.current_quantity == 5
     finally:
         db.close()
+
+
+def _production_payload(**overrides):
+    payload = {
+        "date": "2026-06-12",
+        "worker_id": 1,
+        "machine_id": 1,
+        "product_id": 1,
+        "product_size_ml": 250,
+        "variety": "Standard/White",
+        "packaging_size_name": "Box-1",
+        "pieces_per_packet": 100,
+        "packets_per_box_limit": 10,
+        "shift": "Day",
+        "total_boxes_made": 2,
+        "loose_packets_made": 0,
+        "blank_used_bori": 1,
+        "bottom_used_rolls": 2,
+        "wastage_kg": 0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _inventory_snapshot():
+    db = TestingSessionLocal()
+    try:
+        blank = db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one()
+        bottom = db.query(BottomStock).filter_by(factory_id=1, bottom_size_mm=52).one()
+        box = db.query(BoxStock).filter_by(factory_id=1, packaging_size_name="Box-1").one()
+        final = db.query(FinalProductStock).filter_by(factory_id=1, id=1).one()
+        return (
+            blank.total_qty_kg,
+            blank.total_boras,
+            bottom.total_qty_kg,
+            bottom.total_rolls,
+            box.total_boxes,
+            final.current_quantity,
+        )
+    finally:
+        db.close()
+
+
+def test_production_succeeds_with_exact_inventory():
+    db = TestingSessionLocal()
+    try:
+        blank = db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one()
+        blank.total_qty_kg = Decimal("20")
+        blank.total_boras = Decimal("1")
+        bottom = db.query(BottomStock).filter_by(factory_id=1, bottom_size_mm=52).one()
+        bottom.total_qty_kg = Decimal("10")
+        bottom.total_weight_kg = Decimal("10")
+        bottom.total_rolls = 2
+        box = db.query(BoxStock).filter_by(factory_id=1, packaging_size_name="Box-1").one()
+        box.total_boxes = 2
+        db.commit()
+    finally:
+        db.close()
+
+    ensure_testclient_compatibility()
+    response = TestClient(main_app).post("/api/production/daily", json=_production_payload())
+
+    assert response.status_code == 201
+    assert _inventory_snapshot()[:5] == (Decimal("0"), Decimal("0"), Decimal("0"), 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("stock_type", "expected_message"),
+    [
+        ("blank", "Insufficient Blank Stock."),
+        ("bottom", "Insufficient Bottom Stock."),
+        ("box", "Insufficient Box Stock."),
+    ],
+)
+def test_production_insufficient_inventory_returns_400_without_changes(stock_type, expected_message):
+    db = TestingSessionLocal()
+    try:
+        if stock_type == "blank":
+            db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one().total_boras = Decimal("0")
+        elif stock_type == "bottom":
+            db.query(BottomStock).filter_by(factory_id=1, bottom_size_mm=52).one().total_rolls = 1
+        else:
+            db.query(BoxStock).filter_by(factory_id=1, packaging_size_name="Box-1").one().total_boxes = 1
+        db.commit()
+    finally:
+        db.close()
+
+    before = _inventory_snapshot()
+    ensure_testclient_compatibility()
+    response = TestClient(main_app).post("/api/production/daily", json=_production_payload())
+
+    assert response.status_code == 400
+    assert expected_message in response.json()["detail"]
+    assert "Please update inventory first." in response.json()["detail"]
+    assert _inventory_snapshot() == before
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(DailyProduction).count() == 0
+    finally:
+        db.close()

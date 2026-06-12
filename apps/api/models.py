@@ -1106,6 +1106,11 @@ class InvoiceDocument(TenantMixin, Base):
     pdf_generated_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_pdf_generated_at = Column(DateTime(timezone=True), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    accounting_locked = Column(Boolean, nullable=False, default=False, server_default="false")
+    exported_at = Column(DateTime(timezone=True), nullable=True)
+    shared_at = Column(DateTime(timezone=True), nullable=True)
+    emailed_at = Column(DateTime(timezone=True), nullable=True)
+    printed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

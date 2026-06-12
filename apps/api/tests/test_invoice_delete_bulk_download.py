@@ -14,9 +14,11 @@ from db import Base
 from models import ActivityLog, Customer, Factory, InvoiceDocument, OutstandingBill
 from routers.sales import (
     InvoiceDeleteRequest,
+    InvoiceHardDeleteRequest,
     allocate_invoice_number,
     bulk_download_invoices,
     delete_invoice_document,
+    hard_delete_invoice_document,
 )
 
 
@@ -495,3 +497,241 @@ def test_paid_invoice_archive_and_reverse_behaviors():
     # 4. Archive has no stock change (stock is still 95, not restored to 100)
     recalculate_and_sync_sku_stock(db, str(factory.id), 250, "Plain White", "50Pcs")
     assert sku_stock.current_quantity == 95
+
+
+def test_invoice_hard_delete_flows():
+    db = _session()
+    
+    # 0. Setup Factory, Customer, and FinishedGoodsStock
+    factory = Factory(name="Hard Delete Factory", invoice_prefix="INV-", next_bill_of_supply_number=3)
+    db.add(factory)
+    db.flush()
+    
+    customer = Customer(factory_id=factory.id, name="Hard Delete Buyer", phone="9999999999")
+    db.add(customer)
+    db.flush()
+
+    from models import FinalProductStock
+    sku_stock = FinalProductStock(
+        factory_id=str(factory.id),
+        product_size_ml=250,
+        variety="Plain White",
+        packaging_size_name="50Pcs",
+        total_boxes=100,
+        loose_packets=0,
+        packets_per_box_limit=1000,
+        current_quantity=100,
+    )
+    db.add(sku_stock)
+    db.flush()
+
+    # 1. Latest unpaid invoice hard delete reuses number
+    invoice1 = _invoice(db, factory, customer, "INV-1", "bill_of_supply")
+    invoice2 = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+
+    # Manually simulate sequence progress
+    from routers.sales import get_or_create_factory_settings
+    settings = get_or_create_factory_settings(db, factory.id)
+    settings.bill_of_supply_start_seq = 3
+    factory.next_bill_of_supply_number = 3
+    db.commit()
+
+    assert settings.bill_of_supply_start_seq == 3
+
+    # hard delete latest invoice (INV-2)
+    response = hard_delete_invoice_document(
+        invoice2.id,
+        InvoiceHardDeleteRequest(
+            reason="Test deletion of latest invoice",
+            confirm_invoice_number="INV-2",
+            confirm_test_invoice=True,
+            reverse_payments=True
+        ),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    assert response["status"] == "deleted"
+    
+    # verify sequence is reset to 2
+    settings = get_or_create_factory_settings(db, factory.id)
+    assert settings.bill_of_supply_start_seq == 2
+
+    # 2. Latest paid test invoice hard delete removes allocations after confirmation
+    # Re-create INV-2
+    invoice2_new = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+    
+    # Add payment and allocation
+    from models import Payment, PaymentCollection, BillPayment
+    bill2 = db.query(OutstandingBill).filter_by(invoice_document_id=invoice2_new.id).first()
+    payment = Payment(
+        factory_id=factory.id,
+        customer_phone=customer.phone,
+        amount_paid=Decimal("500.00"),
+        payment_mode="Cash",
+        date=date(2026, 6, 12),
+    )
+    db.add(payment)
+    db.flush()
+
+    collection = PaymentCollection(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        payment_id=payment.id,
+        outstanding_bill_id=bill2.id,
+        amount_collected=Decimal("500.00"),
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 12),
+    )
+    db.add(collection)
+    db.flush()
+
+    # Delete with reverse_payments=True
+    response = hard_delete_invoice_document(
+        invoice2_new.id,
+        InvoiceHardDeleteRequest(
+            reason="Test delete paid invoice",
+            confirm_invoice_number="INV-2",
+            confirm_test_invoice=True,
+            reverse_payments=True
+        ),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    assert response["status"] == "deleted"
+    # Allocations are deleted
+    assert db.query(PaymentCollection).filter_by(outstanding_bill_id=bill2.id).first() is None
+    assert db.query(OutstandingBill).filter_by(id=bill2.id).first() is None
+
+    # 3. Non-latest invoice hard delete blocked
+    invoice2_three = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+    invoice3 = _invoice(db, factory, customer, "INV-3", "bill_of_supply")
+
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            invoice2_three.id,
+            InvoiceHardDeleteRequest(
+                reason="Attempt deleting middle invoice",
+                confirm_invoice_number="INV-2",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 400
+    assert "not the latest invoice" in err.value.detail
+
+    # 4. Archived/locked invoice cannot hard delete
+    invoice3.accounting_locked = True
+    db.commit()
+
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            invoice3.id,
+            InvoiceHardDeleteRequest(
+                reason="Attempt deleting locked invoice",
+                confirm_invoice_number="INV-3",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 409
+    assert "locked for accounting" in err.value.detail
+
+    # Revert lock for further tests
+    invoice3.accounting_locked = False
+    db.commit()
+
+    # 5. Stock restored on hard delete
+    # Let's set some payload_json showing it had line items
+    invoice3.payload_json = {
+        "invoice": {"sale_ids": [], "legal_invoice_type": "bill_of_supply"},
+        "items": [
+            {"product_size_ml": 250, "variety": "Plain White", "packaging_size_name": "50Pcs", "boxes_sold": 5}
+        ]
+    }
+    db.commit()
+    # decrease stock artificially to simulate creation impact
+    sku_stock.current_quantity = 95
+    db.commit()
+
+    response = hard_delete_invoice_document(
+        invoice3.id,
+        InvoiceHardDeleteRequest(
+            reason="Test stock restoration",
+            confirm_invoice_number="INV-3",
+            confirm_test_invoice=True,
+            reverse_payments=True
+        ),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    assert response["status"] == "deleted"
+    # verify stock is restored to 100
+    assert sku_stock.current_quantity == 100
+
+    # 6. Outstanding removed on hard delete
+    bill3 = db.query(OutstandingBill).filter_by(invoice_document_id=invoice3.id).first()
+    assert bill3 is None
+
+    # 7. Delete requires reason + invoice number typed
+    # Delete the invoice2_three first which is currently the latest (INV-2) in DB
+    hard_delete_invoice_document(
+        invoice2_three.id,
+        InvoiceHardDeleteRequest(
+            reason="Cleanup prior test invoice",
+            confirm_invoice_number="INV-2",
+            confirm_test_invoice=True,
+            reverse_payments=True
+        ),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+
+    invoice2_four = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+    
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            invoice2_four.id,
+            InvoiceHardDeleteRequest(
+                reason="",
+                confirm_invoice_number="INV-2",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 422
+
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            invoice2_four.id,
+            InvoiceHardDeleteRequest(
+                reason="Correct reason",
+                confirm_invoice_number="WRONG-NO",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 422
+
+    # 8. Supervisor cannot hard delete
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            invoice2_four.id,
+            InvoiceHardDeleteRequest(
+                reason="Correct reason",
+                confirm_invoice_number="INV-2",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id, role="Supervisor"),
+            db=db,
+        )
+    assert err.value.status_code == 403
+

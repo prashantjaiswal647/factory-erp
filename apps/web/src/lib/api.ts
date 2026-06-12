@@ -1112,6 +1112,21 @@ export function deleteInvoice(invoiceId: number, confirmation: string, action?: 
   );
 }
 
+export function hardDeleteInvoice(
+  invoiceId: number,
+  payload: {
+    reason: string;
+    confirm_invoice_number: string;
+    confirm_test_invoice: boolean;
+    reverse_payments: boolean;
+  }
+) {
+  return api.delete<{ status: string; invoice_id: number; invoice_number: string }>(
+    `/api/sales/invoices/${invoiceId}/hard-delete`,
+    { data: payload }
+  );
+}
+
 export function downloadMonthlyInvoices(
   month: number,
   year: number,
