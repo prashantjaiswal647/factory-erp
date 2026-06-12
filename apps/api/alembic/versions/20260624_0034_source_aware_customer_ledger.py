@@ -1,6 +1,6 @@
 """add source-aware outstanding metadata
 
-Revision ID: 0034_source_aware_customer_ledger
+Revision ID: 0034_customer_ledger
 Revises: 0033_customer_ledger_adjustments
 Create Date: 2026-06-24
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-revision = "0034_source_aware_customer_ledger"
+revision = "0034_customer_ledger"
 down_revision = "0033_customer_ledger_adjustments"
 branch_labels = None
 depends_on = None
