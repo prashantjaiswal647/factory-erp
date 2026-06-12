@@ -142,6 +142,10 @@ export default function OutstandingPage() {
       setError("Amount, reason, and confirmation are required.");
       return;
     }
+    if (payment.date && payment.date > new Date().toISOString().slice(0, 10)) {
+      setError("Payment date cannot be in the future.");
+      return;
+    }
     if (adjustmentType === "reduce_balance" && adjustmentAmount > toNumber(adjusting.current_pending_balance)) {
       setError("Reduction cannot exceed current outstanding.");
       return;
@@ -485,6 +489,10 @@ export default function OutstandingPage() {
             </div>
 
             <div className="mt-5 grid gap-4">
+              <label className="grid gap-1 text-sm font-medium text-zinc-700">
+                Payment Date
+                <input max={new Date().toISOString().slice(0, 10)} className="h-10 rounded-md border border-zinc-200 px-3" type="date" value={payment.date || ""} onChange={(event) => setPayment((current) => ({ ...current, date: event.target.value }))} />
+              </label>
               <label className="grid gap-1 text-sm font-medium text-zinc-700">
                 Amount Paid
                 <input className="h-10 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="number" value={payment.amount_paid === 0 ? "" : payment.amount_paid} onChange={(event) => setPayment((current) => ({ ...current, amount_paid: event.target.value === "" ? 0 : Number(event.target.value) }))} />

@@ -204,7 +204,7 @@ export default function InvoicesPage() {
   }
 
   async function sendEmail(invoice: InvoiceDocumentSummary) {
-    const email = window.prompt("Customer email address");
+    const email = window.prompt("Customer email address", invoice.customer_email || "");
     if (!email) return;
     setDeliveryId(invoice.id);
     try {

@@ -14,6 +14,7 @@ import {
   getCollectionWarRoom,
   sendCollectionWarRoomTelegramAlert,
   copyReminder,
+  confirmWarRoomPaid,
   markDone,
   snoozeCustomer,
   type CollectionWarRoomResponse,
@@ -283,6 +284,7 @@ export default function CollectionWarRoomPage() {
     (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_HIGH_RISK_THRESHOLD || 100000
   );
   const topCustomers = data.top_customers || [];
+  const verificationItems = data.verification_items || [];
 
   return (
     <div className="flex flex-col gap-5 p-4 md:p-6">
@@ -365,6 +367,31 @@ export default function CollectionWarRoomPage() {
           }
         />
       </div>
+      {verificationItems.some((item) => item.remaining <= 0) && (
+        <div className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-zinc-800">Paid - Awaiting Owner Confirmation</h2>
+          <div className="mt-3 space-y-3">
+            {verificationItems.filter((item) => item.remaining <= 0).map((item) => (
+              <div key={`${item.source_type}-${item.source_id}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+                <div>
+                  <div className="font-semibold">{item.customer_name} · {item.source_type.replace(/_/g, " ")}</div>
+                  <div className="text-xs text-zinc-500">Due {inr(item.original_due)} · Collected {inr(item.total_collected)} · By {item.collected_by || "System"}</div>
+                </div>
+                <button className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white" type="button" onClick={async () => {
+                  if (!window.confirm(`Confirm payment verification for ${item.customer_name}?\n\nThis will remove this item from Collection War Room. Ledger/payment history will remain unchanged.`)) return;
+                  try {
+                    await confirmWarRoomPaid(item.source_type, item.source_id);
+                    setToast({ kind: "ok", text: "Fully paid status verified." });
+                    await load();
+                  } catch (err) {
+                    setToast({ kind: "err", text: (err as any)?.response?.data?.detail || "Confirmation failed" });
+                  }
+                }}>Confirm Fully Paid</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card label="Opening Old Balances" value={inr(data.source_totals?.opening_outstanding)} hint="No stock impact" />
         <Card label="Invoice Outstanding" value={inr(data.source_totals?.invoice)} hint="Generated invoices" />

@@ -32,7 +32,7 @@ const navigation: NavigationItem[] = [
   { label: "Sales", href: "/sales", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Invoices", href: "/invoices", icon: FileText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
-  { label: "Collection War Room", href: "/collection-war-room", icon: TrendingDown, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Collection War Room", href: "/collection-war-room", icon: TrendingDown, roles: ["Owner"], section: "Revenue & Accounts" },
   { label: "Outstanding", href: "/outstanding", icon: Wallet, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner", "Sub-Owner"], section: "Admin" },

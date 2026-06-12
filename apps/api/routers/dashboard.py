@@ -484,15 +484,17 @@ def get_analytics_summary(
 
 @router.get("/collection-war-room")
 def get_collection_war_room(current_user=Depends(get_current_active_user), db: Session=Depends(get_db)):
+    if current_user.role != "Owner":
+        raise HTTPException(status_code=403, detail="Collection War Room is owner-only")
     factory_id = current_user.factory_id
     today = date.today()
 
     # Query active outstanding bills
     bills = db.query(OutstandingBill).filter(
         OutstandingBill.factory_id == factory_id,
-        OutstandingBill.status.in_(["active", "partial"]),
-        OutstandingBill.balance_amount > 0
+        OutstandingBill.owner_verification_status == "pending",
     ).all()
+    verification_items = []
 
     total_outstanding = Decimal("0.00")
     overdue_amount = Decimal("0.00")
@@ -515,6 +517,23 @@ def get_collection_war_room(current_user=Depends(get_current_active_user), db: S
     customer_dues = {}
 
     for bill in bills:
+        payments = sorted(bill.payments or [], key=lambda row: (row.payment_date, row.id))
+        verification_items.append({
+            "source_type": "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type,
+            "source_id": bill.id,
+            "customer_name": bill.customer.name,
+            "original_due": float(bill.bill_amount),
+            "total_collected": float(bill.amount_paid),
+            "remaining": float(bill.balance_amount),
+            "collected_by": ", ".join(dict.fromkeys(
+                f"{row.received_by_role or ''} {row.received_by_name or ''}".strip() or "System"
+                for row in payments
+            )),
+            "payment_dates": [row.payment_date.isoformat() for row in payments],
+            "status": "Paid - Awaiting Owner Confirmation" if bill.balance_amount <= 0 else ("Partially Paid" if bill.amount_paid > 0 else "Due"),
+        })
+        if bill.balance_amount <= 0:
+            continue
         total_outstanding += bill.balance_amount
         source = "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type
         if source not in source_totals:
@@ -594,7 +613,35 @@ def get_collection_war_room(current_user=Depends(get_current_active_user), db: S
             .scalar() or 0
         ),
         "due_trend": due_trend
+        ,"verification_items": verification_items
     }
+
+
+@router.post("/collection-war-room/{source_type}/{source_id}/confirm-paid")
+def confirm_collection_paid(
+    source_type: str,
+    source_id: int,
+    current_user=Depends(get_current_active_user),
+    db: Session=Depends(get_db),
+):
+    if current_user.role != "Owner":
+        raise HTTPException(status_code=403, detail="Only Owner can confirm fully paid")
+    bill = db.query(OutstandingBill).filter(
+        OutstandingBill.factory_id == current_user.factory_id,
+        OutstandingBill.id == source_id,
+    ).with_for_update().first()
+    if bill is None:
+        raise HTTPException(status_code=404, detail="Receivable source not found")
+    normalized = "opening_outstanding" if bill.source_type in ("opening_balance", "opening_outstanding") else bill.source_type
+    if normalized != source_type:
+        raise HTTPException(status_code=404, detail="Receivable source not found")
+    if bill.balance_amount > 0:
+        raise HTTPException(status_code=400, detail="Partial payment cannot be confirmed as fully paid")
+    bill.owner_verification_status = "verified_paid"
+    bill.owner_verified_paid_at = datetime.now(timezone.utc)
+    bill.owner_verified_paid_by = current_user.id
+    db.commit()
+    return {"status": "verified_paid", "source_type": normalized, "source_id": bill.id}
 
 
 @router.post("/collection-war-room/telegram-alert")

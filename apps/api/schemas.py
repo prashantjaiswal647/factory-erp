@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class BriefingExplanation(BaseModel):
@@ -478,6 +478,7 @@ class FinalProductStockResponse(BaseModel):
 
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
     phone_number: str = Field(..., min_length=1, max_length=50)
     place: str = Field(..., min_length=1, max_length=255)
     gst_number: Optional[str] = Field(default=None, max_length=50)
@@ -495,6 +496,7 @@ class CustomerResponse(BaseModel):
     id: int
     factory_id: int
     name: str
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     place: Optional[str] = None
     gst_number: Optional[str] = None
@@ -675,6 +677,7 @@ class FinalProductStockResponse(BaseModel):
 
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
     phone_number: str = Field(..., min_length=1, max_length=50)
     place: str = Field(..., min_length=1, max_length=255)
     gst_number: Optional[str] = Field(default=None, max_length=50)
@@ -755,6 +758,7 @@ class CustomerResponse(BaseModel):
     id: int
     factory_id: int
     name: str
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     place: Optional[str] = None
     gst_number: Optional[str] = None

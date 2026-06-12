@@ -5,6 +5,7 @@ import logging
 import os
 from typing import List, Optional, Union
 from urllib import request as urlrequest
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -381,6 +382,11 @@ def record_payment(
                         payment_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 except ValueError:
                     payment_date = date.today()
+        if payment_date > datetime.now(ZoneInfo("Asia/Kolkata")).date():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Payment date cannot be in the future.",
+            )
 
         payment = Payment(
             factory_id=factory_id,

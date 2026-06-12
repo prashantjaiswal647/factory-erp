@@ -1,5 +1,7 @@
 import logging
 import re
+from pathlib import Path
+from uuid import uuid4
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
@@ -1742,6 +1744,8 @@ def update_factory_profile(
         factory.advance_payment_discount_percentage = payload.advance_payment_discount_percentage
 
     if payload.digital_signature_url is not None:
+        if current_user.role != "Owner":
+            raise HTTPException(status_code=403, detail="Only Owner can update invoice signature")
         factory.digital_signature_url = payload.digital_signature_url.strip() if payload.digital_signature_url else None
 
     db.commit()
@@ -1761,6 +1765,48 @@ def update_factory_profile(
         next_bill_of_supply_number=getattr(factory, "next_bill_of_supply_number", 1) or 1,
         next_bill_of_supply_simple_number=getattr(factory, "next_bill_of_supply_simple_number", 1) or 1,
     )
+
+
+@router.post("/factory-profile/signature")
+async def upload_invoice_signature(
+    file: UploadFile = File(...),
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    extension = Path(file.filename or "").suffix.lower()
+    if extension not in {".png", ".jpg", ".jpeg"}:
+        raise HTTPException(status_code=422, detail="Signature must be PNG, JPG, or JPEG")
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Signature image must be 2 MB or smaller")
+    signature_dir = Path("volumes/media/signatures") / str(current_user.factory_id)
+    signature_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}{extension}"
+    target = signature_dir / filename
+    target.write_bytes(content)
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+    if factory is None:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail="Factory not found")
+    factory.digital_signature_url = f"/media/signatures/{current_user.factory_id}/{filename}"
+    db.commit()
+    return {"digital_signature_url": factory.digital_signature_url}
+
+
+@router.delete("/factory-profile/signature")
+def remove_invoice_signature(
+    current_user: User = Depends(check_permissions(OWNER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+    if factory is None:
+        raise HTTPException(status_code=404, detail="Factory not found")
+    old_url = factory.digital_signature_url
+    factory.digital_signature_url = None
+    db.commit()
+    if old_url and old_url.startswith(f"/media/signatures/{current_user.factory_id}/"):
+        (Path("volumes/media") / old_url.removeprefix("/media/")).unlink(missing_ok=True)
+    return {"digital_signature_url": None}
 
 
 @router.get("/overview", response_model=OnboardingOverviewResponse)

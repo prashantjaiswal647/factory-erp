@@ -9,7 +9,7 @@ from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status, File, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, EmailStr, field_validator, Field
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -355,6 +355,7 @@ class CustomerBalanceResponse(BaseModel):
 class CustomerSearchResponse(BaseModel):
     id: int
     name: str
+    email: str | None = None
     place: str
     phone_number: str
     gst_number: str | None = None
@@ -507,6 +508,7 @@ class InvoiceDocumentSummary(BaseModel):
     customer_id: int | None = None
     customer_name: str
     customer_phone: str | None = None
+    customer_email: str | None = None
     payment_method: str
     bill_total: Decimal
     amount_paid: Decimal
@@ -544,7 +546,7 @@ class InvoiceTelegramDeliveryRequest(BaseModel):
 
 
 class InvoiceEmailDeliveryRequest(BaseModel):
-    email: str
+    email: EmailStr | None = None
 
 
 class InvoiceDeliveryResponse(BaseModel):
@@ -1471,6 +1473,7 @@ def create_sales_customer(
             customer = Customer(
                 factory_id=factory_id_text(current_user.factory_id),
                 name=payload.name.strip(),
+                email=str(payload.email).lower() if payload.email else None,
                 phone_number=phone_number,
                 place=payload.place.strip(),
                 gst_number=payload.gst_number.strip() if payload.gst_number else None,
@@ -1524,6 +1527,7 @@ def create_sales_customer(
 
 class CustomerUpdatePayload(BaseModel):
     name: str | None = None
+    email: EmailStr | None = None
     phone_number: str | None = None
     place: str | None = None
     gst_number: str | None = None
@@ -1599,6 +1603,8 @@ def update_sales_customer(
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Customer name already in use by another customer")
         customer.name = new_name
+    if payload.email is not None:
+        customer.email = str(payload.email).strip().lower() or None
     if payload.phone_number is not None:
         new_phone = payload.phone_number.strip()
         existing = (
@@ -1768,6 +1774,7 @@ def update_sales_customer(
     return CustomerSearchResponse(
         id=customer.id,
         name=customer.name,
+        email=customer.email,
         place=customer.place or customer.address or "",
         phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
         gst_number=customer.gst_number,
@@ -1827,6 +1834,7 @@ def search_customers(
         results.append(CustomerSearchResponse(
             id=customer.id,
             name=customer.name,
+            email=customer.email,
             place=customer.place or customer.address or "",
             phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
             gst_number=customer.gst_number,
@@ -2008,6 +2016,7 @@ def list_invoice_documents(
                 customer_id=invoice.customer_id,
                 customer_name=invoice.customer_name,
                 customer_phone=invoice.customer_phone,
+                customer_email=invoice.customer.email if invoice.customer else None,
                 payment_method=invoice.payment_method,
                 bill_total=to_money(invoice.bill_total),
                 amount_paid=live_paid,
@@ -2398,9 +2407,13 @@ async def deliver_invoice_email(
     db: Session = Depends(get_db),
 ):
     invoice = _invoice_for_factory(db, current_user.factory_id, invoice_document_id)
-    recipient = payload.email.strip().lower()
+    customer = db.query(Customer).filter(
+        Customer.factory_id == current_user.factory_id,
+        Customer.id == invoice.customer_id,
+    ).first() if invoice.customer_id else None
+    recipient = (str(payload.email) if payload.email else (customer.email if customer else "") or "").strip().lower()
     if not is_email_address(recipient):
-        raise HTTPException(status_code=422, detail="Valid email address is required")
+        raise HTTPException(status_code=422, detail="Customer email is missing. Enter a valid email address.")
     mail_config = build_mail_config()
     if mail_config is None:
         raise HTTPException(status_code=503, detail="Email delivery is not configured")
@@ -2409,7 +2422,12 @@ async def deliver_invoice_email(
     message = MessageSchema(
         subject=f"Invoice {invoice.invoice_number} from {factory_display_name(current_user)}",
         recipients=[recipient],
-        body=f"Please find attached invoice {invoice.invoice_number} for {invoice.customer_name}.",
+        body=(
+            f"Hello {invoice.customer_name},\n\n"
+            f"Please find attached invoice {invoice.invoice_number} from {factory_display_name(current_user)}.\n"
+            f"Invoice amount: Rs {to_money(invoice.bill_total)}\n"
+            f"Remaining payable: Rs {to_money(invoice.customer_total_due)}\n"
+        ),
         subtype=MessageType.plain,
         attachments=[{"file": BytesIO(pdf_bytes), "filename": filename, "content_type": "application/pdf"}],
     )

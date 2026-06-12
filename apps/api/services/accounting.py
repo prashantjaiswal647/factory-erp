@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import case, func as sql_func
@@ -90,6 +91,11 @@ def apply_payment_to_outstanding_bills(
     selected_order_id: int | None = None,
     created_by_user_id: int | None = None,
 ) -> Decimal:
+    if collection_date > datetime.now(ZoneInfo("Asia/Kolkata")).date():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Payment date cannot be in the future.",
+        )
     remaining = to_money(amount)
     query = (
         db.query(OutstandingBill)

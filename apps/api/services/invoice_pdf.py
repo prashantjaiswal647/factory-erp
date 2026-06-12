@@ -4,12 +4,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 import logging
+from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from db import SessionLocal
 from models import Factory
@@ -448,9 +449,12 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     sig_block = [
         Paragraph(f"For <b>{factory_name}</b>", sig_style),
         Paragraph("Digitally authorized" if signature_url else "", sig_style),
-        Spacer(1, 30),
-        Paragraph("Authorized Signatory", sig_style),
     ]
+    if signature_url.startswith("/media/"):
+        signature_path = Path("volumes/media") / signature_url.removeprefix("/media/")
+        if signature_path.exists():
+            sig_block.extend([Spacer(1, 4), Image(str(signature_path), width=90, height=40, kind="proportional")])
+    sig_block.extend([Spacer(1, 8 if signature_url else 30), Paragraph("Authorized Signatory", sig_style)])
     sig_table = Table([["", sig_block]], colWidths=[320, 200])
     sig_table.setStyle(
         TableStyle(

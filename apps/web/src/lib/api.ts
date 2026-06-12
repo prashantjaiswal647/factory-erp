@@ -469,6 +469,7 @@ export type InvoiceDocumentSummary = {
   customer_id?: number | null;
   customer_name: string;
   customer_phone?: string | null;
+  customer_email?: string | null;
   payment_method: string;
   bill_total: string;
   amount_paid: string;
@@ -699,6 +700,7 @@ export type CustomerCreate = {
   name: string;
   company_name: string;
   phone_number: string;
+  email?: string | null;
   place: string;
   gst_number?: string | null;
   previous_due: number;
@@ -719,6 +721,7 @@ export type CustomerSearchResult = {
   company_name?: string | null;
   place: string;
   phone_number: string;
+  email?: string | null;
   gst_number?: string | null;
   previous_due?: number;
   opening_outstanding?: number;
@@ -1067,6 +1070,7 @@ export function searchCustomers(q: string) {
 }
 
 export type CustomerUpdate = {
+  email?: string | null;
   name?: string;
   phone_number?: string;
   place?: string;
@@ -1228,6 +1232,17 @@ export interface CollectionWarRoomResponse {
     manual_adjustment: number;
   };
   customer_advances?: number;
+  verification_items?: Array<{
+    source_type: string;
+    source_id: number;
+    customer_name: string;
+    original_due: number;
+    total_collected: number;
+    remaining: number;
+    collected_by: string;
+    payment_dates: string[];
+    status: string;
+  }>;
 }
 
 export type CustomerLedgerEntry = {
@@ -1287,6 +1302,20 @@ export function markDone(customerId: number) {
   return api.post<{ message: string }>(
     `/api/dashboard/collection-war-room/actions/mark-done/${customerId}`
   );
+}
+
+export function confirmWarRoomPaid(sourceType: string, sourceId: number) {
+  return api.post(`/api/dashboard/collection-war-room/${sourceType}/${sourceId}/confirm-paid`);
+}
+
+export function uploadInvoiceSignature(file: File) {
+  const data = new FormData();
+  data.append("file", file);
+  return api.post<{ digital_signature_url: string }>("/api/onboarding/factory-profile/signature", data);
+}
+
+export function removeInvoiceSignature() {
+  return api.delete("/api/onboarding/factory-profile/signature");
 }
 
 export function snoozeCustomer(customerId: number, days = 3) {

@@ -118,6 +118,10 @@ export default function PaymentCollectionPage() {
       setError("Amount received valid hona chahiye.");
       return;
     }
+    if (payment.date && payment.date > today) {
+      setError("Payment date cannot be in the future.");
+      return;
+    }
 
     setIsSaving(true);
     setError("");
@@ -194,7 +198,7 @@ export default function PaymentCollectionPage() {
 
             <label className="grid gap-1 text-sm font-medium text-zinc-700">
               Date
-              <input className="h-11 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="date" value={payment.date} onChange={(event) => setPayment((current) => ({ ...current, date: event.target.value }))} />
+              <input max={today} className="h-11 rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="date" value={payment.date} onChange={(event) => setPayment((current) => ({ ...current, date: event.target.value }))} />
             </label>
 
             <label className="grid gap-1 text-sm font-medium text-zinc-700">

@@ -8,6 +8,7 @@ import { formatMoney, toNumber } from "../lib/format";
 
 const initialForm: CustomerCreate = {
   phone_number: "",
+  email: "",
   name: "",
   company_name: "",
   place: "",
@@ -90,6 +91,7 @@ export default function CustomersPage() {
       place: customer.place,
       gst_number: customer.gst_number || "",
       company_name: customer.company_name || ""
+      ,email: customer.email || ""
     });
     setEditError("");
   }
@@ -109,6 +111,7 @@ export default function CustomersPage() {
         place: editForm.place,
         gst_number: editForm.gst_number,
         company_name: editForm.company_name,
+        email: editForm.email || null,
       };
       await updateSalesCustomer(editingCustomer.id, payload);
       setToast(`Customer "${editForm.name}" updated successfully.`);
@@ -270,6 +273,7 @@ export default function CustomersPage() {
           <div className="grid gap-4">
             <NumberTextField label="Phone Number" value={form.phone_number} onChange={(phone_number) => setForm({ ...form, phone_number })} />
             <TextField label="Customer Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+            <TextField label="Email (Optional)" value={form.email || ""} onChange={(email) => setForm({ ...form, email })} />
             <TextField label="Company Name" value={form.company_name} selectOnFocus onChange={(company_name) => setForm({ ...form, company_name })} />
             <TextField label="Place / City" value={form.place} onChange={(place) => setForm({ ...form, place })} />
             <TextField label="GST Number" value={form.gst_number || ""} onChange={(gst_number) => setForm({ ...form, gst_number })} />
@@ -636,6 +640,7 @@ export default function CustomersPage() {
             <div className="max-h-[75vh] flex-1 space-y-4 overflow-y-auto overflow-x-hidden p-5">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <TextField label="Customer Name" value={editForm.name || ""} onChange={(name) => setEditForm({ ...editForm, name })} />
+                <TextField label="Email (Optional)" value={editForm.email || ""} onChange={(email) => setEditForm({ ...editForm, email })} />
                 <NumberTextField label="Phone Number" value={editForm.phone_number || ""} onChange={(phone_number) => setEditForm({ ...editForm, phone_number })} />
                 <TextField label="Company Name" value={editForm.company_name || ""} onChange={(company_name) => setEditForm({ ...editForm, company_name })} />
                 <TextField label="Place / City" value={editForm.place || ""} onChange={(place) => setEditForm({ ...editForm, place })} />

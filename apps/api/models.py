@@ -439,6 +439,7 @@ class Customer(TenantMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     phone_number = Column(String(50), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
     place = Column(String(255), nullable=True, index=True)
     gst_number = Column(String(50), nullable=True)
     address = Column(Text, nullable=True)
@@ -1162,6 +1163,9 @@ class OutstandingBill(TenantMixin, Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     deleted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     deletion_reason = Column(Text, nullable=True)
+    owner_verification_status = Column(String(20), nullable=False, default="pending", server_default="pending", index=True)
+    owner_verified_paid_at = Column(DateTime(timezone=True), nullable=True)
+    owner_verified_paid_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -1177,6 +1181,7 @@ class OutstandingBill(TenantMixin, Base):
         CheckConstraint("amount_paid >= 0", name="ck_outstanding_bills_amount_paid_non_negative"),
         CheckConstraint("balance_amount >= 0", name="ck_outstanding_bills_balance_amount_non_negative"),
         UniqueConstraint("factory_id", "tracking_number", name="uq_outstanding_bills_factory_tracking"),
+        CheckConstraint("owner_verification_status IN ('pending', 'verified_paid')", name="ck_outstanding_bills_owner_verification"),
     )
 
 

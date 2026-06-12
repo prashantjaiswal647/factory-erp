@@ -6,7 +6,7 @@ import axios from "axios";
 import PasswordInput from "../components/PasswordInput";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
-import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile, connectTelegram, disconnectTelegram, api } from "../lib/api";
+import { getBillingHistory, getBillingStatus, updateUserProfile, changePassword, getFactoryProfile, updateFactoryProfile, connectTelegram, disconnectTelegram, removeInvoiceSignature, uploadInvoiceSignature, api } from "../lib/api";
 import type { BillingHistoryItem, BillingStatus } from "../lib/api";
 import { splitE164Phone, validateLocalPhone } from "../lib/phoneCountries";
 
@@ -395,13 +395,9 @@ export default function ProfilePage() {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
-                      const reader = new FileReader();
-                      reader.onloadend = () => {
-                        const base64String = reader.result as string;
-                        const finalUrl = base64String.length < 500 ? base64String : `/assets/signatures/${file.name}`;
-                        setFactoryProfile({ ...factoryProfile, digital_signature_url: finalUrl });
-                      };
-                      reader.readAsDataURL(file);
+                      void uploadInvoiceSignature(file)
+                        .then((response) => setFactoryProfile({ ...factoryProfile, digital_signature_url: response.data.digital_signature_url }))
+                        .catch((error) => setToast(error.response?.data?.detail || "Signature upload failed"));
                     }
                   }}
                   className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100"
@@ -410,6 +406,7 @@ export default function ProfilePage() {
                   <div className="mt-3">
                     <span className="text-xs font-semibold text-zinc-400 block mb-1">Preview:</span>
                     <img src={factoryProfile.digital_signature_url} alt="Signature Preview" className="h-12 object-contain bg-white p-1 border rounded" />
+                    <button type="button" className="ml-3 text-xs font-semibold text-red-600" onClick={() => void removeInvoiceSignature().then(() => setFactoryProfile({ ...factoryProfile, digital_signature_url: "" }))}>Remove signature</button>
                   </div>
                 )}
               </div>
