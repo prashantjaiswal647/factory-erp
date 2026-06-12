@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from datetime import date
+from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
@@ -16,6 +20,30 @@ from services.master_backup import (
     stage_backup,
     validate_backup,
 )
+
+
+def test_master_backup_import_uses_override_without_creating_directory(tmp_path):
+    backup_root = tmp_path / "docker-storage" / "backups"
+    env = os.environ.copy()
+    env["BACKUP_ROOT"] = str(backup_root)
+    api_root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import services.master_backup as module; print(module.BACKUP_ROOT)",
+        ],
+        cwd=api_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(backup_root)
+    assert not backup_root.exists()
 
 
 @pytest.fixture()

@@ -310,6 +310,7 @@ Follow this sequence unless a P0 incident overrides it.
 ## 17. Environment
 
 - Required local env vars: `JWT_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `DEFAULT_OWNER_USERNAME`, `DEFAULT_OWNER_PASSWORD`, `DEFAULT_OPERATOR_USERNAME`, `DEFAULT_OPERATOR_PASSWORD`.
+- Optional `BACKUP_ROOT` overrides master backup storage. Docker defaults to `/app/storage/backups`; directories are created only when a backup or restore staging operation runs.
 - The stack expects `.env` at repo root for `docker compose`.
 - `.env` must never be committed.
 - If a local secret appears in chat logs, screenshots, support tickets, or audit output, rotate it.

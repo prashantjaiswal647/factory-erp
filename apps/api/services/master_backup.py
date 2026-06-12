@@ -23,7 +23,13 @@ from models import (
 )
 
 
-BACKUP_ROOT = Path(__file__).resolve().parents[3] / "storage" / "backups"
+API_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BACKUP_ROOT = (
+    API_ROOT.parent.parent / "storage" / "backups"
+    if API_ROOT.name == "api" and API_ROOT.parent.name == "apps"
+    else API_ROOT / "storage" / "backups"
+)
+BACKUP_ROOT = Path(os.getenv("BACKUP_ROOT", str(DEFAULT_BACKUP_ROOT))).expanduser()
 STAGING_ROOT = BACKUP_ROOT / "restore-staging"
 META_SHEET = "Backup Metadata"
 
