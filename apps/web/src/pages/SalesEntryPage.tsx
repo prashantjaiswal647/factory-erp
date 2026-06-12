@@ -221,9 +221,6 @@ export default function SalesEntryPage() {
       .then((response) => {
         const variations = response.data.filter((row) => row.stock_type === "Final Product" && row.product_id);
         setInventoryRows(variations);
-        if (variations[0]) {
-          setForm((current) => ({ ...current, items: [itemFromVariation(variations[0], current.items[0])] }));
-        }
       })
       .catch((error) => setToast(apiErrorMessage(error)));
   }, []);
@@ -292,11 +289,18 @@ export default function SalesEntryPage() {
   }, [form.items, form.buyer_gstin, form.place_of_supply, isTaxInvoice]);
 
   const hasInsufficientStock = useMemo(() => {
-    return form.items.some((item) => {
-      if (!item.product_id) return false;
-      const stock = inventoryRows.find((row) => row.product_id === item.product_id);
+    const reservedByProduct = new Map<number, number>();
+    for (const item of form.items) {
+      if (!item.product_id) continue;
+      reservedByProduct.set(
+        item.product_id,
+        (reservedByProduct.get(item.product_id) || 0) + Number(item.boxes_sold || 0),
+      );
+    }
+    return Array.from(reservedByProduct.entries()).some(([productId, reserved]) => {
+      const stock = inventoryRows.find((row) => row.product_id === productId);
       const available = Number(stock?.current_quantity ?? stock?.quantity ?? 0);
-      return Number(item.boxes_sold || 0) > available;
+      return reserved > available;
     });
   }, [form.items, inventoryRows]);
 
@@ -434,7 +438,7 @@ export default function SalesEntryPage() {
         transport_mode: "",
         vehicle_number: "",
         place_of_supply: "",
-        items: inventoryRows[0] ? [itemFromVariation(inventoryRows[0], emptyItem)] : [{ ...emptyItem }],
+        items: [{ ...emptyItem }],
       });
       window.setTimeout(() => customerSearchRef.current?.focus(), 0);
     } catch (error) {
@@ -649,8 +653,10 @@ export default function SalesEntryPage() {
                 className={`rounded-md border border-zinc-200 p-3 ${isTaxInvoice ? "grid gap-3 md:grid-cols-[1.4fr_1fr_0.55fr_0.55fr_0.55fr_0.55fr_0.5fr_0.65fr_auto]" : "grid gap-3 md:grid-cols-[1.5fr_0.75fr_0.75fr_0.75fr_0.65fr_0.75fr_auto]"}`}
               >
                 <VariationField
+                  index={index}
                   item={item}
                   rows={inventoryRows}
+                  items={form.items}
                   onSelect={(stock) => patchItem(index, itemFromVariation(stock, item))}
                 />
                 {isTaxInvoice && (
@@ -691,7 +697,7 @@ export default function SalesEntryPage() {
                     </select>
                   </label>
                 )}
-                <StockIndicator item={item} rows={inventoryRows} />
+                <StockIndicator item={item} rows={inventoryRows} items={form.items} />
                 <button className="mt-auto grid h-10 w-10 place-items-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600" type="button" onClick={() => removeItem(index)}>
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -825,7 +831,7 @@ export default function SalesEntryPage() {
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700"
               type="button"
-              onClick={() => setForm({ ...form, items: [...form.items, inventoryRows[0] ? itemFromVariation(inventoryRows[0], { ...emptyItem }) : { ...emptyItem }] })}
+              onClick={() => setForm({ ...form, items: [...form.items, { ...emptyItem }] })}
               data-test-id="add-product-button"
             >
               <Plus className="h-4 w-4" />
@@ -865,12 +871,16 @@ function variationLabel(row: LiveStockRow) {
 }
 
 function VariationField({
+  index,
   item,
   rows,
+  items,
   onSelect,
 }: {
+  index: number;
   item: SaleItem;
   rows: LiveStockRow[];
+  items: SaleItem[];
   onSelect: (row: LiveStockRow) => void;
 }) {
   const [isOpen, setOpen] = useState(false);
@@ -910,10 +920,23 @@ function VariationField({
       {isOpen && suggestions.length > 0 ? (
         <div className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg">
           {suggestions.map((row) => (
+            (() => {
+              const stock = Number(row.current_quantity ?? row.quantity ?? 0);
+              const reservedElsewhere = items.reduce(
+                (total, draftItem, draftIndex) => (
+                  draftIndex !== index && draftItem.product_id === row.product_id
+                    ? total + Number(draftItem.boxes_sold || 0)
+                    : total
+                ),
+                0,
+              );
+              const remaining = Math.max(stock - reservedElsewhere, 0);
+              return (
             <button
               key={String(row.id)}
-              className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50"
+              className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:text-zinc-400"
               type="button"
+              disabled={remaining <= 0}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 onSelect(row);
@@ -922,11 +945,13 @@ function VariationField({
             >
               <span className="font-semibold text-zinc-900">{variationLabel(row)}</span>
               <span className="block text-xs text-zinc-500">
-                Stock {row.current_quantity ?? row.quantity} boxes
+                Available {remaining} of {stock} boxes
                 {row.variant_name ? ` | ${row.variant_name}` : ""}
                 {row.category ? ` | ${row.category}` : ""}
               </span>
             </button>
+              );
+            })()
           ))}
         </div>
       ) : null}
@@ -934,15 +959,24 @@ function VariationField({
   );
 }
 
-function StockIndicator({ item, rows }: { item: SaleItem; rows: LiveStockRow[] }) {
+function StockIndicator({ item, rows, items }: { item: SaleItem; rows: LiveStockRow[]; items: SaleItem[] }) {
   const stock = rows.find((row) => row.product_id === item.product_id);
   const available = Number(stock?.current_quantity ?? stock?.quantity ?? 0);
-  const insufficient = Number(item.boxes_sold || 0) > available;
+  const reserved = item.product_id
+    ? items.reduce(
+        (total, draftItem) => draftItem.product_id === item.product_id
+          ? total + Number(draftItem.boxes_sold || 0)
+          : total,
+        0,
+      )
+    : 0;
+  const remaining = Math.max(available - reserved, 0);
+  const insufficient = reserved > available;
   return (
     <div className="block text-sm">
       <span className="font-medium text-zinc-700">Stock</span>
       <div className={`mt-1 flex h-10 items-center rounded-md border px-3 font-semibold ${insufficient ? "border-red-200 bg-red-50 text-red-700" : "border-zinc-200 bg-zinc-50 text-zinc-900"}`}>
-        {insufficient ? "Insufficient" : `${available} boxes`}
+        {!item.product_id ? "Select product" : insufficient ? "Insufficient" : `${remaining} boxes left`}
       </div>
     </div>
   );
