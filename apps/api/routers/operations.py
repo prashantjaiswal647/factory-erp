@@ -431,24 +431,30 @@ def create_daily_production(
             "kg",
         )
         if blank_used_bori > 0:
-            require_available_stock(
-                "Blank",
-                blank_stock.total_boras if blank_stock is not None else 0,
-                blank_used_bori,
-                "boras",
-            )
+            available_bora = Decimal(str(blank_stock.total_boras if blank_stock is not None else 0))
+            if blank_used_bori > available_bora:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Insufficient blank stock. Available: {format(available_bora.normalize(), 'f')} bora, "
+                        f"Required: {format(blank_used_bori.normalize(), 'f')} bora."
+                    ),
+                )
         require_available_stock(
             "Bottom",
             bottom_stock.total_qty_kg if bottom_stock is not None else 0,
             bottom_used_kg,
             "kg",
         )
-        require_available_stock(
-            "Bottom",
-            bottom_stock.total_rolls if bottom_stock is not None else 0,
-            bottom_used_rolls,
-            "rolls",
-        )
+        available_rolls = int(bottom_stock.total_rolls if bottom_stock is not None else 0)
+        if bottom_used_rolls > available_rolls:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Insufficient bottom stock. Available: {available_rolls} rolls, "
+                    f"Required: {bottom_used_rolls} rolls."
+                ),
+            )
 
         if blank_stock is None:
             blank_stock = BlankStock(
@@ -571,7 +577,10 @@ def create_daily_production(
             total_boxes_made=payload.total_boxes_made,
             loose_packets_made=payload.loose_packets_made,
             boxes_from_loose=boxes_from_loose,
+            blank_used_bora=blank_used_bori,
+            blank_weight_per_bora_kg=blank_weight_per_bora if blank_used_bori > 0 else None,
             blank_used_kg=blank_used_kg,
+            bottom_used_rolls=bottom_used_rolls,
             bottom_used_kg=bottom_used_kg,
             wastage_kg=wastage_kg,
             wastage_status=wastage_status,
@@ -734,6 +743,11 @@ def _production_to_dict(db: Session, row: DailyProduction) -> dict:
         "product_type": row.variety,
         "packaging_size_name": row.packaging_size_name,
         "quantity_boxes": int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0),
+        "loose_packets_made": int(row.loose_packets_made or 0),
+        "blank_used_bora": float(row.blank_used_bora or 0),
+        "blank_used_kg": float(row.blank_used_kg or 0),
+        "blank_weight_per_bora_kg": float(row.blank_weight_per_bora_kg) if row.blank_weight_per_bora_kg is not None else None,
+        "bottom_used_rolls": int(row.bottom_used_rolls or 0),
         "quantity_pieces": quantity_pieces,
         "machine_id": row.machine_id,
         "machine_name": (

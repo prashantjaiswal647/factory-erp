@@ -498,11 +498,64 @@ def test_production_succeeds_with_exact_inventory():
     assert _inventory_snapshot()[:5] == (Decimal("0"), Decimal("0"), Decimal("0"), 0, 0)
 
 
+def test_production_two_bora_records_eighty_kg_consumption():
+    db = TestingSessionLocal()
+    try:
+        blank = db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one()
+        blank.weight_per_bora_kg = Decimal("40")
+        blank.total_boras = Decimal("3")
+        blank.total_qty_kg = Decimal("120")
+        db.commit()
+    finally:
+        db.close()
+
+    ensure_testclient_compatibility()
+    response = TestClient(main_app).post(
+        "/api/production/daily",
+        json=_production_payload(blank_used_bori=2),
+    )
+
+    assert response.status_code == 201
+    db = TestingSessionLocal()
+    try:
+        blank = db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one()
+        production = db.query(DailyProduction).one()
+        assert blank.total_boras == Decimal("1")
+        assert blank.total_qty_kg == Decimal("40")
+        assert production.blank_used_bora == Decimal("2")
+        assert production.blank_used_kg == Decimal("80")
+        assert production.blank_weight_per_bora_kg == Decimal("40")
+        assert production.bottom_used_rolls == 2
+    finally:
+        db.close()
+
+
+def test_production_missing_blank_weight_returns_400_without_changes():
+    db = TestingSessionLocal()
+    try:
+        blank = db.query(BlankStock).filter_by(factory_id=1, blank_size_ml=250).one()
+        blank.weight_per_bora_kg = None
+        db.commit()
+    finally:
+        db.close()
+
+    before = _inventory_snapshot()
+    ensure_testclient_compatibility()
+    response = TestClient(main_app).post("/api/production/daily", json=_production_payload())
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Blank stock weight per bora is not configured for this size. "
+        "Please update inventory first."
+    )
+    assert _inventory_snapshot() == before
+
+
 @pytest.mark.parametrize(
     ("stock_type", "expected_message"),
     [
-        ("blank", "Insufficient Blank Stock."),
-        ("bottom", "Insufficient Bottom Stock."),
+        ("blank", "Insufficient blank stock. Available: 0 bora, Required: 1 bora."),
+        ("bottom", "Insufficient bottom stock. Available: 1 rolls, Required: 2 rolls."),
         ("box", "Insufficient Box Stock."),
     ],
 )
@@ -525,7 +578,8 @@ def test_production_insufficient_inventory_returns_400_without_changes(stock_typ
 
     assert response.status_code == 400
     assert expected_message in response.json()["detail"]
-    assert "Please update inventory first." in response.json()["detail"]
+    if stock_type == "box":
+        assert "Please update inventory first." in response.json()["detail"]
     assert _inventory_snapshot() == before
 
     db = TestingSessionLocal()

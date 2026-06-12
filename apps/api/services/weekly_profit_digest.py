@@ -4,9 +4,10 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models import DailyFactoryHealthSnapshot, DailyProfitSnapshot
+from models import DailyFactoryHealthSnapshot, DailyProduction, DailyProfitSnapshot, Worker
 from services.briefing_translations import translations_for
 from services.timezone_utils import KOLKATA_ZONE
 
@@ -66,6 +67,37 @@ def compute_weekly_digest(db: Session, factory_id: int, week_start: date, week_e
         if counts
         else "Data not available"
     )
+    production_rows = (
+        db.query(DailyProduction)
+        .filter(
+            DailyProduction.factory_id == factory_id,
+            DailyProduction.date >= week_start,
+            DailyProduction.date <= week_end,
+            DailyProduction.status == "ACTIVE",
+        )
+        .all()
+    )
+    worker_totals = (
+        db.query(
+            DailyProduction.worker_id,
+            Worker.name,
+            func.sum(DailyProduction.total_boxes_made + DailyProduction.boxes_from_loose),
+        )
+        .outerjoin(Worker, Worker.id == DailyProduction.worker_id)
+        .filter(
+            DailyProduction.factory_id == factory_id,
+            DailyProduction.date >= week_start,
+            DailyProduction.date <= week_end,
+            DailyProduction.status == "ACTIVE",
+        )
+        .group_by(DailyProduction.worker_id, Worker.name)
+        .all()
+    )
+    product_totals: dict[str, int] = {}
+    for row in production_rows:
+        product = f"{row.product_size_ml}ml {row.variety}"
+        product_totals[product] = product_totals.get(product, 0) + int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0)
+    top_worker = max(worker_totals, key=lambda item: int(item[2] or 0), default=None)
     return {
         "factory_id": factory_id,
         "week_start": week_start.isoformat(),
@@ -81,6 +113,22 @@ def compute_weekly_digest(db: Session, factory_id: int, week_start: date, week_e
         "largest_risk": largest_risk,
         "generated_at": datetime.now(KOLKATA_ZONE).isoformat(),
         "days_available": len(profit_rows),
+        "blank_bora_used": float(sum(Decimal(row.blank_used_bora or 0) for row in production_rows)),
+        "blank_kg_used": float(sum(Decimal(row.blank_used_kg or 0) for row in production_rows)),
+        "bottom_rolls_used": sum(int(row.bottom_used_rolls or 0) for row in production_rows),
+        "boxes_produced": sum(int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0) for row in production_rows),
+        "loose_packets_produced": sum(int(row.loose_packets_made or 0) for row in production_rows),
+        "worker_production": [
+            {"worker_id": worker_id, "worker_name": worker_name or "Worker removed", "boxes": int(boxes or 0)}
+            for worker_id, worker_name, boxes in worker_totals
+        ],
+        "product_production": [
+            {"product": product, "boxes": boxes} for product, boxes in sorted(product_totals.items())
+        ],
+        "top_worker": (
+            {"worker_name": top_worker[1] or "Worker removed", "boxes": int(top_worker[2] or 0)}
+            if top_worker else None
+        ),
     }
 
 
@@ -108,6 +156,16 @@ def render_weekly_digest(digest: dict, language: str = "hinglish") -> str:
             "",
             f"{labels['weekly_health']}:",
             health,
+            "",
+            "Weekly Factory Consumption Summary:",
+            f"Blank Used: {digest['blank_bora_used']:g} bora / {digest['blank_kg_used']:g} KG",
+            f"Bottom Used: {digest['bottom_rolls_used']} rolls",
+            f"Finished Goods Produced: {digest['boxes_produced']} boxes",
+            f"Loose Packets Produced: {digest['loose_packets_produced']}",
+            (
+                f"Top Worker: {digest['top_worker']['worker_name']} - {digest['top_worker']['boxes']} boxes"
+                if digest["top_worker"] else "Top Worker: Data not available"
+            ),
             "",
             f"{labels['best_day']}:",
             digest["best_day"],

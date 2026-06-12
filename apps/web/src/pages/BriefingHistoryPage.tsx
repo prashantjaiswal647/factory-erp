@@ -216,14 +216,15 @@ export default function BriefingHistoryPage() {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-[#F9FAFB] text-xs uppercase text-[#4B5563]"><tr><th className="px-4 py-3">Date</th><th>Worker</th><th>Product</th><th>Quantity</th><th>Machine</th><th>Shift</th><th>Created By</th><th>Status</th><th>Timestamp</th></tr></thead>
+            <thead className="bg-[#F9FAFB] text-xs uppercase text-[#4B5563]"><tr><th className="px-4 py-3">Date</th><th>Worker</th><th>Product</th><th>Production</th><th>Raw Material</th><th>Machine</th><th>Shift</th><th>Created By</th><th>Status</th><th>Timestamp</th></tr></thead>
             <tbody>
               {productionEntries.map((entry) => (
                 <tr key={entry.id} className="border-t">
                   <td className="px-4 py-3">{formatDateShort(entry.date)}</td>
                   <td>{entry.worker_name}</td>
                   <td>{entry.product_size_ml}ml {entry.product_type}</td>
-                  <td>{entry.quantity_boxes.toLocaleString()} boxes</td>
+                  <td>{entry.quantity_boxes.toLocaleString()} boxes / {entry.loose_packets_made.toLocaleString()} loose</td>
+                  <td>Blank: {entry.blank_used_bora} bora / {entry.blank_used_kg} KG<br />Bottom: {entry.bottom_used_rolls} roll</td>
                   <td>{entry.machine_name}</td>
                   <td>{entry.shift || "--"}</td>
                   <td>{entry.created_by || "--"}</td>
@@ -231,7 +232,7 @@ export default function BriefingHistoryPage() {
                   <td>{entry.created_at ? new Date(entry.created_at).toLocaleString("en-IN") : "--"}</td>
                 </tr>
               ))}
-              {!productionEntries.length ? <tr><td colSpan={9} className="px-6 py-8 text-center text-zinc-500">No production entries found.</td></tr> : null}
+              {!productionEntries.length ? <tr><td colSpan={10} className="px-6 py-8 text-center text-zinc-500">No production entries found.</td></tr> : null}
             </tbody>
           </table>
         </div>

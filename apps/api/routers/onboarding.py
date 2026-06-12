@@ -1675,7 +1675,7 @@ class BottomStockCreate(BaseModel):
 class BlankStockCreate(BaseModel):
     material_name: str = Field(default="Blank", max_length=100)
     size_ml: int = Field(..., gt=0)
-    kg_per_sack: Decimal = Field(..., gt=0)
+    kg_per_sack: Optional[Decimal] = Field(default=None, gt=0)
     total_sacks: Decimal = Field(..., ge=0)
 
 
@@ -2164,7 +2164,7 @@ def create_blank_stock(
     db: Session = Depends(get_db),
 ):
     factory_id = str(current_user.factory_id)
-    total_weight_kg = payload.kg_per_sack * payload.total_sacks
+    total_weight_kg = (payload.kg_per_sack or Decimal("0")) * payload.total_sacks
     stock = (
         db.query(BlankStock)
         .filter(BlankStock.factory_id == factory_id)
@@ -2197,12 +2197,12 @@ def create_blank_stock(
             factory_id=factory_id,
             material_type="Blank",
             size_ml_or_mm=payload.size_ml,
-            weight_per_sack_kg=payload.kg_per_sack if payload.kg_per_sack > 0 else Decimal("20.000"),
+            weight_per_sack_kg=payload.kg_per_sack or Decimal("20.000"),
             pieces_per_sack=1000,
         )
         db.add(metric)
     else:
-        if payload.kg_per_sack > 0:
+        if payload.kg_per_sack is not None:
             metric.weight_per_sack_kg = payload.kg_per_sack
     db.commit()
 

@@ -399,8 +399,8 @@ export default function ProductionPage() {
         <h2 className="mb-3 text-lg font-semibold">Today's Entries</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead><tr className="border-b text-zinc-500"><th className="py-2">Worker</th><th>Product</th><th>Qty</th><th>Machine</th><th>Status</th><th /></tr></thead>
-            <tbody>{history.map((entry) => <tr key={entry.id} className="border-b"><td className="py-3">{entry.worker_name}</td><td>{entry.product_size_ml}ml {entry.product_type}</td><td>{entry.quantity_boxes.toLocaleString()}</td><td>{entry.machine_name}</td><td className={entry.status === "REJECTED" ? "text-red-700" : "text-green-700"}>{entry.status}</td><td className="text-right">{entry.status === "ACTIVE" ? <button className="font-semibold text-red-700" type="button" onClick={() => setRejecting(entry)}>Reject</button> : null}</td></tr>)}</tbody>
+            <thead><tr className="border-b text-zinc-500"><th className="py-2">Worker</th><th>Product</th><th>Production</th><th>Raw Material</th><th>Machine</th><th>Status</th><th /></tr></thead>
+            <tbody>{history.map((entry) => <tr key={entry.id} className="border-b"><td className="py-3">{entry.worker_name}</td><td>{entry.product_size_ml}ml {entry.product_type}</td><td>{entry.quantity_boxes.toLocaleString()} boxes / {entry.loose_packets_made.toLocaleString()} loose</td><td>Blank: {entry.blank_used_bora} bora / {entry.blank_used_kg} KG<br />Bottom: {entry.bottom_used_rolls} roll</td><td>{entry.machine_name}</td><td className={entry.status === "REJECTED" ? "text-red-700" : "text-green-700"}>{entry.status}</td><td className="text-right">{entry.status === "ACTIVE" ? <button className="font-semibold text-red-700" type="button" onClick={() => setRejecting(entry)}>Reject</button> : null}</td></tr>)}</tbody>
           </table>
         </div>
       </section>

@@ -1322,7 +1322,10 @@ class DailyProduction(TenantMixin, Base):
     total_boxes_made = Column(Integer, nullable=False, default=0, server_default="0")
     loose_packets_made = Column(Integer, nullable=False, default=0, server_default="0")
     boxes_from_loose = Column(Integer, nullable=False, default=0, server_default="0")
+    blank_used_bora = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    blank_weight_per_bora_kg = Column(Numeric(14, 3), nullable=True)
     blank_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    bottom_used_rolls = Column(Integer, nullable=False, default=0, server_default="0")
     bottom_used_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     wastage_status = Column(String(50), nullable=False, default="NORMAL", server_default="NORMAL", index=True)
@@ -1345,7 +1348,10 @@ class DailyProduction(TenantMixin, Base):
         CheckConstraint("packets_per_box_limit > 0", name="ck_daily_productions_packets_limit_positive"),
         CheckConstraint("total_boxes_made >= 0", name="ck_daily_productions_boxes_non_negative"),
         CheckConstraint("loose_packets_made >= 0", name="ck_daily_productions_loose_non_negative"),
+        CheckConstraint("blank_used_bora >= 0", name="ck_daily_productions_blank_bora_non_negative"),
+        CheckConstraint("blank_weight_per_bora_kg IS NULL OR blank_weight_per_bora_kg > 0", name="ck_daily_productions_blank_weight_positive"),
         CheckConstraint("blank_used_kg >= 0", name="ck_daily_productions_blank_used_non_negative"),
+        CheckConstraint("bottom_used_rolls >= 0", name="ck_daily_productions_bottom_rolls_non_negative"),
         CheckConstraint("bottom_used_kg >= 0", name="ck_daily_productions_bottom_used_non_negative"),
         CheckConstraint("wastage_kg >= 0", name="ck_daily_productions_wastage_non_negative"),
         CheckConstraint("total_raw_material_kg >= 0", name="ck_daily_productions_total_raw_non_negative"),

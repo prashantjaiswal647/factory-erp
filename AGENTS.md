@@ -322,6 +322,12 @@ Follow this sequence unless a P0 incident overrides it.
 - The onboarding fallback expected wastage is 2% until at least three usable historical production days exist.
 - Wastage APIs, history, alerts, scheduler, and leaderboards must remain factory scoped.
 
+## 18A. Production Material Consumption
+
+- `BlankStock.weight_per_bora_kg` is optional during inventory setup but must be positive before bora-based production consumption.
+- `DailyProduction` snapshots `blank_used_bora`, `blank_weight_per_bora_kg`, `blank_used_kg`, and `bottom_used_rolls`; historical consumption must not be derived from mutable current inventory settings.
+- Production must validate available blank bora, blank kilograms, bottom rolls, bottom kilograms, and packaging boxes before mutating stock or flushing.
+
 ## 18A. Production Lifecycle
 
 - `daily_productions.status` is the canonical lifecycle flag: `ACTIVE` or `REJECTED`.

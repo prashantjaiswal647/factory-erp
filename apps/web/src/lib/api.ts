@@ -291,6 +291,11 @@ export type ProductionHistoryEntry = {
   product_type: string;
   packaging_size_name: string;
   quantity_boxes: number;
+  loose_packets_made: number;
+  blank_used_bora: number;
+  blank_used_kg: number;
+  blank_weight_per_bora_kg: number | null;
+  bottom_used_rolls: number;
   quantity_pieces: number;
   machine_id: number;
   machine_name: string;
@@ -688,7 +693,7 @@ export type BottomStockCreate = {
 export type BlankStockCreate = {
   material_name: string;
   size_ml: number;
-  kg_per_sack: number;
+  kg_per_sack: number | null;
   total_sacks: number;
 };
 

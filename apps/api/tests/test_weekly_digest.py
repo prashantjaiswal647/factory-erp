@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.orm import sessionmaker
 
-from models import DailyFactoryHealthSnapshot, DailyProfitSnapshot, Factory, User, WeeklyDigestLog
+from models import DailyFactoryHealthSnapshot, DailyProduction, DailyProfitSnapshot, Factory, Machine, User, WeeklyDigestLog, Worker
 from routers.weekly_digest import digest_history
 from services.timezone_utils import KOLKATA_ZONE
 from services.weekly_digest_scheduler import deliver_weekly_digest, run_weekly_digest_batch, seconds_until_next_run
@@ -183,6 +183,75 @@ def test_build_digest_contains_message_and_week_bounds():
         assert result["week_start"] == MONDAY.isoformat()
         assert result["week_end"] == SUNDAY.isoformat()
         assert "Margin:\n14.4%" in result["message_text"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_weekly_digest_includes_production_consumption_and_breakdowns():
+    engine, db = make_db()
+    try:
+        seed_week(db)
+        worker = Worker(factory_id=1, name="Raju", daily_wages=Decimal("500"))
+        machine = Machine(factory_id=1, name="M1", machine_type="Cup")
+        db.add_all([worker, machine])
+        db.flush()
+        db.add_all(
+            [
+                DailyProduction(
+                    factory_id=1,
+                    date=MONDAY,
+                    worker_id=worker.id,
+                    machine_id=machine.id,
+                    product_size_ml=210,
+                    variety="Cup",
+                    packaging_size_name="210ml Box",
+                    packets_per_box_limit=10,
+                    total_boxes_made=50,
+                    loose_packets_made=3,
+                    boxes_from_loose=0,
+                    blank_used_bora=Decimal("2"),
+                    blank_weight_per_bora_kg=Decimal("40"),
+                    blank_used_kg=Decimal("80"),
+                    bottom_used_rolls=1,
+                    bottom_used_kg=Decimal("5"),
+                ),
+                DailyProduction(
+                    factory_id=1,
+                    date=MONDAY + timedelta(days=1),
+                    worker_id=worker.id,
+                    machine_id=machine.id,
+                    product_size_ml=250,
+                    variety="Cup",
+                    packaging_size_name="250ml Box",
+                    packets_per_box_limit=10,
+                    total_boxes_made=35,
+                    loose_packets_made=2,
+                    boxes_from_loose=0,
+                    blank_used_bora=Decimal("1"),
+                    blank_weight_per_bora_kg=Decimal("40"),
+                    blank_used_kg=Decimal("40"),
+                    bottom_used_rolls=2,
+                    bottom_used_kg=Decimal("10"),
+                ),
+            ]
+        )
+        db.commit()
+
+        result = build_weekly_digest(db, 1, SUNDAY, "en")
+
+        assert result["blank_bora_used"] == 3
+        assert result["blank_kg_used"] == 120
+        assert result["bottom_rolls_used"] == 3
+        assert result["boxes_produced"] == 85
+        assert result["loose_packets_produced"] == 5
+        assert result["top_worker"] == {"worker_name": "Raju", "boxes": 85}
+        assert result["product_production"] == [
+            {"product": "210ml Cup", "boxes": 50},
+            {"product": "250ml Cup", "boxes": 35},
+        ]
+        assert "Blank Used: 3 bora / 120 KG" in result["message_text"]
+        assert "Top Worker: Raju - 85 boxes" in result["message_text"]
     finally:
         db.close()
         engine.dispose()

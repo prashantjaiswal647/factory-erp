@@ -12,7 +12,7 @@ import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { useUpgrade } from "../context/UpgradeContext";
 
 const todayWorker: WorkerCreate = { name: "", country_code: "+91", phone: "", daily_wages: 0, duty_hours: 8 };
-const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: 20, total_sacks: 0 };
+const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: null as number | null, total_sacks: 0 };
 const bottomStockDraft = { bottom_size_mm: 68, bag_weight_kg: null as number | null, rolls_per_bag: null as number | null, total_bags: null as number | null, total_rolls: null as number | null, total_weight_kg: null as number | null };
 const boxStockDraft: BoxPackagingStockCreate = { box_type: "Small Box", box_quantity: 0, price_per_box: 0 };
 const plasticStockDraft: PlasticStockCreate = { plastic_size_name: "", cup_size_ml: 210, total_boras: 0, weight_per_bora_kg: 20, price_per_kg: 0 };
@@ -271,6 +271,10 @@ export default function OnboardingPage() {
   }
 
   async function addBlankStock() {
+    if (blankStock.kg_per_sack !== null && blankStock.kg_per_sack <= 0) {
+      setToast("Weight per Bora (KG) must be greater than zero.");
+      return;
+    }
     setIsSaving(true);
     try {
       await createBlankStock(blankStock);
@@ -1042,10 +1046,10 @@ export default function OnboardingPage() {
               <div className="grid gap-3 md:grid-cols-2">
                 <TextInput label="Material Name" value={blankStock.material_name} onChange={(material_name) => setBlankStock({ ...blankStock, material_name })} />
                 <NumberInput label="Size (ml)" value={blankStock.size_ml} onChange={(size_ml) => setBlankStock({ ...blankStock, size_ml })} />
-                <NumberInput label="KG per Sack" value={blankStock.kg_per_sack} onChange={(kg_per_sack) => setBlankStock({ ...blankStock, kg_per_sack })} />
-                <NumberInput label="Total Sacks" value={blankStock.total_sacks} onChange={(total_sacks) => setBlankStock({ ...blankStock, total_sacks })} />
+                <OptionalNumberInput label="Weight per Bora (KG)" value={blankStock.kg_per_sack} onChange={(kg_per_sack) => setBlankStock({ ...blankStock, kg_per_sack })} />
+                <NumberInput label="Total Bora" value={blankStock.total_sacks} onChange={(total_sacks) => setBlankStock({ ...blankStock, total_sacks })} />
               </div>
-              <Readout label="Total Weight (KG)" value={Number((blankStock.kg_per_sack * blankStock.total_sacks).toFixed(3))} />
+              <Readout label="Total Weight (KG)" value={Number(((blankStock.kg_per_sack || 0) * blankStock.total_sacks).toFixed(3))} />
               <StockButton label="Add Blank Stock" color="green" isSaving={isSaving} onClick={addBlankStock} />
             </MaterialCard>
 
