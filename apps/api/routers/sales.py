@@ -886,6 +886,10 @@ def add_sale_invoice(
     db: Session = Depends(get_db),
 ):
     factory_id = factory_id_text(current_user.factory_id)
+    logger.info(
+        "sales_invoice_request factory_id=%s customer_id=%s product_ids=%s item_count=%s",
+        factory_id, payload.customer_id, [item.product_id for item in payload.items], len(payload.items),
+    )
     validate_gst_invoice(
         payload.legal_invoice_type,
         payload.buyer_gstin,
@@ -894,6 +898,8 @@ def add_sale_invoice(
 
     try:
         factory = db.query(Factory).filter(Factory.id == current_user.factory_id).with_for_update().first()
+        if factory is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factory not found")
         invoice_num = clean_optional_text(payload.legal_invoice_number) or allocate_invoice_number(db, factory, payload.legal_invoice_type)
 
         customer = (
@@ -906,7 +912,8 @@ def add_sale_invoice(
         if customer is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-        previous_remaining_balance = to_money(customer.total_due or customer.balance_amount or 0)
+        previous_remaining_balance = active_customer_outstanding(db, current_user.factory_id, customer.id)
+        advance_available = to_money(customer.advance_balance)
         normalized_customer_phone = customer_phone(customer)
         sale_ids: list[int] = []
         current_bill_amount = Decimal("0.00")
@@ -918,68 +925,59 @@ def add_sale_invoice(
         line_items: list[dict[str, object]] = []
         stock_sync_items: list[object] = []
         is_intra = is_intra_state_supply(factory, payload.buyer_gstin, payload.place_of_supply)
+        factory_has_finished_goods = db.query(FinalProductStock.id).filter(
+            factory_id_filter(FinalProductStock.factory_id, factory_id)
+        ).first() is not None
 
         for item in payload.items:
             require_sold_quantity(item.boxes_sold, item.loose_packets_sold)
-            stock = (
-                db.query(FinalProductStock)
-                .filter(factory_id_filter(FinalProductStock.factory_id, factory_id))
-                .filter(FinalProductStock.product_size_ml == item.product_size_ml)
-                .filter(sql_func.lower(FinalProductStock.variety) == item.variety.lower())
-                .filter(sql_func.lower(FinalProductStock.packaging_size_name) == item.packaging_size_name.lower())
-                .with_for_update()
-                .first()
+            is_manual_item_mode = (
+                payload.legal_invoice_type in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple")
+                or not factory_has_finished_goods
             )
-            is_custom_invoice_item = stock is None and item.product_id is None
-            if stock is None and not is_custom_invoice_item:
-                box_stock = (
-                    db.query(BoxStock)
-                    .filter(factory_id_filter(BoxStock.factory_id, factory_id))
-                    .filter(sql_func.lower(BoxStock.packaging_size_name) == item.packaging_size_name.lower())
-                    .with_for_update()
-                    .first()
+            if item.product_id is None and not is_manual_item_mode:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Each invoice item must be selected from Finished Goods stock",
                 )
-                if box_stock is None:
-                    box_stock = BoxStock(
-                        factory_id=factory_id,
-                        packaging_size_name=item.packaging_size_name.strip(),
-                        total_boxes=0,
-                    )
-                    db.add(box_stock)
-                    db.flush()
-
-                stock = FinalProductStock(
-                    factory_id=factory_id,
-                    product_size_ml=item.product_size_ml,
-                    variety=item.variety.strip(),
-                    packaging_size_name=item.packaging_size_name.strip(),
-                    current_quantity=0,
-                    total_boxes=0,
-                    loose_packets=0,
-                    packets_per_box_limit=1,
-                )
-                db.add(stock)
-                db.flush()
-
+            stock = find_final_stock_for_sale(db, factory_id, item, lock=True) if item.product_id else None
+            logger.info(
+                "sales_invoice_stock_lookup factory_id=%s customer_id=%s product_id=%s found=%s",
+                factory_id, customer.id, item.product_id, stock is not None,
+            )
+            if stock is None and not is_manual_item_mode:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Finished Goods item {item.product_id} was not found")
+            if stock is None:
+                stock_sync_items.append(None)
+            else:
+                if (
+                    stock.product_size_ml != item.product_size_ml
+                    or stock.variety.strip().lower() != item.variety.strip().lower()
+                    or stock.packaging_size_name.strip().lower() != item.packaging_size_name.strip().lower()
+                ):
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Selected product details do not match Finished Goods stock")
             if stock is not None:
-                # Resolve exact live dynamic stock balance
                 from routers.inventory import calculate_live_sku_stock
                 live_boxes, live_loose = calculate_live_sku_stock(
                     db=db,
                     factory_id=str(factory_id),
-                    product_size_ml=item.product_size_ml,
-                    variety=item.variety,
-                    packaging_size_name=item.packaging_size_name,
+                    product_size_ml=stock.product_size_ml,
+                    variety=stock.variety,
+                    packaging_size_name=stock.packaging_size_name,
                     onboarding_boxes=stock.total_boxes or 0,
                     onboarding_loose=stock.loose_packets or 0,
-                    packets_per_box_limit=stock.packets_per_box_limit or 1000
+                    packets_per_box_limit=stock.packets_per_box_limit or 1,
                 )
-                available_packets = live_boxes * stock.packets_per_box_limit + live_loose
-                sold_packets = item.boxes_sold * stock.packets_per_box_limit + item.loose_packets_sold
+                available_packets = live_boxes * (stock.packets_per_box_limit or 1) + live_loose
+                sold_packets = item.boxes_sold * (stock.packets_per_box_limit or 1) + item.loose_packets_sold
+                logger.info(
+                    "sales_invoice_stock_before product_id=%s live_boxes=%s live_loose=%s requested_boxes=%s requested_loose=%s",
+                    stock.id, live_boxes, live_loose, item.boxes_sold, item.loose_packets_sold,
+                )
                 if available_packets < sold_packets:
                     raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Insufficient final product stock for {item.product_size_ml}ml {item.variety} {item.packaging_size_name}",
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Insufficient stock for {stock.product_size_ml}ml {stock.variety} - {stock.packaging_size_name}. Available: {live_boxes} boxes and {live_loose} loose packets.",
                     )
                 stock_sync_items.append(item)
 
@@ -1063,38 +1061,13 @@ def add_sale_invoice(
         else:
             current_bill_amount = to_money(total_taxable_value)
 
-        net_outstanding_balance = to_money(previous_remaining_balance + current_bill_amount)
-        customer_due_after_payment = to_money(net_outstanding_balance - to_money(payload.amount_paid))
-        if customer_due_after_payment < 0:
-            customer_due_after_payment = Decimal("0.00")
-
-        if sale_ids:
-            first_sale = db.query(DailySale).filter(DailySale.id == sale_ids[0]).first()
-            if first_sale is not None:
-                initial_payment = to_money(payload.amount_paid)
-                first_sale.amount_paid = initial_payment
-                first_sale.initial_payment = initial_payment
-                if initial_payment > 0:
-                    db.add(
-                        Payment(
-                            factory_id=factory_id,
-                            customer_phone=normalized_customer_phone,
-                            sale_id=first_sale.id,
-                            amount_paid=initial_payment,
-                            payment_mode="Cash",
-                            date=payload.date,
-                        )
-                    )
-
-        customer.previous_due = previous_remaining_balance
-        customer.total_due = customer_due_after_payment
-        customer.balance_amount = customer_due_after_payment
-        customer.pending_balance = customer_due_after_payment
-        customer.pending_dues = float(customer_due_after_payment)
+        customer_due_after_payment = to_money(previous_remaining_balance + current_bill_amount)
 
         # Recalculate dynamic live stock balance and sync caches for all sold SKUs
         from routers.inventory import recalculate_and_sync_sku_stock
         for item in stock_sync_items:
+            if item is None:
+                continue
             recalculate_and_sync_sku_stock(
                 db=db,
                 factory_id=str(factory_id),
@@ -1138,8 +1111,12 @@ def add_sale_invoice(
                 "customer_phone": normalized_customer_phone,
                 "payment_method": "Cash",
                 "bill_total": current_bill_amount,
-                "amount_paid": to_money(payload.amount_paid),
+                "amount_paid": Decimal("0.00"),
                 "previous_due": previous_remaining_balance,
+                "advance_available": advance_available,
+                "advance_adjusted": Decimal("0.00"),
+                "total_before_advance": to_money(previous_remaining_balance + current_bill_amount),
+                "remaining_payable": customer_due_after_payment,
                 "customer_total_due": customer_due_after_payment,
                 "status": "created",
             },
@@ -1167,8 +1144,70 @@ def add_sale_invoice(
             customer=customer,
             invoice_payload=invoice_payload,
         )
+        invoice_bill = db.query(OutstandingBill).filter(
+            OutstandingBill.factory_id == current_user.factory_id,
+            OutstandingBill.invoice_document_id == invoice_document.id,
+        ).one()
+        logger.info(
+            "sales_invoice_ledger_created factory_id=%s customer_id=%s invoice_id=%s bill_id=%s source_type=%s invoice_total=%s",
+            factory_id, customer.id, invoice_document.id, invoice_bill.id, invoice_bill.source_type, current_bill_amount,
+        )
+
+        advance_adjusted = min(advance_available, customer_due_after_payment)
+        if advance_adjusted > 0:
+            apply_payment_to_outstanding_bills(
+                db,
+                factory_id=current_user.factory_id,
+                customer_id=customer.id,
+                amount=advance_adjusted,
+                payment_mode="UPI",
+                collection_date=payload.date,
+                created_by_user_id=current_user.id,
+            )
+            customer.advance_balance = to_money(advance_available - advance_adjusted)
+
+        cash_payment = to_money(payload.amount_paid)
+        if cash_payment > 0:
+            payable_after_advance = active_customer_outstanding(db, current_user.factory_id, customer.id)
+            if cash_payment > payable_after_advance:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment amount exceeds total payable amount")
+            payment = Payment(
+                factory_id=factory_id,
+                customer_phone=normalized_customer_phone,
+                sale_id=sale_ids[0] if sale_ids else None,
+                amount_paid=cash_payment,
+                payment_mode="Cash",
+                date=payload.date,
+            )
+            db.add(payment)
+            db.flush()
+            apply_payment_to_outstanding_bills(
+                db,
+                factory_id=current_user.factory_id,
+                customer_id=customer.id,
+                amount=cash_payment,
+                payment_mode="Cash",
+                collection_date=payload.date,
+                payment_id=payment.id,
+                created_by_user_id=current_user.id,
+            )
+
+        db.flush()
+        customer_due_after_payment = sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+        customer.previous_due = previous_remaining_balance
+        invoice_document.amount_paid = to_money(invoice_bill.amount_paid)
+        invoice_document.customer_total_due = to_money(invoice_bill.balance_amount)
+        invoice_payload["invoice"]["advance_adjusted"] = advance_adjusted
+        invoice_payload["invoice"]["remaining_payable"] = customer_due_after_payment
+        invoice_payload["invoice"]["customer_total_due"] = invoice_document.customer_total_due
+        invoice_payload["invoice"]["amount_paid"] = invoice_document.amount_paid
+        invoice_document.payload_json = json_safe(invoice_payload)
+        if sale_ids:
+            first_sale = db.query(DailySale).filter(DailySale.id == sale_ids[0]).first()
+            first_sale.amount_paid = cash_payment
+            first_sale.initial_payment = cash_payment
+
         sync_next_invoice_setting(db, factory, invoice_num, payload.legal_invoice_type)
-        sync_customer_balance_from_bills(db, current_user.factory_id, customer)
         db.commit()
 
         background_tasks.add_task(
@@ -1233,13 +1272,17 @@ def add_sale_invoice(
     except HTTPException:
         db.rollback()
         raise
+    except (IntegrityError, OperationalError, SQLAlchemyError) as exc:
+        db.rollback()
+        logger.exception("Sale invoice database operation failed")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invoice could not be saved because its customer, stock, or invoice number is no longer valid. Refresh and try again.",
+        ) from exc
     except Exception as exc:
         db.rollback()
-        logger.exception("Sale invoice creation failed due to exception:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Sale invoice failed and was rolled back: {exc}",
-        ) from exc
+        logger.exception("Sale invoice creation failed")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invoice request could not be processed") from exc
 
 
 @router.post("/order", response_model=SalesOrderCreateResponse, status_code=status.HTTP_201_CREATED)

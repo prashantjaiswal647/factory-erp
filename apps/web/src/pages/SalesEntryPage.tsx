@@ -651,12 +651,6 @@ export default function SalesEntryPage() {
                 <VariationField
                   item={item}
                   rows={inventoryRows}
-                  onCustomChange={(value) => patchItem(index, {
-                    product_id: null,
-                    variety: value || "Plain White",
-                    packaging_size: value,
-                    packaging_size_name: value,
-                  })}
                   onSelect={(stock) => patchItem(index, itemFromVariation(stock, item))}
                 />
                 {isTaxInvoice && (
@@ -845,7 +839,7 @@ export default function SalesEntryPage() {
             onClick={submit}
           >
             <Check className="h-4 w-4" />
-            {isSaving ? "Saving..." : "Save Sale"}
+            {isSaving ? "Generating..." : "Generate Invoice"}
           </button>
         </div>
       </section>
@@ -867,42 +861,51 @@ function TaxRow({ label, value, accent = false }: { label: string; value: number
 }
 
 function variationLabel(row: LiveStockRow) {
-  return `${row.variety || "Product"} - ${row.packaging_size || row.packaging_size_name || "Standard"} [${row.pieces_per_packet || 0} Pcs/Pkt]`;
+  return row.item_name || `${row.product_size_ml || ""}ml ${row.variety || "Product"} - ${row.packaging_size || row.packaging_size_name || "Standard"}`;
 }
 
 function VariationField({
   item,
   rows,
-  onCustomChange,
   onSelect,
 }: {
   item: SaleItem;
   rows: LiveStockRow[];
-  onCustomChange: (value: string) => void;
   onSelect: (row: LiveStockRow) => void;
 }) {
   const [isOpen, setOpen] = useState(false);
-  const query = item.product_id
+  const selectedLabel = item.product_id
     ? variationLabel(rows.find((row) => row.product_id === item.product_id) || ({} as LiveStockRow))
-    : item.packaging_size_name || item.variety || "";
+    : "";
+  const [query, setQuery] = useState(selectedLabel);
+  useEffect(() => setQuery(selectedLabel), [selectedLabel]);
   const normalizedQuery = query.trim().toLowerCase();
   const suggestions = rows
-    .filter((row) => variationLabel(row).toLowerCase().includes(normalizedQuery))
+    .filter((row) => {
+      const searchable = [
+        variationLabel(row),
+        row.product_size_ml,
+        row.variety,
+        row.category,
+        row.variant_name,
+      ].join(" ").toLowerCase();
+      return searchable.includes(normalizedQuery);
+    })
     .slice(0, 8);
 
   return (
     <label className="relative block text-sm">
-      <span className="font-medium text-zinc-700">Product Variation</span>
+      <span className="font-medium text-zinc-700">Product Description</span>
       <input
         className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
         value={query}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onChange={(event) => {
-          onCustomChange(event.target.value);
+          setQuery(event.target.value);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Type or select variation"
+        placeholder="Search size or product name"
       />
       {isOpen && suggestions.length > 0 ? (
         <div className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg">
@@ -918,7 +921,11 @@ function VariationField({
               }}
             >
               <span className="font-semibold text-zinc-900">{variationLabel(row)}</span>
-              <span className="block text-xs text-zinc-500">Stock {row.current_quantity ?? row.quantity} boxes</span>
+              <span className="block text-xs text-zinc-500">
+                Stock {row.current_quantity ?? row.quantity} boxes
+                {row.variant_name ? ` | ${row.variant_name}` : ""}
+                {row.category ? ` | ${row.category}` : ""}
+              </span>
             </button>
           ))}
         </div>

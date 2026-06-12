@@ -328,7 +328,7 @@ def test_e2e_erp_workflow(mock_n8n_sync):
         assert bill.bill_amount == Decimal("800.0")
         assert bill.amount_paid == Decimal("200.0")
         assert bill.balance_amount == Decimal("600.0")
-        assert bill.status == "active"
+        assert bill.status == "partial"
     finally:
         db.close()
 

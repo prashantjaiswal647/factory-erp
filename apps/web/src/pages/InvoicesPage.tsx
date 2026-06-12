@@ -1,5 +1,5 @@
-import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X, Mail, Send, Printer } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X, Mail, Send, Printer, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { downloadInvoicePdf, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
 import type { InvoiceDashboardResponse, InvoiceDeliveryHistoryItem, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
@@ -80,7 +80,9 @@ export default function InvoicesPage() {
   const [deliveryHistory, setDeliveryHistory] = useState<InvoiceDeliveryHistoryItem[]>([]);
   const [deliveryId, setDeliveryId] = useState<number | null>(null);
   
-  // Custom Invoice Form state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+  const [paymentFilter, setPaymentFilter] = useState("all");
   const [showCreateInvoice, setShowCreateInvoice] = useState(false);
   const [invoiceType, setInvoiceType] = useState<"tax_invoice" | "bill_of_supply">("bill_of_supply");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
@@ -92,19 +94,8 @@ export default function InvoicesPage() {
   const [rate, setRate] = useState(0);
   const [amountPaid, setAmountPaid] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
-
-  // Lists
   const [customers, setCustomers] = useState<DashboardCustomer[]>([]);
-  const [goodsSuggestions] = useState([
-    "65ml Standard Cup",
-    "100ml Standard Cup",
-    "150ml Standard Cup",
-    "210ml Standard Cup",
-    "250ml Standard Cup",
-    "Printed Paper Cups",
-    "Brown Kraft Cups",
-    "Double Wall Cups"
-  ]);
+  const [goodsSuggestions] = useState(["65ml Standard Cup"]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   // Accountant Report state
@@ -125,22 +116,13 @@ export default function InvoicesPage() {
     }
   }
 
-  async function loadCustomers() {
-    try {
-      const res = await getDashboardCustomers();
-      setCustomers(res.data || []);
-      if (res.data && res.data.length > 0) {
-        setCustomerId(res.data[0].id);
-      }
-    } catch (err) {
-      console.error("Failed to load customers:", err);
-    }
-  }
-
   useEffect(() => {
     void loadInvoices();
-    void loadCustomers();
   }, []);
+
+  async function handleCreateInvoice() {
+    setMessage("Invoice creation is available from the Sales page.");
+  }
 
   async function download(invoice: InvoiceDocumentSummary) {
     setDownloadingId(invoice.id);
@@ -257,65 +239,18 @@ export default function InvoicesPage() {
     }
   }
 
-  async function handleCreateInvoice() {
-    if (!customerId) {
-      setMessage("Please select a customer.");
-      return;
-    }
-    if (!descriptionOfGoods.trim()) {
-      setMessage("Please enter or select a Description of Goods.");
-      return;
-    }
-    if (quantity <= 0 || rate <= 0) {
-      setMessage("Quantity and Rate must be greater than zero.");
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const selectedCustomer = customers.find(c => c.id === customerId);
-      
-      const payload = {
-        date: invoiceDate,
-        customer_id: customerId,
-        amount_paid: amountPaid,
-        legal_invoice_type: invoiceType,
-        legal_invoice_number: "", // Backend will automatically auto-increment!
-        rough_bill_enabled: false,
-        items: [
-          {
-            product_size_ml: parseInt(descriptionOfGoods) || 210, // Try parsing size or default to 210
-            variety: descriptionOfGoods.includes("Standard") ? "Standard/White" : "Printed",
-            packaging_size_name: "Boxes",
-            boxes_sold: quantity,
-            loose_packets_sold: 0,
-            rate_per_box: rate,
-            hsn_code: hsnCode,
-            description: descriptionOfGoods
-          }
-        ]
-      };
-
-      // Hit sales invoice post endpoint directly
-      await api.post("/api/sales/invoice", payload);
-      
-      // Reset form
-      setDescriptionOfGoods("");
-      setQuantity(0);
-      setRate(0);
-      setAmountPaid(0);
-      setShowCreateInvoice(false);
-      setMessage("Invoice created successfully!");
-      
-      void loadInvoices();
-    } catch (error) {
-      setMessage(apiErrorMessage(error));
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   const invoices = data?.invoices || [];
+  const filteredInvoices = useMemo(() => invoices.filter((invoice) => {
+    const query = searchQuery.trim().toLowerCase();
+    const matchesQuery = !query
+      || invoice.customer_name.toLowerCase().includes(query)
+      || invoice.invoice_number.toLowerCase().includes(query);
+    const matchesDate = !dateFilter || invoice.invoice_date.slice(0, 10) === dateFilter;
+    const due = toNumber(invoice.customer_total_due);
+    const paid = toNumber(invoice.amount_paid);
+    const status = due <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid";
+    return matchesQuery && matchesDate && (paymentFilter === "all" || paymentFilter === status);
+  }), [invoices, searchQuery, dateFilter, paymentFilter]);
   const totalTaxable = quantity * rate;
   const taxableInWords = numberToWords(totalTaxable);
 
@@ -327,14 +262,6 @@ export default function InvoicesPage() {
           <p className="mt-1 text-sm text-zinc-500">Factory invoice records. Automatically track sequences and export monthly registers for accountants.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <button 
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 shadow-sm"
-            type="button" 
-            onClick={() => setShowCreateInvoice(!showCreateInvoice)}
-          >
-            <Plus className="h-4 w-4" />
-            {showCreateInvoice ? "Close Form" : "Create Invoice"}
-          </button>
           <button className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={loadInvoices}>
             <RefreshCw className="h-4 w-4" />
             Refresh
@@ -344,9 +271,21 @@ export default function InvoicesPage() {
 
       {message ? <div className="rounded-md border border-zinc-200 bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-900">{message}</div> : null}
 
-      {/* Dynamic Invoice Creation Form */}
-      {showCreateInvoice && (
-        <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-md transition-all space-y-5">
+      <section className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 md:grid-cols-[1fr_180px_180px]">
+        <label className="relative">
+          <Search className="absolute left-3 top-3 h-4 w-4 text-zinc-400" />
+          <input className="h-10 w-full rounded-md border border-zinc-200 pl-9 pr-3 text-sm" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search customer or invoice number" />
+        </label>
+        <input className="h-10 rounded-md border border-zinc-200 px-3 text-sm" type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} />
+        <select className="h-10 rounded-md border border-zinc-200 px-3 text-sm" value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)}>
+          <option value="all">All payment statuses</option>
+          <option value="unpaid">Unpaid</option>
+          <option value="partial">Partial Paid</option>
+          <option value="paid">Paid</option>
+        </select>
+      </section>
+      {false && (
+        <section className="hidden">
           <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
             <h2 className="text-lg font-bold text-zinc-950 flex items-center gap-2">
               <Plus className="h-5 w-5 text-brand-600" />
@@ -566,7 +505,7 @@ export default function InvoicesPage() {
 
           {isLoading ? (
             <div className="p-6 text-sm text-zinc-500">Loading invoices...</div>
-          ) : invoices.length === 0 ? (
+          ) : filteredInvoices.length === 0 ? (
             <div className="p-6 text-sm text-zinc-500">No invoices generated yet.</div>
           ) : (
             <div className="overflow-x-auto">
@@ -583,7 +522,7 @@ export default function InvoicesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
-                  {invoices.map((invoice) => (
+                  {filteredInvoices.map((invoice) => (
                     <tr key={invoice.id} className="hover:bg-zinc-50">
                       <td className="px-4 py-3 font-semibold text-zinc-950">#{invoice.invoice_number}</td>
                       <td className="px-4 py-3 text-zinc-600">{dateLabel(invoice.invoice_date)}</td>
