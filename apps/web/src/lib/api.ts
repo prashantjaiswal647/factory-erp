@@ -1582,6 +1582,7 @@ export type OnboardingBulkUploadResponse = {
   operation_counts?: {
     inserted?: number;
     updated?: number;
+    unchanged?: number;
     skipped?: number;
     failed?: number;
     warnings?: number;
@@ -1606,7 +1607,9 @@ export type BulkValidationIssue = {
   severity: "fatal" | "warning" | "info";
   suggested_correction?: string | null;
   sheet?: string | null;
+  section?: string | null;
   raw_value?: unknown;
+  action_type?: "created" | "updated" | "unchanged" | "skipped" | "error" | null;
 };
 
 export function downloadMasterOnboardingTemplate() {

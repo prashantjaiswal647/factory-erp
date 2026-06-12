@@ -84,14 +84,14 @@ logger = logging.getLogger(__name__)
 
 BULK_TEMPLATE_COLUMNS = {
     "company_profile": ["row_type", "factory_name", "gstin", "factory_address", "invoice_prefix", "advance_upi_discount", "bill_of_supply_start_seq", "tax_invoice_start_seq", "bill_of_supply_simple_start_seq"],
-    "worker": ["row_type", "name", "mobile_number", "daily_wages", "duty_hours", "previous_attendance_details"],
-    "customer": ["row_type", "name", "firm_name", "contact_number", "phone_number", "place", "address", "gst_number", "previous_due", "advance_balance"],
-    "machine": ["row_type", "machine_name", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
-    "blank_stock": ["row_type", "material_name", "size_ml", "kg_per_sack", "total_boras_sacks"],
-    "bottom_reel": ["row_type", "bottom_size_mm", "total_individual_rolls", "total_weight_kg"],
+    "worker": ["row_type", "worker_restore_key", "name", "mobile_number", "daily_wages", "duty_hours", "shift_timing", "shift_type", "previous_attendance_details"],
+    "customer": ["row_type", "customer_restore_key", "name", "firm_name", "contact_number", "phone_number", "email", "place", "address", "gst_number", "previous_due", "opening_outstanding_date", "opening_outstanding_note", "advance_balance", "advance_balance_date", "advance_balance_note"],
+    "machine": ["row_type", "machine_restore_key", "machine_number", "machine_name", "machine_type", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
+    "blank_stock": ["row_type", "material_restore_key", "material_name", "variety_design", "size_ml", "linked_bottom_size_mm", "weight_per_bora_kg", "total_boras_sacks"],
+    "bottom_reel": ["row_type", "material_restore_key", "bottom_size_mm", "variety_design", "total_individual_rolls", "total_weight_kg", "bottom_price_per_kg"],
     "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"],
     "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs"],
-    "finished_goods": ["row_type", "product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"],
+    "finished_goods": ["row_type", "product_restore_key", "product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes", "initial_loose_packets"],
 }
 
 BULK_MASTER_SHEETS = {
@@ -118,6 +118,11 @@ TEXT_BULK_COLUMNS = {
     "factory_address",
     "invoice_prefix",
     "name",
+    "customer_restore_key",
+    "worker_restore_key",
+    "machine_restore_key",
+    "material_restore_key",
+    "product_restore_key",
     "mobile_number",
     "firm_name",
     "contact_number",
@@ -126,11 +131,18 @@ TEXT_BULK_COLUMNS = {
     "address",
     "gst_number",
     "machine_name",
+    "machine_number",
+    "machine_type",
     "material_name",
     "box_type",
     "plastic_size_type",
     "variety_design",
     "packaging_size_name",
+    "email",
+    "opening_outstanding_note",
+    "advance_balance_note",
+    "shift_timing",
+    "shift_type",
 }
 
 HEADER_ALIASES = {
@@ -140,7 +152,7 @@ HEADER_ALIASES = {
     "total_weight_kg_automatic_calculation": "total_weight_kg",
     "total_weight_kg=": "total_weight_kg",
     "total_weight=": "total_weight_automatic_calculation",
-    "kg_per_sack=": "kg_per_sack",
+    "kg_per_sack": "weight_per_bora_kg",
     "quantity_of_total_bora": "total_boras_sacks",
     "quantity of total bora": "total_boras_sacks",
     "total_plastic_kg": "total_plastic_kg_automatic_calculation",
@@ -149,14 +161,24 @@ HEADER_ALIASES = {
 
 OPTIONAL_BULK_HEADERS = {
     "customer": {
+        "customer_restore_key",
         "firm_name",
         "contact_number",
         "place",
         "gst_number",
         "previous_due",
         "advance_balance",
+        "email",
+        "opening_outstanding_date",
+        "opening_outstanding_note",
+        "advance_balance_date",
+        "advance_balance_note",
     },
-    "blank_stock": {"total_boras_sacks"},
+    "worker": {"worker_restore_key", "shift_timing", "shift_type"},
+    "machine": {"machine_restore_key", "machine_number", "machine_type"},
+    "blank_stock": {"material_restore_key", "total_boras_sacks"},
+    "bottom_reel": {"material_restore_key", "bottom_price_per_kg"},
+    "finished_goods": {"product_restore_key", "initial_loose_packets"},
 }
 
 BULK_NUMERIC_DEFAULTS = {
@@ -170,12 +192,13 @@ BULK_NUMERIC_DEFAULTS = {
         "advance_balance": Decimal("0"),
     },
     "blank_stock": {
-        "kg_per_sack": Decimal("0"),
+        "weight_per_bora_kg": Decimal("0"),
         "total_boras_sacks": Decimal("0"),
     },
     "bottom_reel": {
         "total_individual_rolls": Decimal("0"),
         "total_weight_kg": Decimal("0"),
+        "bottom_price_per_kg": Decimal("0"),
     },
     "box_stock": {
         "box_quantity_pieces": Decimal("0"),
@@ -190,19 +213,20 @@ BULK_NUMERIC_DEFAULTS = {
         "pcs_per_packet": Decimal("1"),
         "packets_per_box": Decimal("1"),
         "initial_stock_boxes": Decimal("0"),
+        "initial_loose_packets": Decimal("0"),
     },
 }
 
 SAMPLE_BULK_ROWS = {
     "company_profile": ["SAMPLE", "Munshi Demo Factory", "07ABCDE1234F1Z5", "Wazirpur Industrial Area, Delhi", "INV-", 2, 1, 1, 1],
-    "worker": ["SAMPLE", "Akash Kumar", "82858117277", 400, 8, 0],
-    "customer": ["SAMPLE", "Rajesh Kumar", "Rajesh Traders", "9876543210", "9876543210", "Delhi", "Wazirpur Industrial Area, Delhi", "07ABCDE1234F1Z5", 1500],
-    "machine": ["SAMPLE", "Hi-Speed Cup Machine X", 120, 55000, 210, 68],
-    "blank_stock": ["SAMPLE", "Cup Blank", 210, 20, 25],
-    "bottom_reel": ["SAMPLE", 68, 1200, 180],
+    "worker": ["SAMPLE", "WRK-001", "Akash Kumar", "82858117277", 400, 8, "08:00-16:00", "Day", 0],
+    "customer": ["SAMPLE", "CUS-001", "Rajesh Kumar", "Rajesh Traders", "9876543210", "9876543210", "rajesh@example.com", "Delhi", "Wazirpur Industrial Area, Delhi", "07ABCDE1234F1Z5", 1500, "2026-04-01", "Opening balance", 0, None, None],
+    "machine": ["SAMPLE", "MAC-001", "M-01", "Hi-Speed Cup Machine X", "Paper Cup", 120, 55000, 210, 68],
+    "blank_stock": ["SAMPLE", "MAT-BL-210", "Cup Blank Paper", "Standard/White", 210, 68, 20, 25],
+    "bottom_reel": ["SAMPLE", "MAT-BT-68", 68, "Standard/White", 1200, 180, 110],
     "box_stock": ["SAMPLE", "210ml Box", 500, 18],
     "plastic_stock": ["SAMPLE", "PP 210ml Sleeve", 210, 25, 20, 145],
-    "finished_goods": ["SAMPLE", 210, "Standard/White", "", 100, 10, 50],
+    "finished_goods": ["SAMPLE", "SKU-210-WHITE", 210, "Standard/White", "210ml Box", 100, 10, 50, 0],
 }
 
 
@@ -220,24 +244,33 @@ class CompanyProfileBulkRow(BaseModel):
 
 class WorkerBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    worker_restore_key: Optional[str] = Field(default=None, max_length=100)
     name: str = Field(..., min_length=1, max_length=255)
     mobile_number: Optional[str] = Field(default=None, max_length=50)
     daily_wages: Decimal = Field(default=Decimal("0"), ge=0)
     duty_hours: Decimal = Field(default=Decimal("8"), ge=0)
+    shift_timing: Optional[str] = Field(default=None, max_length=100)
+    shift_type: Optional[str] = Field(default=None, max_length=100)
     previous_attendance_details: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class CustomerBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    customer_restore_key: Optional[str] = Field(default=None, max_length=100)
     name: str = Field(..., min_length=1, max_length=255)
     firm_name: Optional[str] = Field(default=None, max_length=255)
     contact_number: Optional[str] = Field(default=None, max_length=50)
     phone_number: Optional[str] = Field(default=None, max_length=50)
+    email: Optional[str] = Field(default=None, max_length=255)
     place: Optional[str] = Field(default=None, max_length=255)
     address: Optional[str] = Field(default=None, max_length=500)
     gst_number: Optional[str] = Field(default=None, max_length=50)
     previous_due: Decimal = Field(default=Decimal("0"))
+    opening_outstanding_date: Optional[date] = None
+    opening_outstanding_note: Optional[str] = None
     advance_balance: Decimal = Field(default=Decimal("0"))
+    advance_balance_date: Optional[date] = None
+    advance_balance_note: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -270,7 +303,10 @@ class CustomerBulkRow(BaseModel):
 
 class MachineBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    machine_restore_key: Optional[str] = Field(default=None, max_length=100)
+    machine_number: Optional[str] = Field(default=None, max_length=50)
     machine_name: str = Field(..., min_length=1, max_length=255)
+    machine_type: Optional[str] = Field(default=None, max_length=255)
     default_operating_speed: int = Field(default=0, ge=0)
     target_output_per_shift: int = Field(default=0, ge=0)
     mould_size_ml: Optional[int] = Field(default=None, gt=0)
@@ -279,17 +315,23 @@ class MachineBulkRow(BaseModel):
 
 class BlankStockBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    material_restore_key: Optional[str] = Field(default=None, max_length=100)
     material_name: str = Field(..., min_length=1, max_length=255)
+    variety_design: str = Field(..., min_length=1, max_length=100)
     size_ml: int = Field(..., gt=0)
-    kg_per_sack: Decimal = Field(default=Decimal("0"), ge=0)
+    linked_bottom_size_mm: int = Field(..., gt=0)
+    weight_per_bora_kg: Decimal = Field(default=Decimal("0"), ge=0)
     total_boras_sacks: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class BottomReelBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    material_restore_key: Optional[str] = Field(default=None, max_length=100)
     bottom_size_mm: int = Field(..., gt=0)
+    variety_design: str = Field(..., min_length=1, max_length=100)
     total_individual_rolls: int = Field(default=0, ge=0)
     total_weight_kg: Decimal = Field(default=Decimal("0"), ge=0)
+    bottom_price_per_kg: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class BoxStockBulkRow(BaseModel):
@@ -310,12 +352,14 @@ class PlasticStockBulkRow(BaseModel):
 
 class FinishedGoodsBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
+    product_restore_key: Optional[str] = Field(default=None, max_length=100)
     product_size_ml: int = Field(..., gt=0)
     variety_design: str = Field(default="Standard/White", max_length=100)
-    packaging_size_name: Optional[str] = Field(default=None, max_length=100)
+    packaging_size_name: str = Field(..., min_length=1, max_length=100)
     pcs_per_packet: int = Field(default=1, gt=0)
     packets_per_box: int = Field(default=1, gt=0)
     initial_stock_boxes: int = Field(default=0, ge=0)
+    initial_loose_packets: int = Field(default=0, ge=0)
 
 
 BULK_ROW_MODELS = {
@@ -362,6 +406,15 @@ def bulk_str(value) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
+
+
+def normalized_identity(value) -> str:
+    return " ".join(bulk_str(value).casefold().split())
+
+
+def normalized_phone(value) -> str:
+    digits = re.sub(r"\D", "", bulk_str(value))
+    return digits[-10:] if len(digits) >= 10 else digits
 
 
 def normalize_bulk_cell(key: str, value):
@@ -502,26 +555,58 @@ def bulk_unique_key(sub_tab_type: str, row: dict) -> tuple:
     if sub_tab_type == "company_profile":
         return ("company_profile",)
     if sub_tab_type == "worker":
-        return (bulk_str(row.get("name")).lower(),)
+        restore_key = normalized_identity(row.get("worker_restore_key"))
+        return ("restore", restore_key) if restore_key else (
+            "fallback",
+            normalized_phone(row.get("mobile_number")) or normalized_identity(row.get("name")),
+        )
     if sub_tab_type == "customer":
-        return (bulk_str(row.get("name")).lower(),)
+        restore_key = normalized_identity(row.get("customer_restore_key"))
+        if restore_key:
+            return ("restore", restore_key)
+        return (
+            "fallback",
+            normalized_phone(row.get("phone_number") or row.get("contact_number")),
+            normalized_identity(row.get("gst_number")),
+            normalized_identity(row.get("name")),
+            normalized_identity(row.get("firm_name")),
+            normalized_identity(row.get("place")),
+        )
     if sub_tab_type == "machine":
-        return (bulk_str(row.get("machine_name")).lower(),)
+        restore_key = normalized_identity(row.get("machine_restore_key"))
+        return ("restore", restore_key) if restore_key else (
+            "fallback",
+            normalized_identity(row.get("machine_number")) or normalized_identity(row.get("machine_name")),
+        )
     if sub_tab_type == "blank_stock":
-        return (int(row["size_ml"]), bulk_str(row.get("material_name") or "Plain White").lower())
+        restore_key = normalized_identity(row.get("material_restore_key"))
+        return ("restore", restore_key) if restore_key else (
+            "fallback",
+            int(row["size_ml"]),
+            normalized_identity(row.get("variety_design")),
+        )
     if sub_tab_type == "bottom_reel":
-        return (int(row["bottom_size_mm"]), "plain white")
+        restore_key = normalized_identity(row.get("material_restore_key"))
+        return ("restore", restore_key) if restore_key else (
+            "fallback",
+            int(row["bottom_size_mm"]),
+            normalized_identity(row.get("variety_design")),
+        )
     if sub_tab_type == "box_stock":
         return (bulk_str(row.get("box_type")).lower(),)
     if sub_tab_type == "plastic_stock":
         return (bulk_str(row.get("plastic_size_type")).lower(), int(row["used_for_cup_size_ml"]))
     if sub_tab_type == "finished_goods":
+        restore_key = normalized_identity(row.get("product_restore_key"))
+        if restore_key:
+            return ("restore", restore_key)
         product_size_ml = int(row["product_size_ml"])
-        variety = bulk_str(row.get("variety_design") or "Standard/White").lower() or "standard/white"
-        packaging_size_name = bulk_str(row.get("packaging_size_name"))
-        if not packaging_size_name:
-            packaging_size_name = f"{product_size_ml}ML - {row.get('variety_design') or 'Standard/White'}"
-        return (product_size_ml, variety, packaging_size_name.lower())
+        return (
+            "fallback",
+            product_size_ml,
+            normalized_identity(row.get("variety_design")),
+            normalized_identity(row.get("packaging_size_name")),
+        )
     return tuple(sorted((key, str(value)) for key, value in row.items() if not key.startswith("_")))
 
 
@@ -556,6 +641,67 @@ def dedupe_valid_bulk_rows(valid_by_type: dict[str, list[dict]]) -> tuple[dict[s
             by_key[key] = row
         deduped[sub_tab_type] = list(by_key.values())
     return deduped, warnings
+
+
+def validate_bulk_cross_sheet(valid_by_type: dict[str, list[dict]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    boxes = {normalized_identity(row.get("box_type")) for row in valid_by_type.get("box_stock", [])}
+    bottoms = {
+        (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
+        for row in valid_by_type.get("bottom_reel", [])
+    }
+    blanks = {
+        (int(row["size_ml"]), normalized_identity(row.get("variety_design")))
+        for row in valid_by_type.get("blank_stock", [])
+    }
+    bottom_sizes = {size for size, _ in bottoms}
+
+    for row in valid_by_type.get("finished_goods", []):
+        packaging = normalized_identity(row.get("packaging_size_name"))
+        sku = (int(row["product_size_ml"]), normalized_identity(row.get("variety_design")))
+        if packaging not in boxes:
+            issues.append(ValidationIssue(
+                row=row.get("_row_number"), field="packaging_size_name",
+                error="Finished Goods packaging does not match any Box Packaging box_type.",
+                severity=ValidationSeverity.FATAL,
+                suggested_correction="Add the same packaging name in Raw Materials / Box Packaging.",
+                sheet="Finished Goods", section="Finished Goods",
+                raw_value=row.get("packaging_size_name"), action_type="error",
+            ))
+        if sku not in blanks:
+            issues.append(ValidationIssue(
+                row=row.get("_row_number"), field="variety_design",
+                error="Finished Goods size and variety do not have matching Blank stock.",
+                severity=ValidationSeverity.FATAL,
+                suggested_correction="Add a Cup Blank row with the same size_ml and variety_design.",
+                sheet="Finished Goods", section="Finished Goods",
+                raw_value=row.get("variety_design"), action_type="error",
+            ))
+
+    for row in valid_by_type.get("blank_stock", []):
+        linked_size = int(row["linked_bottom_size_mm"])
+        variety = normalized_identity(row.get("variety_design"))
+        if (linked_size, variety) not in bottoms:
+            issues.append(ValidationIssue(
+                row=row.get("_row_number"), field="linked_bottom_size_mm",
+                error="Blank linked bottom size and variety do not match a Bottom Reel row.",
+                severity=ValidationSeverity.FATAL,
+                suggested_correction="Add a Bottom Reel row with the linked size and same variety_design.",
+                sheet="Raw Materials", section="Cup Blank",
+                raw_value=row.get("linked_bottom_size_mm"), action_type="error",
+            ))
+
+    for row in valid_by_type.get("machine", []):
+        if row.get("bottom_size_mm") and int(row["bottom_size_mm"]) not in bottom_sizes:
+            issues.append(ValidationIssue(
+                row=row.get("_row_number"), field="bottom_size_mm",
+                error="Machine bottom size does not exist in Bottom Reel stock.",
+                severity=ValidationSeverity.FATAL,
+                suggested_correction="Add the machine bottom_size_mm to Raw Materials / Bottom Reel.",
+                sheet="Machines", section="Machines",
+                raw_value=row.get("bottom_size_mm"), action_type="error",
+            ))
+    return issues
 
 
 def increment_bulk_stat(stats: dict[str, int] | None, key: str, value: int = 1) -> None:
@@ -900,30 +1046,30 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return 1
 
     if sub_tab_type == "worker":
-        worker_names = [row["name"].strip() for row in valid_rows if row.get("name") and row["name"].strip()]
-        existing_workers = {
-            worker.name.strip().lower(): worker
-            for worker in db.query(Worker)
-            .filter(Worker.factory_id == factory_id, Worker.name.in_(worker_names))
-            .with_for_update()
-            .all()
-        }
         worker_rows: list[tuple[Worker, dict]] = []
         for row in valid_rows:
             worker_name = row["name"].strip()
             if not worker_name:
                 increment_bulk_stat(stats, "skipped")
                 continue
-            worker_key = worker_name.lower()
             phone, _ = normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else (None, None)
-            worker = existing_workers.get(worker_key)
+            restore_key = (row.get("worker_restore_key") or "").strip() or None
+            query = db.query(Worker).filter(Worker.factory_id == factory_id)
+            if restore_key:
+                worker = query.filter(sql_func.lower(Worker.worker_restore_key) == restore_key.lower()).with_for_update().first()
+            elif phone:
+                worker = query.filter(Worker.phone == phone).with_for_update().first()
+                if worker is None:
+                    worker = query.filter(sql_func.lower(sql_func.trim(Worker.name)) == worker_name.lower()).with_for_update().first()
+            else:
+                worker = query.filter(sql_func.lower(sql_func.trim(Worker.name)) == worker_name.lower()).with_for_update().first()
             if worker is None:
                 worker = Worker(factory_id=factory_id, name=worker_name)
                 db.add(worker)
-                existing_workers[worker_key] = worker
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
+            worker.worker_restore_key = restore_key
             worker.phone = phone
             worker.daily_wage_rate = row["daily_wages"]
             worker.daily_wages = row["daily_wages"]
@@ -931,7 +1077,8 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             worker.salary = worker.salary or 0
             worker.daily_salary = row["daily_wages"]
             worker.shift_hours = row["duty_hours"]
-            worker.shift_type = worker.shift_type or "worker"
+            worker.shift_timing = (row.get("shift_timing") or "").strip() or None
+            worker.shift_type = (row.get("shift_type") or "").strip() or worker.shift_type or "worker"
             worker.is_active = True
             worker_rows.append((worker, row))
         db.flush()
@@ -968,37 +1115,56 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return len(worker_rows)
 
     if sub_tab_type == "customer":
-        customer_names = [row["name"].strip().lower() for row in valid_rows if row.get("name") and row["name"].strip()]
-        existing_customers = {
-            customer.name.strip().lower(): customer
-            for customer in db.query(Customer)
-            .filter(
-                Customer.factory_id == factory_id,
-                sql_func.lower(Customer.name).in_(customer_names),
-            )
-            .with_for_update()
-            .all()
-        }
         saved_count = 0
         for row in valid_rows:
             customer_name = row["name"].strip()
             if not customer_name:
                 increment_bulk_stat(stats, "skipped")
                 continue
-            customer_key = customer_name.lower()
-            customer = existing_customers.get(customer_key)
+            restore_key = (row.get("customer_restore_key") or "").strip() or None
+            phone_number = normalized_phone(row.get("phone_number") or row.get("contact_number")) or None
+            gst_number = (row.get("gst_number") or "").strip() or None
+            query = db.query(Customer).filter(Customer.factory_id == factory_id)
+            if restore_key:
+                customer = query.filter(sql_func.lower(Customer.customer_restore_key) == restore_key.lower()).with_for_update().first()
+            elif phone_number:
+                customer = query.filter(
+                    sql_func.replace(sql_func.replace(sql_func.replace(Customer.phone_number, "+91", ""), " ", ""), "-", "")
+                    .like(f"%{phone_number}")
+                ).with_for_update().first()
+                if customer is None and gst_number:
+                    customer = query.filter(sql_func.lower(Customer.gst_number) == gst_number.lower()).with_for_update().first()
+                if customer is None:
+                    customer = query.filter(
+                        sql_func.lower(sql_func.trim(Customer.name)) == customer_name.lower(),
+                        sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.firm_name, ""))) == normalized_identity(row.get("firm_name")),
+                        sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.place, ""))) == normalized_identity(row.get("place")),
+                    ).with_for_update().first()
+            elif gst_number:
+                customer = query.filter(sql_func.lower(Customer.gst_number) == gst_number.lower()).with_for_update().first()
+                if customer is None:
+                    customer = query.filter(
+                        sql_func.lower(sql_func.trim(Customer.name)) == customer_name.lower(),
+                        sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.firm_name, ""))) == normalized_identity(row.get("firm_name")),
+                        sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.place, ""))) == normalized_identity(row.get("place")),
+                    ).with_for_update().first()
+            else:
+                customer = query.filter(
+                    sql_func.lower(sql_func.trim(Customer.name)) == customer_name.lower(),
+                    sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.firm_name, ""))) == normalized_identity(row.get("firm_name")),
+                    sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.place, ""))) == normalized_identity(row.get("place")),
+                ).with_for_update().first()
             if customer is None:
                 customer = Customer(factory_id=factory_id, name=customer_name)
                 db.add(customer)
-                existing_customers[customer_key] = customer
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
 
             contact_number = (row.get("contact_number") or "").strip() or None
-            phone_number = (row.get("phone_number") or "").strip() or None
             previous_due = Decimal(str(row.get("previous_due") or "0"))
             advance_balance = Decimal(str(row.get("advance_balance") or "0"))
+            customer.customer_restore_key = restore_key
             customer.name = customer_name
             customer.firm_name = (row.get("firm_name") or "").strip() or None
             customer.contact_number = contact_number
@@ -1006,9 +1172,14 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             customer.phone = phone_number or contact_number
             customer.place = (row.get("place") or "").strip() or None
             customer.address = (row.get("address") or "").strip() or None
-            customer.gst_number = (row.get("gst_number") or "").strip() or None
+            customer.email = (row.get("email") or "").strip() or None
+            customer.gst_number = gst_number
+            customer.opening_outstanding_date = row.get("opening_outstanding_date")
+            customer.opening_outstanding_note = (row.get("opening_outstanding_note") or "").strip() or None
             customer.previous_due = previous_due
             customer.advance_balance = advance_balance
+            customer.advance_balance_date = row.get("advance_balance_date")
+            customer.advance_balance_note = (row.get("advance_balance_note") or "").strip() or None
             customer.total_due = previous_due
             customer.pending_dues = float(previous_due)
             customer.pending_balance = previous_due
@@ -1030,10 +1201,17 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                         customer_id=customer.id,
                         source_type="opening_outstanding",
                         tracking_number=f"OPEN-{customer.id}",
-                        bill_date=date.today(),
+                        bill_date=row.get("opening_outstanding_date") or date.today(),
                         bill_amount=previous_due,
                         amount_paid=Decimal("0.00"),
+                        note=customer.opening_outstanding_note,
                     )
+                else:
+                    open_bill.bill_date = row.get("opening_outstanding_date") or open_bill.bill_date
+                    open_bill.note = customer.opening_outstanding_note
+                    open_bill.bill_amount = previous_due
+                    open_bill.balance_amount = max(previous_due - Decimal(open_bill.amount_paid or 0), Decimal("0"))
+                    open_bill.status = "paid" if open_bill.balance_amount == 0 else ("partial" if open_bill.amount_paid else "active")
             saved_count += 1
         db.flush()
         return saved_count
@@ -1045,15 +1223,15 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             if not machine_name:
                 increment_bulk_stat(stats, "skipped")
                 continue
-            machine = (
-                db.query(Machine)
-                .filter(
-                    Machine.factory_id == factory_id,
-                    sql_func.lower(Machine.name) == machine_name.lower(),
-                )
-                .with_for_update()
-                .first()
-            )
+            restore_key = (row.get("machine_restore_key") or "").strip() or None
+            machine_number = (row.get("machine_number") or "").strip() or None
+            query = db.query(Machine).filter(Machine.factory_id == factory_id)
+            if restore_key:
+                machine = query.filter(sql_func.lower(Machine.machine_restore_key) == restore_key.lower()).with_for_update().first()
+            elif machine_number:
+                machine = query.filter(sql_func.lower(Machine.machine_number) == machine_number.lower()).with_for_update().first()
+            else:
+                machine = query.filter(sql_func.lower(sql_func.trim(Machine.name)) == machine_name.lower()).with_for_update().first()
             if machine is None:
                 machine = Machine(factory_id=factory_id, name=machine_name)
                 db.add(machine)
@@ -1061,8 +1239,10 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             else:
                 increment_bulk_stat(stats, "updated")
             machine.name = machine_name
+            machine.machine_restore_key = restore_key
             machine.machine_name = machine_name
-            machine.machine_type = machine_name
+            machine.machine_number = machine_number
+            machine.machine_type = (row.get("machine_type") or "").strip() or "Custom Machine"
             machine.mould_size_ml = row.get("mould_size_ml")
             machine.bottom_size_mm = row.get("bottom_size_mm")
             machine.speed_per_minute = row["default_operating_speed"]
@@ -1082,29 +1262,32 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         saved_count = 0
         for row in valid_rows:
             blank_size_ml = int(row["size_ml"])
-            variety = row["material_name"].strip() or "Plain White"
-            stock = (
-                db.query(BlankStock)
-                .filter(
-                    BlankStock.factory_id == factory_id,
+            restore_key = (row.get("material_restore_key") or "").strip() or None
+            material_name = row["material_name"].strip()
+            variety = row["variety_design"].strip()
+            query = db.query(BlankStock).filter(BlankStock.factory_id == factory_id)
+            if restore_key:
+                stock = query.filter(sql_func.lower(BlankStock.material_restore_key) == restore_key.lower()).with_for_update().first()
+            else:
+                stock = query.filter(
                     BlankStock.blank_size_ml == blank_size_ml,
                     sql_func.lower(BlankStock.variety) == variety.lower(),
-                )
-                .with_for_update()
-                .first()
-            )
+                ).with_for_update().first()
             if stock is None:
                 stock = BlankStock(factory_id=factory_id, blank_size_ml=blank_size_ml, variety=variety)
                 db.add(stock)
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
-            stock.linked_bottom_size_mm = blank_size_ml
-            stock.weight_per_bora_kg = row["kg_per_sack"]
+            stock.material_restore_key = restore_key
+            stock.material_name = material_name
+            stock.variety = variety
+            stock.linked_bottom_size_mm = int(row["linked_bottom_size_mm"])
+            stock.weight_per_bora_kg = row["weight_per_bora_kg"]
             if "total_boras_sacks" in row:
                 total_boras = row.get("total_boras_sacks") or Decimal("0")
                 stock.total_boras = total_boras
-                stock.total_qty_kg = total_boras * row["kg_per_sack"]
+                stock.total_qty_kg = total_boras * row["weight_per_bora_kg"]
             else:
                 stock.total_boras = stock.total_boras or 0
                 stock.total_qty_kg = stock.total_qty_kg or 0
@@ -1116,17 +1299,16 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         saved_count = 0
         for row in valid_rows:
             bottom_size_mm = int(row["bottom_size_mm"])
-            variety = "Plain White"
-            stock = (
-                db.query(BottomStock)
-                .filter(
-                    BottomStock.factory_id == factory_id,
+            restore_key = (row.get("material_restore_key") or "").strip() or None
+            variety = row["variety_design"].strip()
+            query = db.query(BottomStock).filter(BottomStock.factory_id == factory_id)
+            if restore_key:
+                stock = query.filter(sql_func.lower(BottomStock.material_restore_key) == restore_key.lower()).with_for_update().first()
+            else:
+                stock = query.filter(
                     BottomStock.bottom_size_mm == bottom_size_mm,
                     sql_func.lower(BottomStock.variety) == variety.lower(),
-                )
-                .with_for_update()
-                .first()
-            )
+                ).with_for_update().first()
             if stock is None:
                 stock = BottomStock(factory_id=factory_id, bottom_size_mm=bottom_size_mm, variety=variety)
                 db.add(stock)
@@ -1134,8 +1316,11 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             else:
                 increment_bulk_stat(stats, "updated")
             stock.total_rolls = row["total_individual_rolls"]
+            stock.material_restore_key = restore_key
+            stock.variety = variety
             stock.total_weight_kg = row["total_weight_kg"]
             stock.total_qty_kg = row["total_weight_kg"]
+            stock.price_per_kg = row["bottom_price_per_kg"]
             saved_count += 1
         db.flush()
         return saved_count
@@ -1201,6 +1386,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             fg_debug_info["rows_read"] = len(valid_rows)
         for row in valid_rows:
             product_size_ml = int(row["product_size_ml"])
+            restore_key = (row.get("product_restore_key") or "").strip() or None
             variety = (row.get("variety_design") or "Standard/White").strip() or "Standard/White"
             packaging_size_name = (row.get("packaging_size_name") or "").strip()
             if not packaging_size_name:
@@ -1208,13 +1394,16 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             pieces_per_packet = max(int(row["pcs_per_packet"]), 1)
             packets_per_box = max(int(row["packets_per_box"]), 1)
             initial_stock_boxes = max(int(row["initial_stock_boxes"]), 0)
+            initial_loose_packets = max(int(row["initial_loose_packets"]), 0)
 
             box_inventory = get_or_create_inventory(db, factory_id, packaging_size_name, "Packaging", "pieces")
             poly_inventory = get_or_create_inventory(db, factory_id, f"{product_size_ml}ml Polybag", "Packaging", "pieces")
             profile = (
                 db.query(PackagingProfile)
                 .filter(PackagingProfile.factory_id == factory_id)
+                .filter(PackagingProfile.cup_size_ml == product_size_ml)
                 .filter(sql_func.lower(PackagingProfile.profile_name) == packaging_size_name.lower())
+                .filter(sql_func.lower(sql_func.coalesce(PackagingProfile.print_design_name, "")) == variety.lower())
                 .with_for_update()
                 .first()
             )
@@ -1287,7 +1476,10 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                     fg_debug_info["rows_updated"] += 1
                 fg_debug_info["created_finished_goods_stock_ids"].append(stock.id)
 
-            sync_finished_goods_to_final_product_stock(db, factory_id, stock, fg_debug_info)
+            final_stock = sync_finished_goods_to_final_product_stock(db, factory_id, stock, fg_debug_info)
+            final_stock.product_restore_key = restore_key
+            final_stock.loose_packets = initial_loose_packets
+            final_stock.current_quantity = initial_stock_boxes
 
             saved_count += 1
         return saved_count
@@ -1332,12 +1524,13 @@ async def validate_master_onboarding(
 
     valid_by_type, failed_rows = read_master_bulk_excel(await file.read())
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
+    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type)
 
     # Count total ACTUAL rows across all sheets
     total_attempted = sum(len(rows) for rows in valid_by_type.values())
     successful_rows = total_attempted  # in dry-run all valid rows are "would succeed"
 
-    issues = enrich_failed_rows(failed_rows) + duplicate_warnings
+    issues = enrich_failed_rows(failed_rows) + duplicate_warnings + cross_sheet_issues
     report = make_report(issues, successful_rows=successful_rows, total_rows_attempted=total_attempted + len(failed_rows))
 
     return {
@@ -1364,10 +1557,11 @@ async def bulk_upload_master_onboarding(
     valid_by_type, failed_rows = read_master_bulk_excel(file_bytes)
 
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
+    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type)
 
     # Build enriched validation report
     total_attempted = sum(len(rows) for rows in valid_by_type.values()) + len(failed_rows)
-    issues = enrich_failed_rows(failed_rows) + duplicate_warnings
+    issues = enrich_failed_rows(failed_rows) + duplicate_warnings + cross_sheet_issues
 
     # Extract any failures or skip reasons for Finished Goods
     fg_errors = [err for err in failed_rows if err.get("sheet") == "Finished Goods"]
@@ -1415,6 +1609,7 @@ async def bulk_upload_master_onboarding(
     operation_counts: dict[str, int] = {
         "inserted": 0,
         "updated": 0,
+        "unchanged": 0,
         "skipped": 0,
         "failed": 0,
         "warnings": len([issue for issue in issues if issue.severity == ValidationSeverity.WARNING]),

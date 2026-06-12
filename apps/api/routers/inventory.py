@@ -221,6 +221,42 @@ class FinalStockRow(BaseModel):
     loose_packets: Optional[int] = None
     image_url: Optional[str] = None
     variant_name: Optional[str] = None
+    mapping_complete: bool = True
+    mapping_message: Optional[str] = None
+
+
+def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductStock) -> str | None:
+    blank = (
+        db.query(BlankStock)
+        .filter(
+            BlankStock.factory_id == factory_id,
+            BlankStock.blank_size_ml == stock.product_size_ml,
+            func.lower(func.trim(BlankStock.variety)) == stock.variety.strip().lower(),
+        )
+        .first()
+    )
+    if blank is None or not blank.weight_per_bora_kg or blank.weight_per_bora_kg <= 0:
+        return "Inventory mapping incomplete for this SKU."
+    bottom = (
+        db.query(BottomStock)
+        .filter(
+            BottomStock.factory_id == factory_id,
+            BottomStock.bottom_size_mm == blank.linked_bottom_size_mm,
+            func.lower(func.trim(BottomStock.variety)) == stock.variety.strip().lower(),
+        )
+        .first()
+    )
+    if bottom is None:
+        return "Inventory mapping incomplete for this SKU."
+    box = (
+        db.query(BoxStock)
+        .filter(
+            BoxStock.factory_id == factory_id,
+            func.lower(func.trim(BoxStock.packaging_size_name)) == stock.packaging_size_name.strip().lower(),
+        )
+        .first()
+    )
+    return None if box is not None else "Inventory mapping incomplete for this SKU."
 
 
 class FinalStockCreate(BaseModel):
@@ -1149,6 +1185,8 @@ def list_final_stock(
         ).all()
         processed_rows = []
         for row in rows:
+            if production_mapping_issue(db, str(current_user.factory_id), row):
+                continue
             live_boxes, live_loose = calculate_live_sku_stock(
                 db=db,
                 factory_id=str(current_user.factory_id),

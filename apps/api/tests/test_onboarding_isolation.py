@@ -312,18 +312,22 @@ def test_cross_factory_isolation_blank_stock(db):
     blank_row_a = [
         {
             "row_type": "ACTUAL",
-            "material_name": "Plain White",
+            "material_name": "Cup Blank",
+            "variety_design": "Plain White",
             "size_ml": 150,
-            "kg_per_sack": Decimal("25"),
+            "linked_bottom_size_mm": 57,
+            "weight_per_bora_kg": Decimal("25"),
         }
     ]
     
     blank_row_b = [
         {
             "row_type": "ACTUAL",
-            "material_name": "Plain White",
+            "material_name": "Cup Blank",
+            "variety_design": "Plain White",
             "size_ml": 150,
-            "kg_per_sack": Decimal("30"),
+            "linked_bottom_size_mm": 57,
+            "weight_per_bora_kg": Decimal("30"),
         }
     ]
     
@@ -349,8 +353,10 @@ def test_cross_factory_isolation_bottom_reel(db):
         {
             "row_type": "ACTUAL",
             "bottom_size_mm": 57,
+            "variety_design": "Plain White",
             "total_individual_rolls": 10,
             "total_weight_kg": Decimal("100"),
+            "bottom_price_per_kg": Decimal("0"),
         }
     ]
     
@@ -358,8 +364,10 @@ def test_cross_factory_isolation_bottom_reel(db):
         {
             "row_type": "ACTUAL",
             "bottom_size_mm": 57,
+            "variety_design": "Plain White",
             "total_individual_rolls": 12,
             "total_weight_kg": Decimal("120"),
+            "bottom_price_per_kg": Decimal("0"),
         }
     ]
     
@@ -466,24 +474,28 @@ def test_cross_factory_finished_goods(db):
     fg_row_a = [
         {
             "row_type": "ACTUAL",
+            "product_restore_key": "SKU-A",
             "product_size_ml": 150,
             "variety_design": "Theme A",
             "packaging_size_name": "Pack A",
             "pcs_per_packet": 50,
             "packets_per_box": 20,
             "initial_stock_boxes": 10,
+            "initial_loose_packets": 0,
         }
     ]
     
     fg_row_b = [
         {
             "row_type": "ACTUAL",
+            "product_restore_key": "SKU-A",
             "product_size_ml": 150,
             "variety_design": "Theme A",
             "packaging_size_name": "Pack A",
             "pcs_per_packet": 60,
             "packets_per_box": 25,
             "initial_stock_boxes": 15,
+            "initial_loose_packets": 0,
         }
     ]
     
@@ -588,9 +600,12 @@ def test_same_file_reupload_idempotency_all_types(db):
     # 4. blank_stock
     blank_rows = [{
         "row_type": "ACTUAL",
+        "material_restore_key": "BL-80",
         "material_name": "Idempotent Blank",
+        "variety_design": "Plain White",
         "size_ml": 80,
-        "kg_per_sack": Decimal("15"),
+        "linked_bottom_size_mm": 45,
+        "weight_per_bora_kg": Decimal("15"),
     }]
     # Run 1
     stats = {"inserted": 0, "updated": 0, "skipped": 0}
@@ -605,7 +620,7 @@ def test_same_file_reupload_idempotency_all_types(db):
     assert stats["updated"] == 1
     assert db.query(BlankStock).filter(BlankStock.factory_id == 1).count() == 1
     # Run 3
-    blank_rows[0]["kg_per_sack"] = Decimal("18")
+    blank_rows[0]["weight_per_bora_kg"] = Decimal("18")
     stats = {"inserted": 0, "updated": 0, "skipped": 0}
     apply_bulk_rows(db, user, "blank_stock", blank_rows, stats)
     db.commit()
@@ -615,9 +630,12 @@ def test_same_file_reupload_idempotency_all_types(db):
     # 5. bottom_reel
     bottom_rows = [{
         "row_type": "ACTUAL",
+        "material_restore_key": "BT-45",
         "bottom_size_mm": 45,
+        "variety_design": "Plain White",
         "total_individual_rolls": 5,
         "total_weight_kg": Decimal("50"),
+        "bottom_price_per_kg": Decimal("0"),
     }]
     # Run 1
     stats = {"inserted": 0, "updated": 0, "skipped": 0}
@@ -698,12 +716,14 @@ def test_same_file_reupload_idempotency_all_types(db):
     # 8. finished_goods
     fg_rows = [{
         "row_type": "ACTUAL",
+        "product_restore_key": "SKU-80-FG",
         "product_size_ml": 80,
         "variety_design": "Design FG",
         "packaging_size_name": "Box FG",
         "pcs_per_packet": 50,
         "packets_per_box": 10,
         "initial_stock_boxes": 5,
+        "initial_loose_packets": 0,
     }]
     # Run 1
     stats = {"inserted": 0, "updated": 0, "skipped": 0}

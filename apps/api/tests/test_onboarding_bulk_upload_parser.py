@@ -43,15 +43,21 @@ def test_master_template_contains_customers_sheet_with_valid_sample():
     headers = workbook["Customers"].iloc[1].tolist()
     assert headers == [
         "row_type",
+        "customer_restore_key",
         "name",
         "firm_name",
         "contact_number",
         "phone_number",
+        "email",
         "place",
         "address",
         "gst_number",
         "previous_due",
+        "opening_outstanding_date",
+        "opening_outstanding_note",
         "advance_balance",
+        "advance_balance_date",
+        "advance_balance_note",
     ]
 
 
@@ -221,11 +227,14 @@ def test_customer_bulk_upload_is_isolated_by_factory():
 def test_bottom_reel_bulk_rows_default_blank_weight_to_zero():
     frame = pd.DataFrame(
         [
-            {
-                "row_type": "ACTUAL",
-                "bottom_size_mm": 65,
-                "total_individual_rolls": 49,
-                "total_weight_kg": None,
+                {
+                    "row_type": "ACTUAL",
+                    "material_restore_key": "BT-65",
+                    "bottom_size_mm": 65,
+                    "variety_design": "Plain White",
+                    "total_individual_rolls": 49,
+                    "total_weight_kg": None,
+                    "bottom_price_per_kg": 0,
             }
         ]
     )
@@ -236,9 +245,12 @@ def test_bottom_reel_bulk_rows_default_blank_weight_to_zero():
     assert rows == [
         {
             "row_type": "ACTUAL",
+            "material_restore_key": "BT-65",
             "bottom_size_mm": 65,
+            "variety_design": "Plain White",
             "total_individual_rolls": 49,
             "total_weight_kg": Decimal("0"),
+            "bottom_price_per_kg": Decimal("0"),
             "_row_number": 1,
         }
     ]
@@ -410,11 +422,14 @@ def test_bottom_reel_bulk_upload_updates_existing_stock_in_same_factory():
             current_user,
             "bottom_reel",
             [
-                {
-                    "row_type": "ACTUAL",
-                    "bottom_size_mm": 65,
-                    "total_individual_rolls": 49,
-                    "total_weight_kg": Decimal("0"),
+                    {
+                        "row_type": "ACTUAL",
+                        "material_restore_key": None,
+                        "bottom_size_mm": 65,
+                        "variety_design": "Plain White",
+                        "total_individual_rolls": 49,
+                        "total_weight_kg": Decimal("0"),
+                        "bottom_price_per_kg": Decimal("0"),
                 }
             ],
         )
@@ -562,12 +577,14 @@ def test_finished_goods_bulk_upload_creates_final_product_stock():
             [
                 {
                     "row_type": "ACTUAL",
+                    "product_restore_key": "SKU-SPIDER-250",
                     "product_size_ml": 250,
                     "variety_design": "Spiderman Design",
                     "packaging_size_name": "250ML Spiderman Carton",
                     "pcs_per_packet": 100,
                     "packets_per_box": 10,
                     "initial_stock_boxes": 5,
+                    "initial_loose_packets": 3,
                 }
             ],
         )
@@ -588,6 +605,7 @@ def test_finished_goods_bulk_upload_creates_final_product_stock():
         assert final_stocks[0].packaging_size_name == "250ML Spiderman Carton"
         assert final_stocks[0].pieces_per_packet == 100
         assert final_stocks[0].packets_per_box_limit == 10
+        assert final_stocks[0].loose_packets == 3
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
@@ -598,8 +616,8 @@ def test_finished_goods_real_workbook_headers_are_parsed_and_reupload_is_idempot
     frames = pd.read_excel(BytesIO(workbook.getvalue()), sheet_name=None, header=None)
     finished_goods = frames["Finished Goods"]
     real_rows = [
-        ["ACTUAL", 210, "Lovely day", "210- lovely day - 48*62", 48, 62, 20],
-        ["ACTUAL", 210, "Lovely day", "210- lovely day - 45*67", 45, 65, 26],
+        ["ACTUAL", "SKU-LOVELY-48", 210, "Lovely day", "210- lovely day - 48*62", 48, 62, 20, 0],
+        ["ACTUAL", "SKU-LOVELY-45", 210, "Lovely day", "210- lovely day - 45*67", 45, 65, 26, 0],
     ]
     frames["Finished Goods"] = pd.concat(
         [finished_goods, pd.DataFrame(real_rows, columns=finished_goods.columns)],
@@ -618,12 +636,14 @@ def test_finished_goods_real_workbook_headers_are_parsed_and_reupload_is_idempot
     assert debug_info["sheet_name"] == "Finished Goods"
     assert debug_info["normalized_headers"] == [
         "row_type",
+        "product_restore_key",
         "product_size_ml",
         "variety_design",
         "packaging_size_name",
         "pcs_per_packet",
         "packets_per_box",
         "initial_stock_boxes",
+        "initial_loose_packets",
     ]
     assert failed_rows == []
     assert len(valid_by_type["finished_goods"]) == 2

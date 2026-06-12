@@ -182,6 +182,10 @@ Security hardening status:
 ## 9. Bulk Upload Rules
 
 - Bulk upload same-file re-upload must never create a duplicate crash.
+- Phase 1 canonical onboarding identity uses nullable factory-scoped restore keys for customers, workers, machines, Blank/Bottom materials, and finished products.
+- When a restore key is supplied it is authoritative. Fallback matching is normalized phone/GST/name context for customers, phone/name for workers, machine number/name for machines, and full size/variety/packaging identity for materials/SKUs.
+- Blank `material_name` is descriptive only; production identity uses `variety`, `weight_per_bora_kg`, and `linked_bottom_size_mm`. Never infer Bottom MM from cup ML.
+- Production SKU options must exclude incomplete Blank/Bottom/Box mappings.
 - Every bulk sheet should behave as deterministic upsert: insert if new, update if existing, scoped by `current_user.factory_id`.
 - Spreadsheet-provided tenant/factory fields must never override authenticated `current_user.factory_id`.
 - Duplicate/integrity errors should be converted into useful validation-report issues whenever possible.

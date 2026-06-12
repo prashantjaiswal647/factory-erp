@@ -4,6 +4,28 @@ Audit date: 2026-06-13
 Scope: Bulk onboarding Excel -> UI -> calculations -> production -> sales -> outstanding -> payments  
 Method: Static inspection of the current onboarding workbook generator/parser, SQLAlchemy models, API routes, frontend pages, and existing tests. No application code or database data was changed.
 
+## Phase 1 Implementation Status
+
+Implemented on 2026-06-13:
+
+- Added factory-scoped restore keys for customers, workers, machines, Blank/Bottom materials, and finished products.
+- Changed bulk upsert precedence to restore key first, followed by normalized documented fallback identities.
+- Separated Blank material label, variety, KG per bora, and linked Bottom MM.
+- Removed hardcoded Bottom variety from bulk import and added Bottom price per KG.
+- Added customer accounting metadata, worker shift fields, machine identity/type fields, and finished-goods opening loose packets to the workbook.
+- Added cross-sheet validation for Blank, Bottom, Box, Machine, and Finished Goods mappings.
+- Changed packaging-profile identity to factory + size + variety + packaging name.
+- Added production SKU mapping eligibility checks and hid incomplete SKUs from the production dropdown.
+- Expanded the bulk validation UI with section, current value, correction, and action columns.
+- Added Phase 1 regression tests for restore-key isolation, re-upload idempotency, material semantics, loose packets, cross-sheet validation, and production mapping.
+
+Deferred beyond Phase 1:
+
+- Structured worker opening attendance replacement.
+- Costing & Yields and Suppliers sheets.
+- Consolidation of duplicate compatibility models.
+- Historical transaction import/restore redesign.
+
 ## 1. Executive Summary
 
 The master onboarding workbook currently contains six sheets:
@@ -436,4 +458,3 @@ Primary files inspected:
 - `apps/web/src/pages/PaymentCollectionPage.tsx`
 - `apps/web/src/pages/InvoicesPage.tsx`
 - `apps/web/src/pages/CollectionWarRoomPage.tsx`
-

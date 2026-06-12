@@ -308,6 +308,7 @@ class Machine(TenantMixin, Base):
     __tablename__ = "machines"
 
     id = Column(Integer, primary_key=True, index=True)
+    machine_restore_key = Column(String(100), nullable=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     machine_type = Column(String(255), nullable=False, default="Custom Machine", server_default="Custom Machine", index=True)
     machine_name = Column(String(255), nullable=True, index=True)
@@ -339,8 +340,8 @@ class Machine(TenantMixin, Base):
         CheckConstraint("speed_per_minute >= 0", name="ck_machines_speed_non_negative"),
         CheckConstraint("speed_bpm >= 0", name="ck_machines_speed_bpm_non_negative"),
         CheckConstraint("speed_cups_per_minute >= 0", name="ck_machines_speed_cups_non_negative"),
-        UniqueConstraint("factory_id", "name", name="uq_machines_factory_name"),
         UniqueConstraint("factory_id", "machine_sequence_number", name="uq_machines_factory_sequence"),
+        UniqueConstraint("factory_id", "machine_restore_key", name="uq_machines_factory_restore_key"),
     )
 
 
@@ -437,6 +438,7 @@ class Customer(TenantMixin, Base):
     __tablename__ = "customers"
 
     id = Column(Integer, primary_key=True, index=True)
+    customer_restore_key = Column(String(100), nullable=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     phone_number = Column(String(50), nullable=True, index=True)
     email = Column(String(255), nullable=True, index=True)
@@ -480,6 +482,7 @@ class Customer(TenantMixin, Base):
             name="ck_customers_advance_discount_pct_range",
         ),
         UniqueConstraint("factory_id", "phone_number", name="uq_customers_factory_phone_number"),
+        UniqueConstraint("factory_id", "customer_restore_key", name="uq_customers_factory_restore_key"),
     )
 
 
@@ -645,7 +648,10 @@ class PackagingProfile(TenantMixin, Base):
             "box_inventory_id <> poly_inventory_id",
             name="ck_packaging_profiles_distinct_box_poly_inventory",
         ),
-        UniqueConstraint("factory_id", "profile_name", name="uq_packaging_profiles_factory_profile_name"),
+        UniqueConstraint(
+            "factory_id", "cup_size_ml", "print_design_name", "profile_name",
+            name="uq_packaging_profiles_factory_sku",
+        ),
     )
 
 
@@ -783,6 +789,7 @@ class Worker(TenantMixin, Base):
     __tablename__ = "workers"
 
     id = Column(Integer, primary_key=True, index=True)
+    worker_restore_key = Column(String(100), nullable=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     phone = Column(String(50), nullable=True, index=True)
     daily_wage_rate = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
@@ -805,7 +812,7 @@ class Worker(TenantMixin, Base):
         CheckConstraint("salary >= 0", name="ck_workers_salary_non_negative"),
         CheckConstraint("daily_salary >= 0", name="ck_workers_daily_salary_non_negative"),
         CheckConstraint("shift_hours > 0", name="ck_workers_shift_hours_positive"),
-        UniqueConstraint("factory_id", "name", name="uq_workers_factory_name"),
+        UniqueConstraint("factory_id", "worker_restore_key", name="uq_workers_factory_restore_key"),
     )
 
 
@@ -1194,6 +1201,8 @@ class BlankStock(TenantMixin, Base):
     __tablename__ = "blank_stock"
 
     id = Column(Integer, primary_key=True, index=True)
+    material_restore_key = Column(String(100), nullable=True, index=True)
+    material_name = Column(String(255), nullable=True)
     blank_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Plain White", server_default="Plain White", index=True)
     linked_bottom_size_mm = Column(Integer, nullable=False, index=True)
@@ -1204,6 +1213,7 @@ class BlankStock(TenantMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("factory_id", "blank_size_ml", "variety", name="uq_blank_stock_factory_size_variety"),
+        UniqueConstraint("factory_id", "material_restore_key", name="uq_blank_stock_factory_restore_key"),
         CheckConstraint("blank_size_ml > 0", name="ck_blank_stock_size_positive"),
         CheckConstraint("linked_bottom_size_mm > 0", name="ck_blank_stock_bottom_size_positive"),
     )
@@ -1213,6 +1223,7 @@ class BottomStock(TenantMixin, Base):
     __tablename__ = "bottom_stock"
 
     id = Column(Integer, primary_key=True, index=True)
+    material_restore_key = Column(String(100), nullable=True, index=True)
     bottom_size_mm = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Plain White", server_default="Plain White", index=True)
     bag_weight_kg = Column(Numeric(14, 3), nullable=True)
@@ -1221,10 +1232,12 @@ class BottomStock(TenantMixin, Base):
     total_rolls = Column(Integer, nullable=False, default=0, server_default="0")
     total_weight_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
     total_qty_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    price_per_kg = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("factory_id", "bottom_size_mm", "variety", name="uq_bottom_stock_factory_size_variety"),
+        UniqueConstraint("factory_id", "material_restore_key", name="uq_bottom_stock_factory_restore_key"),
         CheckConstraint("bottom_size_mm > 0", name="ck_bottom_stock_size_positive"),
         CheckConstraint("bag_weight_kg >= 0", name="ck_bottom_stock_bag_weight_non_negative"),
         CheckConstraint("rolls_per_bag >= 0", name="ck_bottom_stock_rolls_per_bag_non_negative"),
@@ -1289,6 +1302,7 @@ class FinalProductStock(TenantMixin, Base):
     __tablename__ = "final_product_stock"
 
     id = Column(Integer, primary_key=True, index=True)
+    product_restore_key = Column(String(100), nullable=True, index=True)
     product_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
@@ -1301,6 +1315,7 @@ class FinalProductStock(TenantMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("factory_id", "product_size_ml", "variety", "packaging_size_name", name="uq_final_product_factory_product_variety_pack"),
+        UniqueConstraint("factory_id", "product_restore_key", name="uq_final_product_factory_restore_key"),
         CheckConstraint("product_size_ml > 0", name="ck_final_product_size_positive"),
         CheckConstraint("loose_packets >= 0", name="ck_final_product_loose_non_negative"),
         CheckConstraint("packets_per_box_limit > 0", name="ck_final_product_packets_limit_positive"),

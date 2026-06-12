@@ -20,6 +20,7 @@ type UploadSummary = {
   rows: number;
   inserted: number;
   updated: number;
+  unchanged: number;
   skipped: number;
   failed: number;
   warnings: number;
@@ -47,7 +48,9 @@ function legacyRowsToIssues(rows: Array<Record<string, unknown>>): BulkValidatio
     severity: "fatal",
     suggested_correction: typeof row.suggested_correction === "string" ? row.suggested_correction : null,
     sheet: typeof row.sheet === "string" ? row.sheet : "Workbook",
-    raw_value: row.values ?? row.raw_value
+    section: typeof row.section === "string" ? row.section : null,
+    raw_value: row.values ?? row.raw_value,
+    action_type: typeof row.action_type === "string" ? row.action_type as BulkValidationIssue["action_type"] : "error"
   }));
 }
 
@@ -75,6 +78,7 @@ function buildSummary(data: OnboardingBulkUploadResponse): UploadSummary {
     rows: Number(data.rows_inserted || 0),
     inserted: Number(operationCounts.inserted || 0),
     updated: Number(operationCounts.updated || 0),
+    unchanged: Number(operationCounts.unchanged || 0),
     skipped: Number(operationCounts.skipped || 0),
     failed: Number(operationCounts.failed ?? report?.fatal_count ?? 0),
     warnings: Number(operationCounts.warnings ?? report?.warning_count ?? 0)
@@ -164,10 +168,11 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       />
 
       {summary ? (
-        <div className="mt-4 grid gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mt-4 grid gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 sm:grid-cols-3 lg:grid-cols-7">
           <Metric label="Processed" value={summary.rows} />
           <Metric label="Inserted" value={summary.inserted} />
           <Metric label="Updated" value={summary.updated} />
+          <Metric label="Unchanged" value={summary.unchanged} />
           <Metric label="Skipped" value={summary.skipped} />
           <Metric label="Warnings" value={summary.warnings} />
           <Metric label="Failed" value={summary.failed} />
@@ -180,7 +185,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
             <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4">
               <div>
                 <h2 className="text-base font-semibold text-zinc-950">Bulk Upload Validation Report</h2>
-                <p className="mt-1 text-xs text-zinc-500">Review sheet, row, field, severity, and correction guidance.</p>
+                <p className="mt-1 text-xs text-zinc-500">Review sheet, section, row, current value, action, issue, and correction guidance.</p>
               </div>
               <button
                 type="button"
@@ -196,8 +201,11 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
                   <tr>
                     <th className="px-3 py-2">Severity</th>
                     <th className="px-3 py-2">Sheet</th>
+                    <th className="px-3 py-2">Section</th>
                     <th className="px-3 py-2">Row</th>
                     <th className="px-3 py-2">Field</th>
+                    <th className="px-3 py-2">Current value</th>
+                    <th className="px-3 py-2">Action</th>
                     <th className="px-3 py-2">Issue</th>
                     <th className="px-3 py-2">Suggested correction</th>
                   </tr>
@@ -211,8 +219,11 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
                         </span>
                       </td>
                       <td className="px-3 py-2 font-semibold text-zinc-800">{issue.sheet || "Workbook"}</td>
+                      <td className="px-3 py-2 text-zinc-600">{issue.section || "-"}</td>
                       <td className="px-3 py-2 text-zinc-600">{issue.row ?? "-"}</td>
                       <td className="px-3 py-2 text-zinc-700">{issue.field || "-"}</td>
+                      <td className="max-w-40 truncate px-3 py-2 text-zinc-600">{issue.raw_value == null ? "-" : String(issue.raw_value)}</td>
+                      <td className="px-3 py-2 font-semibold capitalize text-zinc-700">{issue.action_type || (issue.severity === "fatal" ? "error" : "-")}</td>
                       <td className="px-3 py-2 text-zinc-700">{issue.error}</td>
                       <td className="px-3 py-2 text-zinc-600">{issue.suggested_correction || "-"}</td>
                     </tr>

@@ -77,6 +77,7 @@ export default function ProductionPage() {
   const [finalStockOptions, setFinalStockOptions] = useState<FinalStockOption[]>([]);
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const [mappingMessage, setMappingMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [syncLatency, setSyncLatency] = useState(124);
   const [showNewVariantModal, setShowNewVariantModal] = useState(false);
@@ -136,8 +137,10 @@ export default function ProductionPage() {
     try {
       const finalStockRes = await getFinalStockOptions();
       variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
+      setMappingMessage(variations.length === 0 ? "Inventory mapping incomplete for this SKU." : "");
     } catch (err) {
       console.error("Failed to load final stock options:", err);
+      setMappingMessage("Inventory mapping incomplete for this SKU.");
     }
 
     const firstVariation = variations[0];
@@ -159,6 +162,10 @@ export default function ProductionPage() {
   }
 
   async function submit() {
+    if (finalStockOptions.length === 0) {
+      setError("Inventory mapping incomplete for this SKU.");
+      return;
+    }
     setIsSaving(true);
     setError("");
     try {
@@ -372,6 +379,7 @@ export default function ProductionPage() {
       <header>
         <h1 className="text-2xl font-semibold text-zinc-950">Production Entry</h1>
         <p className="mt-1 text-sm text-zinc-500">Daily boxes, packets, sacks, and bottom rolls.</p>
+        {mappingMessage ? <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">{mappingMessage}</p> : null}
       </header>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">

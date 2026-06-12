@@ -43,6 +43,8 @@ class ValidationIssue:
     suggested_correction: str | None = None
     sheet: str | None = None
     raw_value: Any = None   # the value that caused the problem (truncated)
+    section: str | None = None
+    action_type: str | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
