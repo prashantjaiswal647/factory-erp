@@ -552,6 +552,7 @@ class InvoiceEmailDeliveryRequest(BaseModel):
 
 class InvoiceDeleteRequest(BaseModel):
     confirmation: str
+    action: str | None = "reverse"  # "reverse" or "archive"
 
 
 class InvoiceDeliveryResponse(BaseModel):
@@ -1970,6 +1971,117 @@ async def send_bill_notification(
     )
 
 
+@router.get("/bill-customers", response_model=list[BillCustomerOption])
+def list_bill_customers(
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customers = (
+        db.query(Customer.id, Customer.name, Customer.phone_number, Customer.phone, Customer.contact_number, Customer.place, Customer.address, Customer.telegram_id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .order_by(Customer.name.asc())
+        .limit(100)
+        .all()
+    )
+    return [
+        BillCustomerOption(
+            id=customer.id,
+            name=customer.name,
+            phone_number=customer.phone_number or customer.phone or customer.contact_number or "",
+            place=customer.place or customer.address or "",
+            telegram_id=customer.telegram_id,
+        )
+        for customer in customers
+    ]
+
+
+@router.get("/customers/{customer_id}/orders", response_model=list[BillOrderOption])
+def list_customer_orders(
+    customer_id: int,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer_exists = (
+        db.query(Customer.id)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .filter(Customer.id == customer_id)
+        .first()
+    )
+    if customer_exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    orders = (
+        db.query(Order.id, Order.order_date, Order.status, Order.total_amount, Order.payment_method)
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+        .filter(Order.customer_id == customer_id)
+        .order_by(Order.order_date.desc(), Order.id.desc())
+        .limit(25)
+        .all()
+    )
+    return [
+        BillOrderOption(
+            id=order.id,
+            order_date=order.order_date.isoformat() if order.order_date else "",
+            status=order.status,
+            total_amount=str(to_money(order.total_amount)),
+            payment_method=order.payment_method,
+        )
+        for order in orders
+    ]
+
+
+@router.post("/send-bill-notification", response_model=BillNotificationResponse)
+async def send_bill_notification(
+    payload: BillNotificationRequest,
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    customer = (
+        db.query(Customer)
+        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
+        .filter(Customer.id == payload.customer_id)
+        .first()
+    )
+    if customer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    order = (
+        db.query(Order)
+        .options(
+            joinedload(Order.items)
+            .joinedload(OrderItem.product)
+            .joinedload(FinishedGoodsStock.packaging_profile)
+        )
+        .filter(factory_id_filter(Order.factory_id, current_user.factory_id))
+        .filter(Order.id == payload.order_id)
+        .filter(Order.customer_id == customer.id)
+        .first()
+    )
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    bill_summary = format_bill_summary(order, customer)
+    owner_telegram_id = (os.getenv("OWNER_TELEGRAM_ID") or os.getenv("ADMIN_TELEGRAM_ID") or "").strip() or None
+    owner_phone_number = (
+        os.getenv("OWNER_WHATSAPP_NUMBER")
+        or os.getenv("ADMIN_WHATSAPP_NUMBER")
+        or os.getenv("ADMIN_PHONE_NUMBER")
+        or ""
+    ).strip()
+
+    owner_channel = await send_bill_to_destination(owner_telegram_id, owner_phone_number, bill_summary)
+    customer_channel = await send_bill_to_destination(customer.telegram_id, customer_display_phone(customer), bill_summary)
+
+    return BillNotificationResponse(
+        message="Bill successfully sent to Owner and Customer via Telegram/WhatsApp.",
+        order_id=order.id,
+        customer_id=customer.id,
+        owner_channel=owner_channel,
+        customer_channel=customer_channel,
+        bill_summary=bill_summary,
+    )
+
+
 @router.get("/invoices", response_model=InvoiceDashboardResponse)
 def list_invoice_documents(
     current_user: User = Depends(check_permissions(SALES_ROLES)),
@@ -1979,6 +2091,7 @@ def list_invoice_documents(
     invoices = (
         db.query(InvoiceDocument)
         .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .filter(InvoiceDocument.status != "archived")
         .order_by(InvoiceDocument.invoice_date.desc(), InvoiceDocument.id.desc())
         .limit(100)
         .all()
@@ -1991,6 +2104,7 @@ def list_invoice_documents(
             sql_func.coalesce(sql_func.sum(InvoiceDocument.customer_total_due), 0),
         )
         .filter(factory_id_filter(InvoiceDocument.factory_id, factory_id))
+        .filter(InvoiceDocument.status != "archived")
         .one()
     )
     invoice_summaries = []
@@ -2013,6 +2127,18 @@ def list_invoice_documents(
                     )
                 )
 
+        status = invoice.status
+        if status == "created":
+            status = "active"
+        if bill:
+            if bill.status == "cancelled":
+                status = "cancelled"
+            else:
+                if live_due <= 0 and to_money(bill.bill_amount) > 0:
+                    status = "paid"
+                elif live_paid > 0:
+                    status = "active"
+
         invoice_summaries.append(
             InvoiceDocumentSummary(
                 id=invoice.id,
@@ -2026,7 +2152,7 @@ def list_invoice_documents(
                 bill_total=to_money(invoice.bill_total),
                 amount_paid=live_paid,
                 customer_total_due=live_due,
-                status=invoice.status,
+                status=status,
                 pdf_generated_count=invoice.pdf_generated_count,
                 created_at=invoice.created_at.isoformat() if invoice.created_at else "",
                 payments=payment_list,
@@ -2392,33 +2518,78 @@ def delete_invoice_document(
         factory_id_filter(OutstandingBill.factory_id, current_user.factory_id),
         OutstandingBill.invoice_document_id == invoice.id,
     ).with_for_update().first()
+
+    payload_json = invoice.payload_json or {}
+    sale_ids = list((payload_json.get("invoice") or {}).get("sale_ids") or [])
+    item_rows = list(payload_json.get("items") or [])
+
+    # Check for payment allocations or real payments received.
+    has_real_payment = False
     if bill is not None:
-        has_allocations = bool(
-            to_money(bill.amount_paid) > 0
-            or db.query(PaymentCollection.id).filter(
+        if to_money(bill.amount_paid) > 0 or len(bill.payments) > 0:
+            has_real_payment = True
+        
+        coll_exists = db.query(PaymentCollection).filter(
+            PaymentCollection.factory_id == current_user.factory_id,
+            PaymentCollection.outstanding_bill_id == bill.id,
+        ).first()
+        if coll_exists is not None:
+            has_real_payment = True
+
+    if sale_ids:
+        sale_payments = db.query(Payment).filter(
+            factory_id_filter(Payment.factory_id, current_user.factory_id),
+            Payment.sale_id.in_(sale_ids),
+        ).all()
+        for sp in sale_payments:
+            if to_money(sp.amount_paid) > 0:
+                has_real_payment = True
+            coll_exists = db.query(PaymentCollection).filter(
                 PaymentCollection.factory_id == current_user.factory_id,
-                PaymentCollection.outstanding_bill_id == bill.id,
+                PaymentCollection.payment_id == sp.id,
             ).first()
-            or bill.payments
+            if coll_exists is not None:
+                has_real_payment = True
+
+    action = getattr(payload, "action", "reverse") or "reverse"
+
+    if action == "archive":
+        invoice.status = "archived"
+        if bill is not None:
+            bill.status = "archived"
+        db.commit()
+        return {"status": "archived", "invoice_id": invoice_document_id, "invoice_number": invoice.invoice_number}
+
+    if has_real_payment:
+        raise HTTPException(
+            status_code=409,
+            detail="Invoice has payment entries. Delete payment first or use cancel invoice.",
         )
-        if has_allocations:
-            raise HTTPException(
-                status_code=409,
-                detail="This invoice has payment allocations and cannot be deleted. Reverse or reallocate the payments first.",
-            )
 
     invoice_number = invoice.invoice_number
     customer_name = invoice.customer_name
     invoice_amount = to_money(invoice.bill_total)
     customer_id = invoice.customer_id
-    payload_json = invoice.payload_json or {}
-    sale_ids = list((payload_json.get("invoice") or {}).get("sale_ids") or [])
-    item_rows = list(payload_json.get("items") or [])
 
     try:
+        from models import CustomerLedgerAdjustment
+
         if bill is not None:
+            # Delete customer ledger adjustments referencing this bill
+            db.query(CustomerLedgerAdjustment).filter(
+                CustomerLedgerAdjustment.factory_id == current_user.factory_id,
+                CustomerLedgerAdjustment.linked_bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
+            # Delete payment collections referencing this bill
+            db.query(PaymentCollection).filter(
+                PaymentCollection.factory_id == current_user.factory_id,
+                PaymentCollection.outstanding_bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
             db.delete(bill)
             db.flush()
+
         db.query(InvoiceDeliveryLog).filter(
             InvoiceDeliveryLog.factory_id == current_user.factory_id,
             InvoiceDeliveryLog.invoice_document_id == invoice.id,
@@ -2427,10 +2598,21 @@ def delete_invoice_document(
         db.flush()
 
         if sale_ids:
-            db.query(Payment).filter(
+            # First find and delete collections referencing payments of these sales
+            sale_payment_ids = [p.id for p in db.query(Payment.id).filter(
                 factory_id_filter(Payment.factory_id, current_user.factory_id),
                 Payment.sale_id.in_(sale_ids),
-            ).delete(synchronize_session=False)
+            ).all()]
+            if sale_payment_ids:
+                db.query(PaymentCollection).filter(
+                    PaymentCollection.factory_id == current_user.factory_id,
+                    PaymentCollection.payment_id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+                db.query(Payment).filter(
+                    factory_id_filter(Payment.factory_id, current_user.factory_id),
+                    Payment.id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+
             db.query(DailySale).filter(
                 factory_id_filter(DailySale.factory_id, current_user.factory_id),
                 DailySale.id.in_(sale_ids),

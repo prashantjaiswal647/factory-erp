@@ -168,6 +168,137 @@ def test_paid_invoice_delete_is_rejected_safely():
             db=db,
         )
     assert unsafe.value.status_code == 409
+    assert unsafe.value.detail == "Invoice has payment entries. Delete payment first or use cancel invoice."
+
+
+def test_hard_delete_invoice_reverses_stock_and_outstanding():
+    from models import DailySale, FinalProductStock
+    db = _session()
+    factory = Factory(name="Stock Factory", invoice_prefix="INV-", next_bill_of_supply_number=2)
+    db.add(factory)
+    db.flush()
+    customer = Customer(factory_id=factory.id, name="Buyer", phone="9000000000")
+    db.add(customer)
+    db.flush()
+
+    # Create SKU stocks
+    sku_stock = FinalProductStock(
+        factory_id=str(factory.id),
+        product_size_ml=250,
+        variety="Plain White",
+        packaging_size_name="50Pcs",
+        total_boxes=100,
+        loose_packets=0,
+        packets_per_box_limit=1000,
+        current_quantity=100,
+    )
+    db.add(sku_stock)
+    db.flush()
+
+    # 1. Create a sale row (selling 5 boxes)
+    sale = DailySale(
+        factory_id=factory.id,
+        date=date(2026, 6, 12),
+        customer_id=customer.id,
+        customer_phone="9000000000",
+        product_size_ml=250,
+        variety="Plain White",
+        packaging_size_name="50Pcs",
+        boxes_sold=5,
+        loose_packets_sold=0,
+        rate_per_box=Decimal("200.00"),
+        rate_per_packet=Decimal("0.20"),
+        total_amount=Decimal("1000.00"),
+        total_bill=Decimal("1000.00"),
+        amount_paid=Decimal("0.00"),
+    )
+    db.add(sale)
+    db.flush()
+
+    # Verify stock is reduced
+    from routers.inventory import recalculate_and_sync_sku_stock
+    recalculate_and_sync_sku_stock(db, str(factory.id), 250, "Plain White", "50Pcs")
+    assert sku_stock.current_quantity == 95
+
+    # Create Invoice and Outstanding bill
+    invoice = InvoiceDocument(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        invoice_number="INV-1",
+        invoice_date=date(2026, 6, 12),
+        customer_name=customer.name,
+        payment_method="Cash",
+        bill_total=Decimal("1000.00"),
+        amount_paid=Decimal("0.00"),
+        customer_total_due=Decimal("1000.00"),
+        payload_json={
+            "invoice": {
+                "invoice_id": "INV-1",
+                "invoice_type": "bill_of_supply",
+                "invoice_date": "2026-06-12",
+                "customer_name": customer.name,
+                "bill_total": 1000,
+                "sale_ids": [sale.id],
+            },
+            "items": [
+                {
+                    "product_size_ml": 250,
+                    "variety": "Plain White",
+                    "packaging_size_name": "50Pcs",
+                    "boxes_sold": 5,
+                    "loose_packets_sold": 0,
+                    "rate_per_box": 200,
+                }
+            ],
+        },
+    )
+    db.add(invoice)
+    db.flush()
+
+    bill = OutstandingBill(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        invoice_document_id=invoice.id,
+        source_type="invoice",
+        tracking_number="INV-1",
+        bill_date=date(2026, 6, 12),
+        bill_amount=Decimal("1000.00"),
+        amount_paid=Decimal("0.00"),
+        balance_amount=Decimal("1000.00"),
+        status="active",
+    )
+    db.add(bill)
+    db.flush()
+
+    from services.accounting import sync_customer_balance_from_bills
+    sync_customer_balance_from_bills(db, factory.id, customer)
+    assert customer.balance_amount == Decimal("1000.00")
+
+    # Cache IDs before deletion
+    sale_id = sale.id
+    invoice_id = invoice.id
+    bill_id = bill.id
+
+    # Now hard-delete the invoice
+    response = delete_invoice_document(
+        invoice.id,
+        InvoiceDeleteRequest(confirmation="DELETE INVOICE"),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    assert response["status"] == "deleted"
+
+    # Assert stock is restored back to 100
+    assert sku_stock.current_quantity == 100
+
+    # Assert customer balance is reduced back to 0
+    assert customer.balance_amount == Decimal("0.00")
+
+    # Assert daily sale, invoice document and outstanding bill are completely gone
+    assert db.query(DailySale).filter_by(id=sale_id).first() is None
+    assert db.query(InvoiceDocument).filter_by(id=invoice_id).first() is None
+    assert db.query(OutstandingBill).filter_by(id=bill_id).first() is None
+
 
 
 def test_monthly_bulk_download_separates_invoice_categories():
@@ -213,3 +344,154 @@ def test_monthly_bulk_download_empty_month_returns_404():
             db=db,
         )
     assert empty.value.status_code == 404
+
+
+def test_paid_invoice_archive_and_reverse_behaviors():
+    from models import DailySale, FinalProductStock, PaymentCollection, Payment
+    db = _session()
+    factory = Factory(name="Hard Factory", invoice_prefix="INV-", next_bill_of_supply_number=2)
+    db.add(factory)
+    db.flush()
+    customer = Customer(factory_id=factory.id, name="Buyer", phone="9000000000")
+    db.add(customer)
+    db.flush()
+
+    sku_stock = FinalProductStock(
+        factory_id=str(factory.id),
+        product_size_ml=250,
+        variety="Plain White",
+        packaging_size_name="50Pcs",
+        total_boxes=100,
+        loose_packets=0,
+        packets_per_box_limit=1000,
+        current_quantity=100,
+    )
+    db.add(sku_stock)
+    db.flush()
+
+    # Create sale
+    sale = DailySale(
+        factory_id=factory.id,
+        date=date(2026, 6, 12),
+        customer_id=customer.id,
+        customer_phone="9000000000",
+        product_size_ml=250,
+        variety="Plain White",
+        packaging_size_name="50Pcs",
+        boxes_sold=5,
+        loose_packets_sold=0,
+        rate_per_box=Decimal("200.00"),
+        rate_per_packet=Decimal("0.20"),
+        total_amount=Decimal("1000.00"),
+        total_bill=Decimal("1000.00"),
+        amount_paid=Decimal("0.00"),
+    )
+    db.add(sale)
+    db.flush()
+
+    invoice = InvoiceDocument(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        invoice_number="INV-22",
+        invoice_date=date(2026, 6, 12),
+        customer_name=customer.name,
+        payment_method="Cash",
+        bill_total=Decimal("1000.00"),
+        amount_paid=Decimal("1000.00"),
+        customer_total_due=Decimal("0.00"),
+        payload_json={
+            "invoice": {
+                "invoice_id": "INV-22",
+                "invoice_type": "bill_of_supply",
+                "invoice_date": "2026-06-12",
+                "customer_name": customer.name,
+                "bill_total": 1000,
+                "sale_ids": [sale.id],
+            },
+            "items": [
+                {
+                    "product_size_ml": 250,
+                    "variety": "Plain White",
+                    "packaging_size_name": "50Pcs",
+                    "boxes_sold": 5,
+                    "loose_packets_sold": 0,
+                    "rate_per_box": 200,
+                }
+            ],
+        },
+    )
+    db.add(invoice)
+    db.flush()
+
+    bill = OutstandingBill(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        invoice_document_id=invoice.id,
+        source_type="invoice",
+        tracking_number="INV-22",
+        bill_date=date(2026, 6, 12),
+        bill_amount=Decimal("1000.00"),
+        amount_paid=Decimal("1000.00"),
+        balance_amount=Decimal("0.00"),
+        status="closed",
+    )
+    db.add(bill)
+    db.flush()
+
+    # Link a payment collection/payment
+    payment = Payment(
+        factory_id=factory.id,
+        customer_phone="9000000000",
+        amount_paid=Decimal("1000.00"),
+        payment_mode="Cash",
+        date=date(2026, 6, 12),
+    )
+    db.add(payment)
+    db.flush()
+
+    collection = PaymentCollection(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        payment_id=payment.id,
+        outstanding_bill_id=bill.id,
+        amount_collected=Decimal("1000.00"),
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 12),
+    )
+    db.add(collection)
+    db.flush()
+
+    from routers.inventory import recalculate_and_sync_sku_stock
+    recalculate_and_sync_sku_stock(db, str(factory.id), 250, "Plain White", "50Pcs")
+    assert sku_stock.current_quantity == 95
+
+    # 1. Paid invoice cannot be hard deleted (reverse flow fails with 409)
+    with pytest.raises(HTTPException) as err:
+        delete_invoice_document(
+            invoice.id,
+            InvoiceDeleteRequest(confirmation="DELETE INVOICE", action="reverse"),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 409
+    assert err.value.detail == "Invoice has payment entries. Delete payment first or use cancel invoice."
+
+    # 2. Paid invoice can be archived
+    response = delete_invoice_document(
+        invoice.id,
+        InvoiceDeleteRequest(confirmation="DELETE INVOICE", action="archive"),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    assert response["status"] == "archived"
+    assert invoice.status == "archived"
+    assert bill.status == "archived"
+
+    # 3. Archive keeps payment history (payment & collection & bill exist)
+    assert db.query(Payment).filter_by(id=payment.id).first() is not None
+    assert db.query(PaymentCollection).filter_by(id=collection.id).first() is not None
+    assert db.query(OutstandingBill).filter_by(id=bill.id).first() is not None
+
+    # 4. Archive has no stock change (stock is still 95, not restored to 100)
+    recalculate_and_sync_sku_stock(db, str(factory.id), 250, "Plain White", "50Pcs")
+    assert sku_stock.current_quantity == 95
