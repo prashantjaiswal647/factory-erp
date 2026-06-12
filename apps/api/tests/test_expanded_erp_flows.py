@@ -136,6 +136,7 @@ def test_factory_isolation_flow(monkeypatch):
 
         # Seed stocks for Factory 1 only
         db.add(FinalProductStock(id=10, factory_id=1, product_size_ml=250, variety="Standard/White", packaging_size_name="Box-1", total_boxes=10, current_quantity=10, packets_per_box_limit=10))
+        db.add(BoxStock(factory_id=1, packaging_size_name="Box-1", total_boxes=20, quantity=20))
         # Seed stocks for Factory 2 only
         db.add(FinalProductStock(id=20, factory_id=2, product_size_ml=250, variety="Standard/White", packaging_size_name="Box-1", total_boxes=5, current_quantity=5, packets_per_box_limit=10))
         

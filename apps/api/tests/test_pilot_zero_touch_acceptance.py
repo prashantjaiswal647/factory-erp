@@ -394,24 +394,52 @@ def test_pilot_zero_touch_acceptance_walks_all_thirteen_steps(pilot_app):
         worker = db.query(Worker).filter(Worker.factory_id == factory_id).first()
         from models import Machine
         machine = db.query(Machine).filter(Machine.factory_id == factory_id).first()
-        from models import FinalProductStock
+        from models import BoxStock, FinalProductStock
         product = db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).first()
         assert worker and machine and product, (
             f"missing seed: worker={worker}, machine={machine}, product={product}"
         )
+        worker_id = worker.id
+        machine_id = machine.id
+        product_id = product.id
+        product_size_ml = product.product_size_ml
+        product_variety = product.variety
+        packaging_size_name = product.packaging_size_name
+        pieces_per_packet = product.pieces_per_packet or 100
+        packets_per_box_limit = product.packets_per_box_limit or 10
+        box_stock = (
+            db.query(BoxStock)
+            .filter(
+                BoxStock.factory_id == factory_id,
+                BoxStock.packaging_size_name == product.packaging_size_name,
+            )
+            .first()
+        )
+        if box_stock is None:
+            box_stock = BoxStock(
+                factory_id=factory_id,
+                packaging_size_name=product.packaging_size_name,
+                total_boxes=10,
+                quantity=10,
+            )
+            db.add(box_stock)
+        else:
+            box_stock.total_boxes = max(int(box_stock.total_boxes or 0), 10)
+            box_stock.quantity = max(int(box_stock.quantity or 0), 10)
+        db.commit()
     finally:
         db.close()
 
     production_payload = {
         "date": (date.today() - timedelta(days=1)).isoformat(),
-        "worker_id": worker.id,
-        "machine_id": machine.id,
-        "product_id": product.id,
-        "product_size_ml": product.product_size_ml,
-        "variety": product.variety,
-        "packaging_size_name": product.packaging_size_name,
-        "pieces_per_packet": product.pieces_per_packet or 100,
-        "packets_per_box_limit": product.packets_per_box_limit or 10,
+        "worker_id": worker_id,
+        "machine_id": machine_id,
+        "product_id": product_id,
+        "product_size_ml": product_size_ml,
+        "variety": product_variety,
+        "packaging_size_name": packaging_size_name,
+        "pieces_per_packet": pieces_per_packet,
+        "packets_per_box_limit": packets_per_box_limit,
         "total_boxes_made": 5,
         "loose_packets_made": 0,
         "blank_used_kg": 1.5,
@@ -429,7 +457,7 @@ def test_pilot_zero_touch_acceptance_walks_all_thirteen_steps(pilot_app):
     finished = client.get("/api/inventory/finished-goods/export?format=csv", headers=auth)
     assert finished.status_code == 200, f"finished goods export: {finished.text}"
     finished_csv = finished.content.decode("utf-8", errors="replace")
-    assert "Standard/White" in finished_csv or product.packaging_size_name in finished_csv
+    assert "Standard/White" in finished_csv or packaging_size_name in finished_csv
     assert finished_csv.splitlines()[0].split(",")[0] != "snapshot_date" or len(finished_csv.splitlines()) > 1
 
     # -----------------------------------------------------------------------
@@ -451,15 +479,15 @@ def test_pilot_zero_touch_acceptance_walks_all_thirteen_steps(pilot_app):
         "legal_invoice_type": "bill_of_supply",
         "items": [
             {
-                "product_id": product.id,
-                "product_size_ml": product.product_size_ml,
-                "variety": product.variety,
-                "packaging_size_name": product.packaging_size_name,
+                "product_id": product_id,
+                "product_size_ml": product_size_ml,
+                "variety": product_variety,
+                "packaging_size_name": packaging_size_name,
                 "boxes_sold": 2,
                 "loose_packets_sold": 0,
                 "rate_per_box": 250,
                 "rate_per_packet": 25,
-                "packets_per_box": product.packets_per_box_limit or 10,
+                "packets_per_box": packets_per_box_limit,
             }
         ],
     }
