@@ -36,10 +36,24 @@ High-level flow:
 - **Integrity**: Strict `CheckConstraints` for roles, subscription statuses, and non-negative values.
 - **Migrations**: Managed via Alembic with mandatory pre-migration backups.
 
-## n8n Integration Overview
+## n8n & Gotenberg Integration Overview
 - **Role**: External workflow engine for asynchronous/complex tasks.
+- **Invoice PDF Flow**: Local n8n instances (port `5678`) communicate internally via the Docker network with a `gotenberg` service (port `3000`) utilizing `chromium` to convert raw HTML into legal invoices and optional parallel rough bills. PDFs are written to `storage/invoices/invoice_<factory_id>_<invoice_id>.pdf`.
 - **Use Cases**: 
   - Invoice synchronization.
   - External data triggers.
   - Complex alerting pipelines.
 - **Auth**: Secured via `X-N8N-API-KEY`.
+
+## Live Inventory Buckets (Inventory v3)
+Categorization maps the backend `bucket` field as the sole source of truth on the Live Inventory page:
+- `cup_blanks` (Raw Cup Blanks)
+- `bottom_reels` (Bottom Reels)
+- `finished_goods` (Finished Goods)
+- `polybags_packing` (Packaging)
+- `boxes` (Boxes)
+- `raw_other` (General raw material fallback for `Raw` category)
+- `needs_mapping_review` (Any category mismatch/unknown classification)
+
+All stock operations and API routes are strictly partitioned using the user's authenticated `factory_id`.
+
