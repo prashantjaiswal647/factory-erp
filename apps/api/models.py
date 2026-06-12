@@ -1326,6 +1326,13 @@ class DailyProduction(TenantMixin, Base):
     labor_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     electricity_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
     production_cost = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    shift = Column(String(20), nullable=True)
+    status = Column(String(20), nullable=False, default="ACTIVE", server_default="ACTIVE", index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    rejected_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -1341,6 +1348,7 @@ class DailyProduction(TenantMixin, Base):
         CheckConstraint("labor_cost >= 0", name="ck_daily_productions_labor_cost_non_negative"),
         CheckConstraint("electricity_cost >= 0", name="ck_daily_productions_electricity_cost_non_negative"),
         CheckConstraint("production_cost >= 0", name="ck_daily_productions_cost_non_negative"),
+        CheckConstraint("status IN ('ACTIVE', 'REJECTED')", name="ck_daily_productions_status"),
     )
 
 

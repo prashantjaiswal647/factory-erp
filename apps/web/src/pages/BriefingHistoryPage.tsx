@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { ArrowLeft, Loader, Eye, RefreshCw, BarChart2, ShieldAlert } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../lib/api";
+import { api, getDailyProductionHistory } from "../lib/api";
+import type { ProductionHistoryEntry } from "../lib/api";
 
 type BriefingHistoryItem = {
   id: number;
@@ -60,13 +61,18 @@ export default function BriefingHistoryPage() {
   
   const [selectedBriefing, setSelectedBriefing] = useState<BriefingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [productionEntries, setProductionEntries] = useState<ProductionHistoryEntry[]>([]);
 
   async function fetchHistory() {
     try {
       setLoading(true);
       setError(null);
-      const res = await api.get("/api/briefings/history?days=30");
+      const [res, productionRes] = await Promise.all([
+        api.get("/api/briefings/history?days=30"),
+        getDailyProductionHistory(),
+      ]);
       setHistory(res.data);
+      setProductionEntries(productionRes.data);
     } catch (err: any) {
       setError(err?.response?.data?.detail || err.message || "Something went wrong.");
     } finally {
@@ -201,6 +207,33 @@ export default function BriefingHistoryPage() {
           <div className="mt-2 text-2xl font-bold text-[#6D28D9]">
             {isOwner ? `₹${totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "Masked"}
           </div>
+        </div>
+      </div>
+
+      <div className="mb-8 overflow-hidden rounded-lg border border-[#E5E7EB] bg-white shadow-sm">
+        <div className="border-b bg-[#FAFAFA] px-6 py-4">
+          <h2 className="text-lg font-bold text-[#111827]">Production Entry History</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-[#F9FAFB] text-xs uppercase text-[#4B5563]"><tr><th className="px-4 py-3">Date</th><th>Worker</th><th>Product</th><th>Quantity</th><th>Machine</th><th>Shift</th><th>Created By</th><th>Status</th><th>Timestamp</th></tr></thead>
+            <tbody>
+              {productionEntries.map((entry) => (
+                <tr key={entry.id} className="border-t">
+                  <td className="px-4 py-3">{formatDateShort(entry.date)}</td>
+                  <td>{entry.worker_name}</td>
+                  <td>{entry.product_size_ml}ml {entry.product_type}</td>
+                  <td>{entry.quantity_boxes.toLocaleString()} boxes</td>
+                  <td>{entry.machine_name}</td>
+                  <td>{entry.shift || "--"}</td>
+                  <td>{entry.created_by || "--"}</td>
+                  <td className={entry.status === "REJECTED" ? "font-semibold text-red-700" : "font-semibold text-green-700"}>{entry.status}</td>
+                  <td>{entry.created_at ? new Date(entry.created_at).toLocaleString("en-IN") : "--"}</td>
+                </tr>
+              ))}
+              {!productionEntries.length ? <tr><td colSpan={9} className="px-6 py-8 text-center text-zinc-500">No production entries found.</td></tr> : null}
+            </tbody>
+          </table>
         </div>
       </div>
 

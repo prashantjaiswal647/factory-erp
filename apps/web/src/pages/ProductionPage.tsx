@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Factory, Loader2, Activity, Plus, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Factory, Loader2, Activity, Plus, X } from "lucide-react";
 import axios from "axios";
 import { useEffect, useState } from "react";
 
@@ -8,6 +8,9 @@ import {
   getDashboardMachines,
   getDashboardWorkers,
   getFinalStockOptions,
+  getDailyProductionHistory,
+  getProductionWorkerSummary,
+  rejectDailyProduction,
 } from "../lib/api";
 import type {
   DailyProductionCreate,
@@ -16,6 +19,8 @@ import type {
   FinalStockOption,
   FinishedGoodVariantCreate,
   FinishedGoodVariantResponse,
+  ProductionHistoryEntry,
+  ProductionWorkerSummary,
 } from "../lib/api";
 
 type NewVariantForm = {
@@ -82,6 +87,11 @@ export default function ProductionPage() {
     existing_product_id: number;
     existing: FinishedGoodVariantResponse;
   } | null>(null);
+  const [summary, setSummary] = useState<ProductionWorkerSummary | null>(null);
+  const [history, setHistory] = useState<ProductionHistoryEntry[]>([]);
+  const [expandedWorker, setExpandedWorker] = useState<number | null>(null);
+  const [rejecting, setRejecting] = useState<ProductionHistoryEntry | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -92,7 +102,17 @@ export default function ProductionPage() {
 
   useEffect(() => {
     void loadOptions();
+    void loadProductionVisibility();
   }, []);
+
+  async function loadProductionVisibility() {
+    const [summaryResponse, historyResponse] = await Promise.all([
+      getProductionWorkerSummary(todayDate()),
+      getDailyProductionHistory(todayDate()),
+    ]);
+    setSummary(summaryResponse.data);
+    setHistory(historyResponse.data);
+  }
 
   async function loadOptions() {
     let cleanWorkers: DashboardWorker[] = [];
@@ -173,6 +193,7 @@ export default function ProductionPage() {
       window.dispatchEvent(new CustomEvent("attendance:updated", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("inventory:updated", { detail: response.data }));
       void loadOptions();
+      void loadProductionVisibility();
       setForm({
         ...initialForm,
         worker_id: workers[0]?.id || 0,
@@ -199,6 +220,22 @@ export default function ProductionPage() {
         console.error("daily production unexpected error", caught);
         setError(caught instanceof Error ? caught.message : "Production save failed");
       }
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function confirmReject() {
+    if (!rejecting || rejectReason.trim().length < 3) return;
+    setIsSaving(true);
+    try {
+      await rejectDailyProduction(rejecting.id, rejectReason.trim());
+      setToast("Production rejected and finished goods inventory reversed.");
+      setRejecting(null);
+      setRejectReason("");
+      await Promise.all([loadProductionVisibility(), loadOptions()]);
+    } catch (caught) {
+      setError(axios.isAxiosError(caught) ? String(caught.response?.data?.detail || caught.message) : "Production reject failed.");
     } finally {
       setIsSaving(false);
     }
@@ -335,6 +372,37 @@ export default function ProductionPage() {
         <h1 className="text-2xl font-semibold text-zinc-950">Production Entry</h1>
         <p className="mt-1 text-sm text-zinc-500">Daily boxes, packets, sacks, and bottom rolls.</p>
       </header>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-semibold text-zinc-950">Today's Worker Production</h2>
+        <p className="mb-4 text-sm text-zinc-500">Total: {(summary?.total_quantity || 0).toLocaleString()} boxes</p>
+        <div className="space-y-2">
+          {(summary?.workers || []).map((worker) => {
+            const key = worker.worker_id || 0;
+            const open = expandedWorker === key;
+            return (
+              <div key={key} className="rounded-md border border-zinc-200">
+                <button className="flex w-full items-center justify-between px-4 py-3" type="button" onClick={() => setExpandedWorker(open ? null : key)}>
+                  <span className="flex items-center gap-2 font-semibold">{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}{worker.worker_name}</span>
+                  <span className="font-semibold text-brand-700">{worker.total_quantity.toLocaleString()} boxes</span>
+                </button>
+                {open ? <div className="border-t px-4 py-2">{worker.products.map((product) => <div key={product.production_id} className="flex justify-between py-1 text-sm"><span>{product.product_size_ml}ml {product.product_type}</span><span>{product.quantity.toLocaleString()} boxes</span></div>)}</div> : null}
+              </div>
+            );
+          })}
+          {!summary?.workers.length ? <p className="text-sm text-zinc-500">No production recorded today.</p> : null}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-3 text-lg font-semibold">Today's Entries</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead><tr className="border-b text-zinc-500"><th className="py-2">Worker</th><th>Product</th><th>Qty</th><th>Machine</th><th>Status</th><th /></tr></thead>
+            <tbody>{history.map((entry) => <tr key={entry.id} className="border-b"><td className="py-3">{entry.worker_name}</td><td>{entry.product_size_ml}ml {entry.product_type}</td><td>{entry.quantity_boxes.toLocaleString()}</td><td>{entry.machine_name}</td><td className={entry.status === "REJECTED" ? "text-red-700" : "text-green-700"}>{entry.status}</td><td className="text-right">{entry.status === "ACTIVE" ? <button className="font-semibold text-red-700" type="button" onClick={() => setRejecting(entry)}>Reject</button> : null}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex items-center gap-3">
@@ -596,6 +664,17 @@ export default function ProductionPage() {
                 {isSubmittingVariant ? "Saving..." : "Save New Variant"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {rejecting ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold">Reject Production Entry</h2>
+            <div className="mt-3 space-y-1 text-sm"><p>Worker: <strong>{rejecting.worker_name}</strong></p><p>Product: <strong>{rejecting.product_size_ml}ml {rejecting.product_type}</strong></p><p>Quantity: <strong>{rejecting.quantity_boxes.toLocaleString()}</strong></p><p>Date: <strong>{rejecting.date}</strong></p></div>
+            <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Rejecting this production will reverse inventory impact.</p>
+            <label className="mt-4 block text-sm font-medium">Reason<textarea className="mt-1 min-h-24 w-full rounded-md border p-3" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} /></label>
+            <div className="mt-5 flex justify-end gap-2"><button className="rounded-md border px-4 py-2" type="button" onClick={() => { setRejecting(null); setRejectReason(""); }}>Cancel</button><button className="rounded-md bg-red-700 px-4 py-2 font-semibold text-white disabled:bg-zinc-300" disabled={rejectReason.trim().length < 3 || isSaving} type="button" onClick={() => void confirmReject()}>Reject Production</button></div>
           </div>
         </div>
       ) : null}

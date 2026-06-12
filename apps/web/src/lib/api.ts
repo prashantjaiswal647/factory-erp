@@ -282,6 +282,45 @@ export type ProductionAlertsResponse = {
   }>;
 };
 
+export type ProductionHistoryEntry = {
+  id: number;
+  date: string;
+  worker_id: number | null;
+  worker_name: string;
+  product_size_ml: number;
+  product_type: string;
+  packaging_size_name: string;
+  quantity_boxes: number;
+  quantity_pieces: number;
+  machine_id: number;
+  machine_name: string;
+  shift: string | null;
+  status: "ACTIVE" | "REJECTED";
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  rejected_by: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+};
+
+export type ProductionWorkerSummary = {
+  date: string;
+  total_quantity: number;
+  workers: Array<{
+    worker_id: number | null;
+    worker_name: string;
+    total_quantity: number;
+    products: Array<{
+      production_id: number;
+      product_size_ml: number;
+      product_type: string;
+      quantity: number;
+      packaging_size_name: string;
+    }>;
+  }>;
+};
+
 export type AiDashboardInsights = {
   stats: {
     total_sales_last_7_days: string;
@@ -1066,10 +1105,10 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
   });
 }
 
-export function deleteInvoice(invoiceId: number, confirmation: string) {
+export function deleteInvoice(invoiceId: number, confirmation: string, action?: string) {
   return api.delete<{ status: string; invoice_id: number; invoice_number: string }>(
     `/api/sales/invoices/${invoiceId}`,
-    { data: { confirmation } },
+    { data: { confirmation, action } },
   );
 }
 
@@ -2050,6 +2089,24 @@ export async function getUserSubscription(t?: number) {
 
 export function deleteDailyProductionLog(logId: number) {
   return api.delete(`/api/production/daily/${logId}`);
+}
+
+export function getDailyProductionHistory(date?: string) {
+  return api.get<ProductionHistoryEntry[]>("/api/production/daily", {
+    params: date ? { date } : undefined,
+  });
+}
+
+export function getProductionWorkerSummary(date: string) {
+  return api.get<ProductionWorkerSummary>("/api/production/worker-summary", { params: { date } });
+}
+
+export function rejectDailyProduction(productionId: number, reason: string) {
+  return api.post<ProductionHistoryEntry>(`/api/production/daily/${productionId}/reject`, { reason });
+}
+
+export function updateDailyProduction(productionId: number, payload: Partial<DailyProductionCreate>) {
+  return api.patch<ProductionHistoryEntry>(`/api/production/daily/${productionId}`, payload);
 }
 
 export function deleteOnboardingEntry(entryId: string, type?: string) {

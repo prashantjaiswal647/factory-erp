@@ -4,7 +4,7 @@ import logging
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy import func as sql_func, text
 from sqlalchemy.orm import Session
 
@@ -544,6 +544,9 @@ def create_daily_production(
             labor_cost=labor_cost,
             electricity_cost=electricity_cost,
             production_cost=production_cost,
+            shift=payload.shift,
+            status="ACTIVE",
+            created_by_user_id=current_user.id,
         )
         db.add(production)
         db.flush()
@@ -646,6 +649,209 @@ def create_daily_production(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Production entry failed and was rolled back",
         ) from exc
+
+
+class ProductionRejectRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class ProductionUpdateRequest(BaseModel):
+    date: Optional[date_cls] = None
+    worker_id: Optional[int] = Field(default=None, gt=0)
+    machine_id: Optional[int] = Field(default=None, gt=0)
+    product_size_ml: Optional[int] = Field(default=None, gt=0)
+    product_type: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    packaging_size_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    shift: Optional[str] = Field(default=None, pattern="^(Day|Night)$")
+    total_boxes_made: Optional[int] = Field(default=None, ge=0)
+    loose_packets_made: Optional[int] = Field(default=None, ge=0)
+
+
+def _production_row(db: Session, factory_id: int, production_id: int) -> DailyProduction:
+    row = (
+        db.query(DailyProduction)
+        .filter(DailyProduction.id == production_id, DailyProduction.factory_id == factory_id)
+        .with_for_update()
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Production entry not found")
+    return row
+
+
+def _production_to_dict(db: Session, row: DailyProduction) -> dict:
+    worker = db.query(Worker).filter(Worker.id == row.worker_id).first() if row.worker_id else None
+    machine = db.query(Machine).filter(Machine.id == row.machine_id).first()
+    creator = db.query(User).filter(User.id == row.created_by_user_id).first() if row.created_by_user_id else None
+    rejector = db.query(User).filter(User.id == row.rejected_by_user_id).first() if row.rejected_by_user_id else None
+    quantity_pieces = (
+        (int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0))
+        * int(row.packets_per_box_limit or 0)
+        + int(row.loose_packets_made or 0)
+    )
+    return {
+        "id": row.id,
+        "date": row.date.isoformat(),
+        "worker_id": row.worker_id,
+        "worker_name": worker.name if worker else "Worker removed",
+        "product_size_ml": row.product_size_ml,
+        "product_type": row.variety,
+        "packaging_size_name": row.packaging_size_name,
+        "quantity_boxes": int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0),
+        "quantity_pieces": quantity_pieces,
+        "machine_id": row.machine_id,
+        "machine_name": (
+            getattr(machine, "machine_name", None) or getattr(machine, "name", None) or f"Machine-{row.machine_id}"
+        ),
+        "shift": row.shift,
+        "status": row.status,
+        "created_by": creator.full_name or creator.username if creator else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "rejected_by": rejector.full_name or rejector.username if rejector else None,
+        "rejected_at": row.rejected_at.isoformat() if row.rejected_at else None,
+        "rejection_reason": row.rejection_reason,
+    }
+
+
+@router.get("/production/daily")
+def list_daily_production(
+    production_date: Optional[date_cls] = Query(default=None, alias="date"),
+    include_rejected: bool = True,
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    query = db.query(DailyProduction).filter(DailyProduction.factory_id == current_user.factory_id)
+    if production_date:
+        query = query.filter(DailyProduction.date == production_date)
+    if not include_rejected:
+        query = query.filter(DailyProduction.status == "ACTIVE")
+    rows = query.order_by(DailyProduction.date.desc(), DailyProduction.created_at.desc()).limit(500).all()
+    return [_production_to_dict(db, row) for row in rows]
+
+
+@router.get("/production/worker-summary")
+def production_worker_summary(
+    production_date: date_cls = Query(default_factory=lambda: datetime.now(LOCAL_TZ).date(), alias="date"),
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(DailyProduction)
+        .filter(
+            DailyProduction.factory_id == current_user.factory_id,
+            DailyProduction.date == production_date,
+            DailyProduction.status == "ACTIVE",
+        )
+        .order_by(DailyProduction.worker_id.asc(), DailyProduction.product_size_ml.asc())
+        .all()
+    )
+    grouped: dict[int, dict] = {}
+    for row in rows:
+        worker_id = int(row.worker_id or 0)
+        worker = db.query(Worker).filter(Worker.id == row.worker_id).first() if row.worker_id else None
+        item = grouped.setdefault(
+            worker_id,
+            {
+                "worker_id": row.worker_id,
+                "worker_name": worker.name if worker else "Worker removed",
+                "total_quantity": 0,
+                "products": [],
+            },
+        )
+        quantity = int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0)
+        item["total_quantity"] += quantity
+        item["products"].append({
+            "production_id": row.id,
+            "product_size_ml": row.product_size_ml,
+            "product_type": row.variety,
+            "quantity": quantity,
+            "packaging_size_name": row.packaging_size_name,
+        })
+    return {"date": production_date.isoformat(), "total_quantity": sum(x["total_quantity"] for x in grouped.values()), "workers": list(grouped.values())}
+
+
+@router.patch("/production/daily/{production_id}")
+def update_daily_production(
+    production_id: int,
+    payload: ProductionUpdateRequest,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    row = _production_row(db, int(current_user.factory_id), production_id)
+    if row.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="Rejected production cannot be edited")
+
+    old_sku = (row.product_size_ml, row.variety, row.packaging_size_name)
+    updates = payload.model_dump(exclude_unset=True)
+    if "product_type" in updates:
+        updates["variety"] = updates.pop("product_type").strip()
+    for field, value in updates.items():
+        if isinstance(value, str):
+            value = value.strip()
+        setattr(row, field, value)
+    if (row.total_boxes_made or 0) == 0 and (row.loose_packets_made or 0) == 0:
+        raise HTTPException(status_code=422, detail="At least one box or loose packet must be entered")
+    db.flush()
+
+    from routers.inventory import recalculate_and_sync_sku_stock
+    for size, variety, packaging in {old_sku, (row.product_size_ml, row.variety, row.packaging_size_name)}:
+        recalculate_and_sync_sku_stock(db, str(current_user.factory_id), size, variety, packaging)
+    log_audit_trail(
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_role=current_user.role,
+        action_type="UPDATE",
+        entity_name="Production",
+        short_statement=f"Updated production #{row.id}",
+        event_type="production",
+        log_date=row.date,
+    )
+    db.commit()
+    db.refresh(row)
+    return _production_to_dict(db, row)
+
+
+@router.post("/production/daily/{production_id}/reject")
+def reject_daily_production(
+    production_id: int,
+    payload: ProductionRejectRequest,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    row = _production_row(db, int(current_user.factory_id), production_id)
+    if row.status == "REJECTED":
+        return _production_to_dict(db, row)
+
+    row.status = "REJECTED"
+    row.rejected_by_user_id = current_user.id
+    row.rejected_at = datetime.now(timezone.utc)
+    row.rejection_reason = payload.reason.strip()
+    db.flush()
+
+    from routers.inventory import recalculate_and_sync_sku_stock
+    recalculate_and_sync_sku_stock(
+        db,
+        str(current_user.factory_id),
+        row.product_size_ml,
+        row.variety,
+        row.packaging_size_name,
+    )
+    log_audit_trail(
+        db=db,
+        factory_id=int(current_user.factory_id),
+        user_id=current_user.id,
+        user_role=current_user.role,
+        action_type="REJECT",
+        entity_name="Production",
+        short_statement=f"Rejected production #{row.id}: {payload.reason.strip()}",
+        event_type="production",
+        log_date=row.date,
+    )
+    db.commit()
+    db.refresh(row)
+    return _production_to_dict(db, row)
 
 
 @router.get("/production/alerts")

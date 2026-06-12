@@ -312,6 +312,13 @@ Follow this sequence unless a P0 incident overrides it.
 - The onboarding fallback expected wastage is 2% until at least three usable historical production days exist.
 - Wastage APIs, history, alerts, scheduler, and leaderboards must remain factory scoped.
 
+## 18A. Production Lifecycle
+
+- `daily_productions.status` is the canonical lifecycle flag: `ACTIVE` or `REJECTED`.
+- Finished-goods stock calculations must include only `ACTIVE` production rows.
+- Production history and worker summaries read `daily_productions` directly and remain factory scoped.
+- Owner rejection requires a reason, records actor/timestamp, writes an ActivityLog, and reverses finished-goods impact through deterministic stock recalculation.
+
 ## 19. Profit Intelligence
 
 - `daily_profit_snapshot` is the canonical deterministic daily profitability summary, unique by factory and date.
