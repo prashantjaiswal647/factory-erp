@@ -227,6 +227,59 @@ def test_payment_allocation_prioritizes_opening_before_older_invoice():
     assert sum(payment.amount_allocated for payment in invoice.payments) == Decimal("2000.00")
 
 
+@pytest.mark.parametrize(
+    ("source_type", "amount"),
+    [
+        ("opening_outstanding", Decimal("5000.00")),
+        ("invoice", Decimal("3000.00")),
+        ("manual_adjustment", Decimal("2000.00")),
+    ],
+)
+def test_fully_paid_source_is_settled_and_absent_from_outstanding(source_type, amount):
+    db = _db()
+    customer = _setup_customer(db)
+    bill = create_outstanding_bill(
+        db,
+        factory_id=1,
+        customer_id=customer.id,
+        source_type=source_type,
+        tracking_number=f"TEST-{source_type}",
+        bill_date=date.today(),
+        bill_amount=amount,
+    )
+    sync_customer_balance_from_bills(db, 1, customer)
+
+    unapplied = apply_payment_to_outstanding_bills(
+        db,
+        factory_id=1,
+        customer_id=customer.id,
+        amount=amount,
+        payment_mode="Cash",
+        collection_date=date.today(),
+        created_by_user_id=1,
+    )
+    sync_customer_balance_from_bills(db, 1, customer)
+    db.commit()
+
+    db.refresh(bill)
+    assert unapplied == Decimal("0.00")
+    assert bill.balance_amount == Decimal("0.00")
+    assert bill.status == "settled"
+    assert get_sales_outstanding(_owner(), db).customers == []
+
+
+def test_advance_only_customer_is_absent_from_outstanding():
+    db = _db()
+    customer = _setup_customer(db)
+    customer.advance_balance = Decimal("750.00")
+    db.commit()
+
+    response = get_sales_outstanding(_owner(), db)
+
+    assert response.grand_total_outstanding == Decimal("0.00")
+    assert response.customers == []
+
+
 def test_outstanding_grouping_and_customer_ledger_timeline():
     db = _db()
     customer = _setup_customer(db)

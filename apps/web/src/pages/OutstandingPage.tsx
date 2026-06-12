@@ -23,6 +23,12 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
 }
 
+export function requiresOutstandingAttention(row: OutstandingCustomer) {
+  const receivable = toNumber(row.current_pending_balance);
+  const hasActiveBill = (row.bills || []).some((bill) => toNumber(bill.remaining_balance) > 0);
+  return receivable > 0 || hasActiveBill;
+}
+
 function Summary({ label, value, strong = false, dataTestId }: { label: string; value: string; strong?: boolean; dataTestId?: string }) {
   return (
     <span className="text-sm md:text-right" data-test-id={dataTestId}>
@@ -60,7 +66,7 @@ export default function OutstandingPage() {
     setError("");
     try {
       const response = await getOutstandingDues();
-      setOutstandingBills(response.data.customers);
+      setOutstandingBills(response.data.customers.filter(requiresOutstandingAttention));
       setGrandTotal(response.data.grand_total_outstanding);
     } catch {
       setError("Outstanding dues load nahi ho paaya.");

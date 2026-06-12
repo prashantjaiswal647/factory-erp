@@ -135,10 +135,10 @@ def apply_payment_to_outstanding_bills(
             
             remaining_amount = to_money(bill.balance_amount)
             if remaining >= remaining_amount:
-                # Deduct the remaining amount to change bill status to "Paid", subtract portion from remaining
+                # Fully allocated sources remain in ledger history but are no longer active.
                 bill.amount_paid = to_money(bill.amount_paid) + remaining_amount
                 bill.balance_amount = Decimal("0.00")
-                bill.status = "Paid"  # changed bill status to "Paid"
+                bill.status = "settled"
                 
                 # Add child log audit record
                 db.add(

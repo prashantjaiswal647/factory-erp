@@ -640,13 +640,11 @@ def test_get_sales_outstanding_endpoint():
 
     cust_map = {c.customer_id: c for c in response.customers}
     assert c2.id in cust_map
-    assert c3.id in cust_map
+    assert c3.id not in cust_map
     assert c1.id not in cust_map
 
     assert cust_map[c2.id].opening_outstanding == Decimal("1500.00")
     assert cust_map[c2.id].advance_balance == Decimal("0.00")
-    assert cust_map[c3.id].opening_outstanding == Decimal("0.00")
-    assert cust_map[c3.id].advance_balance == Decimal("500.00")
 
 
 class BackgroundTasksMock:

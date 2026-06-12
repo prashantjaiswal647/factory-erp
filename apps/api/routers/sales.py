@@ -2682,27 +2682,6 @@ def get_sales_outstanding(
             )
             grand_total = to_money(grand_total + to_money(bill.balance_amount))
 
-        # Include advance-only and opening-only customers from Customer table
-        all_custs = (
-            db.query(Customer)
-            .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-            .filter((Customer.advance_balance > 0) | (Customer.previous_due > 0))
-            .all()
-        )
-        for cust in all_custs:
-            if cust.id not in grouped:
-                grouped[cust.id] = OutstandingCustomerBillsResponse(
-                    customer_id=cust.id,
-                    customer_name=cust.name,
-                    customer_phone=customer_display_phone(cust),
-                    place=cust.place or cust.address or "",
-                    total_bill_amount=Decimal("0.00"),
-                    total_paid=Decimal("0.00"),
-                    current_pending_balance=Decimal("0.00"),
-                    opening_outstanding=to_money(cust.previous_due or 0),
-                    advance_balance=to_money(cust.advance_balance or 0),
-                    bills=[],
-                )
         return SalesOutstandingResponse(
             grand_total_outstanding=grand_total,
             source_totals=source_totals,
@@ -2758,28 +2737,6 @@ def get_sales_outstanding(
             )
         )
         grand_total = to_money(grand_total + balance)
-
-    # Include advance-only and opening-only customers from Customer table for fallback branch
-    all_custs = (
-        db.query(Customer)
-        .filter(factory_id_filter(Customer.factory_id, current_user.factory_id))
-        .filter((Customer.advance_balance > 0) | (Customer.previous_due > 0))
-        .all()
-    )
-    for cust in all_custs:
-        if cust.id not in grouped:
-            grouped[cust.id] = OutstandingCustomerBillsResponse(
-                customer_id=cust.id,
-                customer_name=cust.name,
-                customer_phone=customer_display_phone(cust),
-                place=cust.place or cust.address or "",
-                total_bill_amount=Decimal("0.00"),
-                total_paid=Decimal("0.00"),
-                current_pending_balance=Decimal("0.00"),
-                opening_outstanding=to_money(cust.previous_due or 0),
-                advance_balance=to_money(cust.advance_balance or 0),
-                bills=[],
-            )
 
     return SalesOutstandingResponse(grand_total_outstanding=grand_total, customers=list(grouped.values()))
 
