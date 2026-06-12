@@ -1,0 +1,87 @@
+from datetime import date
+
+import pytest
+from openpyxl import load_workbook
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from db import Base
+from models import Customer, Factory, InvoiceDocument, OutstandingBill
+from services.master_backup import (
+    SHEETS,
+    build_master_backup,
+    build_validation_report,
+    restore_staged_backup,
+    stage_backup,
+    validate_backup,
+)
+
+
+@pytest.fixture()
+def backup_db(tmp_path, monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+    factory = Factory(id=1, name="Backup Factory", factory_name="Backup Factory", subscription_status="active")
+    customer = Customer(id=1, factory_id=1, name="Raju Traders", phone_number="9999999999", previous_due=0, total_due=100)
+    invoice = InvoiceDocument(
+        id=1, factory_id=1, customer_id=1, invoice_number="INV-1", invoice_date=date(2026, 6, 12),
+        customer_name="Raju Traders", payment_method="Cash", bill_total=100, amount_paid=0,
+        customer_total_due=100, payload_json={"items": [{"product_size_ml": 210, "quantity": 10}]},
+    )
+    outstanding = OutstandingBill(
+        id=1, factory_id=1, customer_id=1, invoice_document_id=1, source_type="invoice",
+        tracking_number="INV-1", bill_date=date(2026, 6, 12), bill_amount=100, amount_paid=0,
+        balance_amount=100, status="active",
+    )
+    db.add_all([factory, customer, invoice, outstanding])
+    db.commit()
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr("services.master_backup.STAGING_ROOT", tmp_path / "staging")
+    try:
+        yield db
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_export_contains_all_master_sheets(backup_db):
+    workbook = load_workbook(build_master_backup(backup_db, 1), read_only=True)
+    assert set(SHEETS).issubset(workbook.sheetnames)
+    assert {"Backup Metadata", "Invoice Items", "Payment Allocations"}.issubset(workbook.sheetnames)
+
+
+def test_corrupt_and_cross_factory_backup_rejected(backup_db):
+    corrupt = validate_backup(b"not an excel file", 1)
+    assert corrupt["fatal"] is True
+    backup = build_master_backup(backup_db, 1).getvalue()
+    cross_factory = validate_backup(backup, 2)
+    assert cross_factory["fatal"] is True
+    assert "Cross-factory" in cross_factory["errors"][0]["error"]
+    report_workbook = load_workbook(build_validation_report(backup, 2), read_only=True)
+    assert {"Validation Summary", "Validation Errors", "Sheet Counts"}.issubset(report_workbook.sheetnames)
+
+
+def test_restore_same_backup_twice_is_idempotent(backup_db):
+    backup = build_master_backup(backup_db, 1).getvalue()
+    backup_db.query(OutstandingBill).delete()
+    backup_db.query(InvoiceDocument).delete()
+    backup_db.query(Customer).delete()
+    backup_db.commit()
+
+    first_id, first_report = stage_backup(backup, 1)
+    assert first_report["fatal"] is False
+    first = restore_staged_backup(backup_db, 1, first_id)
+    assert first["inserted"] >= 3
+    assert backup_db.query(Customer).count() == 1
+    assert backup_db.query(InvoiceDocument).count() == 1
+    assert backup_db.query(OutstandingBill).count() == 1
+
+    second_id, second_report = stage_backup(backup, 1)
+    assert second_report["fatal"] is False
+    second = restore_staged_backup(backup_db, 1, second_id)
+    assert second["updated"] >= 3
+    assert backup_db.query(Customer).count() == 1
+    assert backup_db.query(InvoiceDocument).count() == 1
+    assert backup_db.query(OutstandingBill).count() == 1

@@ -4,10 +4,12 @@ import {
   Boxes,
   CalendarDays,
   CheckCircle2,
+  Download,
   IndianRupee,
   PackageCheck,
   RefreshCw,
   Send,
+  Upload,
   UserRound,
   Wrench
 } from "lucide-react";
@@ -25,6 +27,9 @@ import WeeklyDigestCard from "../components/WeeklyDigestCard";
 import { WidgetErrorBoundary } from "../components/ErrorBoundary";
 import {
   approveSalesOrder,
+  confirmMasterRestore,
+  downloadMasterBackup,
+  downloadMasterBackupValidationReport,
   getDashboardAnalytics,
   getDashboardMachines,
   getDashboardWorkers,
@@ -34,6 +39,7 @@ import {
   getProductionAlerts,
   getTelegramConnectionStatus,
   rejectSalesOrder
+  ,validateMasterBackup
 } from "../lib/api";
 import type {
   AnalyticsBIResponse,
@@ -44,6 +50,7 @@ import type {
   ProductionAlertsResponse,
   TelegramConnectionStatus,
   UnifiedAlert
+  ,MasterBackupValidation
 } from "../lib/api";
 
 type StockRisk = {
@@ -80,6 +87,10 @@ export default function DashboardPage() {
   const [telegramStatus, setTelegramStatus] = useState<TelegramConnectionStatus | null>(null);
   const [unifiedAlerts, setUnifiedAlerts] = useState<UnifiedAlert[]>([]);
   const [isTelegramDismissed, setIsTelegramDismissed] = useState(false);
+  const [backupFile, setBackupFile] = useState<File | null>(null);
+  const [backupValidation, setBackupValidation] = useState<MasterBackupValidation | null>(null);
+  const [backupMessage, setBackupMessage] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -168,6 +179,68 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleBackupDownload() {
+    setBackupBusy(true);
+    try {
+      const response = await downloadMasterBackup();
+      const disposition = String(response.headers["content-disposition"] || "");
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "munshi_master_backup.xlsx";
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      setBackupMessage("Master backup downloaded.");
+    } catch {
+      setBackupMessage("Master backup download failed.");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleBackupValidate() {
+    if (!backupFile) return;
+    setBackupBusy(true);
+    try {
+      const response = await validateMasterBackup(backupFile);
+      setBackupValidation(response.data);
+      setBackupMessage(response.data.can_restore ? "Validation passed. Review counts before restore." : "Validation failed.");
+    } catch (caught) {
+      setBackupMessage(axios.isAxiosError(caught) ? String(caught.response?.data?.detail || caught.message) : "Validation failed.");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleConfirmRestore() {
+    if (!backupValidation?.can_restore) return;
+    if (!window.confirm("This restore can change customers, stock, invoices and outstanding balances. Continue?")) return;
+    setBackupBusy(true);
+    try {
+      const response = await confirmMasterRestore(backupValidation.restore_id);
+      setBackupMessage(`Restore complete: ${response.data.inserted} inserted, ${response.data.updated} updated.`);
+      setBackupValidation(null);
+      setBackupFile(null);
+      await load();
+    } catch (caught) {
+      setBackupMessage(axios.isAxiosError(caught) ? String(caught.response?.data?.detail || caught.message) : "Restore failed.");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleValidationReportDownload() {
+    if (!backupValidation) return;
+    const response = await downloadMasterBackupValidationReport(backupValidation.restore_id);
+    const url = URL.createObjectURL(response.data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "master_backup_validation_report.xlsx";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   const finishedBoxes = useMemo(
     () => safeArray(inventory)
       .filter((row) => normalizedType(row) === "Final Product")
@@ -220,6 +293,31 @@ export default function DashboardPage() {
       </header>
 
       {error ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">{error}</div> : null}
+
+      {user?.role === "Owner" ? (
+        <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm" data-testid="master-backup-card">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-bold text-zinc-950">Data Backup & Restore</h2>
+              <p className="text-xs text-zinc-500">Download or validate a complete factory Excel backup.</p>
+            </div>
+            <Download className="h-5 w-5 text-indigo-700" />
+          </div>
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            This restore can change customers, stock, invoices and outstanding balances. A database backup will be created before restore.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="inline-flex items-center gap-2 rounded-md bg-indigo-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" disabled={backupBusy} type="button" onClick={() => void handleBackupDownload()}><Download className="h-4 w-4" />Download Master Backup</button>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 px-3 py-2 text-xs font-semibold"><Upload className="h-4 w-4" />Upload Master Backup<input className="hidden" accept=".xlsx" type="file" onChange={(event) => { setBackupFile(event.target.files?.[0] || null); setBackupValidation(null); }} /></label>
+            <button className="rounded-md border border-indigo-300 px-3 py-2 text-xs font-semibold text-indigo-800 disabled:opacity-50" disabled={!backupFile || backupBusy} type="button" onClick={() => void handleBackupValidate()}>Validate Backup</button>
+            <button className="rounded-md border border-zinc-300 px-3 py-2 text-xs font-semibold disabled:opacity-50" disabled={!backupValidation} type="button" onClick={() => void handleValidationReportDownload()}>Download Validation Report</button>
+            <button className="rounded-md bg-red-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50" disabled={!backupValidation?.can_restore || backupBusy} type="button" onClick={() => void handleConfirmRestore()}>Confirm Restore</button>
+          </div>
+          {backupFile ? <p className="mt-2 text-xs text-zinc-600">Selected: {backupFile.name}</p> : null}
+          {backupValidation ? <p className="mt-2 text-xs text-zinc-700">{Object.values(backupValidation.new_records).reduce((sum, value) => sum + value, 0)} rows found; {backupValidation.errors.length} errors.</p> : null}
+          {backupMessage ? <p className="mt-2 text-xs font-medium text-zinc-800">{backupMessage}</p> : null}
+        </section>
+      ) : null}
 
       {showTelegramBanner ? (
         <section

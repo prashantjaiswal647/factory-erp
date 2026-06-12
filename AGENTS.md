@@ -245,6 +245,14 @@ Rules:
 - `deploy.sh` must create a timestamped `pg_dump -Fc` backup under `storage/backups/` before Alembic.
 - Rollback strategy is restore from `.dump` backup, not destructive Alembic downgrade.
 
+## 13A. Master Backup and Restore
+
+- Owner-only master backup APIs live under `/api/backup/master`.
+- Export uses one XLSX sheet per factory data family and includes factory-scoped stable restore keys.
+- Restore is validate-first and confirmation-only; staged uploads must never import during validation.
+- Confirmed restore creates a pre-restore backup, runs transactionally, and must reject cross-factory metadata.
+- Invoice history restore must not call sales creation paths or deduct finished-goods stock again.
+
 ## 14. Deployment Rules
 
 - `validate-and-test.sh` must pass before `deploy.sh`.

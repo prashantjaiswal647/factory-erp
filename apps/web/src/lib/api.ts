@@ -2109,6 +2109,36 @@ export function updateDailyProduction(productionId: number, payload: Partial<Dai
   return api.patch<ProductionHistoryEntry>(`/api/production/daily/${productionId}`, payload);
 }
 
+export type MasterBackupValidation = {
+  restore_id: string;
+  can_restore: boolean;
+  new_records: Record<string, number>;
+  existing_records: Record<string, number>;
+  updated_records: Record<string, number>;
+  errors: Array<{ sheet: string; error: string }>;
+};
+
+export function downloadMasterBackup() {
+  return api.get<Blob>("/api/backup/master", { responseType: "blob" });
+}
+
+export function validateMasterBackup(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return api.post<MasterBackupValidation>("/api/backup/master/validate", form);
+}
+
+export function confirmMasterRestore(restoreId: string) {
+  return api.post<{ inserted: number; updated: number; skipped: number }>("/api/backup/master/restore", {
+    restore_id: restoreId,
+    confirmation: "RESTORE",
+  });
+}
+
+export function downloadMasterBackupValidationReport(restoreId: string) {
+  return api.get<Blob>(`/api/backup/master/validation-report/${restoreId}`, { responseType: "blob" });
+}
+
 export function deleteOnboardingEntry(entryId: string, type?: string) {
   const normalizedType = normalizeOnboardingDeleteType(entryId, type);
   return api.delete(`/api/onboarding/entry/${entryId}`, {

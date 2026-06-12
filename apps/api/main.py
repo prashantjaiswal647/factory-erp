@@ -79,6 +79,7 @@ from routers.automation import router as automation_router
 from routers.phase1 import router as phase1_router
 from routers.operations import log_factory_operation, router as operations_router
 from routers import sales
+from routers import backup_restore
 from routers import inventory
 from routers import payments
 from routers import dashboard
@@ -241,6 +242,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(telegram_actions_router)
     application.include_router(purchases.router)
     application.include_router(alerts.router)
+    application.include_router(backup_restore.router)
     #application.include_router(ai_invoice_router)
     #application.include_router(internal_automation_router)
 
