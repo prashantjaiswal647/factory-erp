@@ -1032,6 +1032,24 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
   });
 }
 
+export function deleteInvoice(invoiceId: number, confirmation: string) {
+  return api.delete<{ status: string; invoice_id: number; invoice_number: string }>(
+    `/api/sales/invoices/${invoiceId}`,
+    { data: { confirmation } },
+  );
+}
+
+export function downloadMonthlyInvoices(
+  month: number,
+  year: number,
+  type: "all" | "tax_invoice" | "bill_of_supply" | "simple_bill_of_supply",
+) {
+  return api.get<Blob>("/api/sales/invoices/bulk-download", {
+    responseType: "blob",
+    params: { month, year, type },
+  });
+}
+
 export function reprintInvoice(invoiceId: number) {
   return api.post(`/api/invoices/${invoiceId}/reprint`);
 }

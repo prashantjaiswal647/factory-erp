@@ -1,8 +1,9 @@
 import { Download, FileText, RefreshCw, Plus, Trash2, Calendar, FileSpreadsheet, Check, UserRound, Eye, Info, X, Mail, Send, Printer, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { downloadInvoicePdf, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
+import { deleteInvoice, downloadInvoicePdf, downloadMonthlyInvoices, getInvoiceDeliveryHistory, getInvoiceDocuments, getDashboardCustomers, getAccountantSummary, reprintInvoice, sendInvoiceEmail, sendInvoiceTelegram, api } from "../lib/api";
 import type { InvoiceDashboardResponse, InvoiceDeliveryHistoryItem, InvoiceDocumentSummary, DashboardCustomer } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { toNumber } from "../lib/format";
 
 function money(value: string | number) {
@@ -71,6 +72,7 @@ function numberToWords(num: number): string {
 }
 
 export default function InvoicesPage() {
+  const { user } = useAuth();
   const [data, setData] = useState<InvoiceDashboardResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
@@ -102,6 +104,14 @@ export default function InvoicesPage() {
   const [accountantMonth, setAccountantMonth] = useState(new Date().getMonth() + 1);
   const [accountantYear, setAccountantYear] = useState(new Date().getFullYear());
   const [isDownloadingSummary, setIsDownloadingSummary] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<InvoiceDocumentSummary | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showBulkDownload, setShowBulkDownload] = useState(false);
+  const [bulkMonth, setBulkMonth] = useState(new Date().getMonth() + 1);
+  const [bulkYear, setBulkYear] = useState(new Date().getFullYear());
+  const [bulkType, setBulkType] = useState<"all" | "tax_invoice" | "bill_of_supply" | "simple_bill_of_supply">("all");
+  const [isBulkDownloading, setIsBulkDownloading] = useState(false);
 
   async function loadInvoices() {
     setIsLoading(true);
@@ -239,6 +249,44 @@ export default function InvoicesPage() {
     }
   }
 
+  async function confirmDeleteInvoice() {
+    if (!deleteTarget || deleteConfirmation !== "DELETE INVOICE") return;
+    setIsDeleting(true);
+    try {
+      await deleteInvoice(deleteTarget.id, deleteConfirmation);
+      setMessage(`Invoice ${deleteTarget.invoice_number} deleted.`);
+      setDeleteTarget(null);
+      setDeleteConfirmation("");
+      await loadInvoices();
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  async function handleBulkDownload() {
+    setIsBulkDownloading(true);
+    try {
+      const response = await downloadMonthlyInvoices(bulkMonth, bulkYear, bulkType);
+      const blob = new Blob([response.data], { type: "application/zip" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `invoices_${bulkYear}-${String(bulkMonth).padStart(2, "0")}_${bulkType}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setShowBulkDownload(false);
+      setMessage("Monthly invoice ZIP download started.");
+    } catch (error) {
+      setMessage(apiErrorMessage(error));
+    } finally {
+      setIsBulkDownloading(false);
+    }
+  }
+
   const invoices = data?.invoices || [];
   const filteredInvoices = useMemo(() => invoices.filter((invoice) => {
     const query = searchQuery.trim().toLowerCase();
@@ -265,6 +313,10 @@ export default function InvoicesPage() {
           <button className="inline-flex h-10 items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" type="button" onClick={loadInvoices}>
             <RefreshCw className="h-4 w-4" />
             Refresh
+          </button>
+          <button className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700" type="button" onClick={() => setShowBulkDownload(true)}>
+            <Download className="h-4 w-4" />
+            Monthly Bulk Download
           </button>
         </div>
       </header>
@@ -571,6 +623,11 @@ export default function InvoicesPage() {
                           <button className="inline-flex h-9 items-center gap-1 rounded-md border px-2 text-xs font-semibold text-violet-700" disabled={deliveryId === invoice.id} onClick={() => void sendEmail(invoice)}>
                             <Mail className="h-4 w-4" /> Email
                           </button>
+                          {user?.role === "Owner" ? (
+                            <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 px-2 text-xs font-semibold text-red-700 hover:bg-red-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); }}>
+                              <Trash2 className="h-4 w-4" /> Delete Invoice
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -635,6 +692,54 @@ export default function InvoicesPage() {
       </section>
 
       {/* Premium Glassmorphic Invoice Details Modal */}
+      {showBulkDownload && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 px-4">
+          <div className="w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-zinc-950">Monthly Bulk Download</h2>
+              <button type="button" onClick={() => setShowBulkDownload(false)}><X className="h-5 w-5" /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <select className="h-10 rounded-md border px-3 text-sm" value={bulkMonth} onChange={(event) => setBulkMonth(Number(event.target.value))}>
+                {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => <option key={month} value={month}>{new Date(2026, month - 1).toLocaleString("en-IN", { month: "long" })}</option>)}
+              </select>
+              <select className="h-10 rounded-md border px-3 text-sm" value={bulkYear} onChange={(event) => setBulkYear(Number(event.target.value))}>
+                {Array.from({ length: 7 }, (_, index) => new Date().getFullYear() - 3 + index).map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+            </div>
+            <select className="h-10 w-full rounded-md border px-3 text-sm" value={bulkType} onChange={(event) => setBulkType(event.target.value as typeof bulkType)}>
+              <option value="all">All</option>
+              <option value="tax_invoice">Tax Invoice</option>
+              <option value="bill_of_supply">Bill of Supply</option>
+              <option value="simple_bill_of_supply">Simple Bill of Supply</option>
+            </select>
+            <button type="button" disabled={isBulkDownloading} onClick={() => void handleBulkDownload()} className="h-10 w-full rounded-md bg-brand-600 text-sm font-bold text-white disabled:bg-zinc-300">
+              {isBulkDownloading ? "Preparing ZIP..." : "Download ZIP"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 px-4">
+          <div className="w-full max-w-lg space-y-4 rounded-xl bg-white p-6 shadow-2xl">
+            <h2 className="text-xl font-bold text-zinc-950">Delete Invoice?</h2>
+            <p className="text-sm leading-6 text-zinc-600">Ye invoice permanently delete ho jayegi. Iska invoice number dobara use ho sakega. Agar invoice customer/CA/GST ke liye already issue ho chuki hai, to delete karna avoid karein.</p>
+            <div className="rounded-md bg-red-50 p-3 text-sm font-semibold text-red-800">Invoice: {deleteTarget.invoice_number} · {deleteTarget.customer_name} · {money(deleteTarget.bill_total)}</div>
+            <label className="block text-sm font-semibold text-zinc-700">
+              Type DELETE INVOICE
+              <input autoFocus className="mt-2 h-10 w-full rounded-md border border-zinc-300 px-3" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} />
+            </label>
+            <div className="flex justify-end gap-3">
+              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }}>Cancel</button>
+              <button type="button" disabled={deleteConfirmation !== "DELETE INVOICE" || isDeleting} className="h-10 rounded-md bg-red-600 px-4 text-sm font-bold text-white disabled:bg-zinc-300" onClick={() => void confirmDeleteInvoice()}>
+                {isDeleting ? "Deleting..." : "Delete Invoice"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedInvoiceDetails && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/60 backdrop-blur-sm px-4">
           <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl border border-zinc-100 max-h-[90vh] overflow-y-auto space-y-6">

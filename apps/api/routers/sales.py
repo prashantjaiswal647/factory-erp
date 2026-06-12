@@ -4,6 +4,7 @@ from io import BytesIO
 import logging
 import os
 import re
+import zipfile
 
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 import httpx
@@ -547,6 +548,10 @@ class InvoiceTelegramDeliveryRequest(BaseModel):
 
 class InvoiceEmailDeliveryRequest(BaseModel):
     email: EmailStr | None = None
+
+
+class InvoiceDeleteRequest(BaseModel):
+    confirmation: str
 
 
 class InvoiceDeliveryResponse(BaseModel):
@@ -2038,6 +2043,72 @@ def list_invoice_documents(
     )
 
 
+def _invoice_category(invoice: InvoiceDocument) -> str:
+    payload = invoice.payload_json or {}
+    invoice_payload = payload.get("invoice") or {}
+    policy = payload.get("document_policy") or {}
+    value = (
+        invoice_payload.get("invoice_type")
+        or policy.get("legal_invoice_type")
+        or "bill_of_supply"
+    )
+    if value in ("BILL_OF_SUPPLY_SIMPLE", "bill_of_supply_simple", "simple_bill_of_supply"):
+        return "simple_bill_of_supply"
+    if value == "tax_invoice":
+        return "tax_invoice"
+    return "bill_of_supply"
+
+
+def _safe_invoice_filename(invoice: InvoiceDocument) -> str:
+    raw = f"{invoice.invoice_number}_{invoice.customer_name}_{invoice.invoice_date.isoformat()}"
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", raw).strip(" ._") + ".pdf"
+
+
+@router.get("/invoices/bulk-download")
+def bulk_download_invoices(
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(..., ge=2000, le=2100),
+    type: str = Query("all"),
+    current_user: User = Depends(check_permissions(SALES_ROLES)),
+    db: Session = Depends(get_db),
+):
+    allowed_types = {"all", "tax_invoice", "bill_of_supply", "simple_bill_of_supply"}
+    if type not in allowed_types:
+        raise HTTPException(status_code=422, detail="Invalid invoice category")
+
+    start_date = date(year, month, 1)
+    end_date = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    invoices = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, current_user.factory_id))
+        .filter(InvoiceDocument.invoice_date >= start_date, InvoiceDocument.invoice_date < end_date)
+        .order_by(InvoiceDocument.invoice_date.asc(), InvoiceDocument.id.asc())
+        .all()
+    )
+    selected = [invoice for invoice in invoices if type == "all" or _invoice_category(invoice) == type]
+    if not selected:
+        raise HTTPException(status_code=404, detail="No invoices found for the selected month and category")
+
+    folder_names = {
+        "tax_invoice": "Tax-Invoice",
+        "bill_of_supply": "Bill-of-Supply",
+        "simple_bill_of_supply": "Simple-Bill-of-Supply",
+    }
+    month_folder = f"{year:04d}-{month:02d}"
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for invoice in selected:
+            category = _invoice_category(invoice)
+            path = f"{month_folder}/{folder_names[category]}/{_safe_invoice_filename(invoice)}"
+            zip_file.writestr(path, _invoice_pdf_snapshot(db, invoice))
+    archive.seek(0)
+    return Response(
+        content=archive.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="invoices_{month_folder}_{type}.zip"'},
+    )
+
+
 @router.post("/invoices/from-sale/{sale_id}", response_model=InvoiceFromSaleResponse)
 def create_invoice_from_sale(
     sale_id: int,
@@ -2293,6 +2364,149 @@ def _invoice_payment_history(
             "remaining_after_payment": remaining,
         })
     return history
+
+
+@router.delete("/invoices/{invoice_document_id}")
+def delete_invoice_document(
+    invoice_document_id: int,
+    payload: InvoiceDeleteRequest,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "Owner":
+        raise HTTPException(status_code=403, detail="Only Owner can delete invoices")
+    if payload.confirmation.strip() != "DELETE INVOICE":
+        raise HTTPException(status_code=422, detail="Type DELETE INVOICE to confirm deletion")
+
+    invoice = (
+        db.query(InvoiceDocument)
+        .filter(factory_id_filter(InvoiceDocument.factory_id, current_user.factory_id))
+        .filter(InvoiceDocument.id == invoice_document_id)
+        .with_for_update()
+        .first()
+    )
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    bill = db.query(OutstandingBill).filter(
+        factory_id_filter(OutstandingBill.factory_id, current_user.factory_id),
+        OutstandingBill.invoice_document_id == invoice.id,
+    ).with_for_update().first()
+    if bill is not None:
+        has_allocations = bool(
+            to_money(bill.amount_paid) > 0
+            or db.query(PaymentCollection.id).filter(
+                PaymentCollection.factory_id == current_user.factory_id,
+                PaymentCollection.outstanding_bill_id == bill.id,
+            ).first()
+            or bill.payments
+        )
+        if has_allocations:
+            raise HTTPException(
+                status_code=409,
+                detail="This invoice has payment allocations and cannot be deleted. Reverse or reallocate the payments first.",
+            )
+
+    invoice_number = invoice.invoice_number
+    customer_name = invoice.customer_name
+    invoice_amount = to_money(invoice.bill_total)
+    customer_id = invoice.customer_id
+    payload_json = invoice.payload_json or {}
+    sale_ids = list((payload_json.get("invoice") or {}).get("sale_ids") or [])
+    item_rows = list(payload_json.get("items") or [])
+
+    try:
+        if bill is not None:
+            db.delete(bill)
+            db.flush()
+        db.query(InvoiceDeliveryLog).filter(
+            InvoiceDeliveryLog.factory_id == current_user.factory_id,
+            InvoiceDeliveryLog.invoice_document_id == invoice.id,
+        ).delete(synchronize_session=False)
+        db.delete(invoice)
+        db.flush()
+
+        if sale_ids:
+            db.query(Payment).filter(
+                factory_id_filter(Payment.factory_id, current_user.factory_id),
+                Payment.sale_id.in_(sale_ids),
+            ).delete(synchronize_session=False)
+            db.query(DailySale).filter(
+                factory_id_filter(DailySale.factory_id, current_user.factory_id),
+                DailySale.id.in_(sale_ids),
+            ).delete(synchronize_session=False)
+
+        from routers.inventory import recalculate_and_sync_sku_stock
+        seen_skus = set()
+        for item in item_rows:
+            sku = (
+                item.get("product_size_ml"),
+                (item.get("variety") or "").strip(),
+                (item.get("packaging_size_name") or "").strip(),
+            )
+            if not all(sku) or sku in seen_skus:
+                continue
+            seen_skus.add(sku)
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
+                product_size_ml=sku[0],
+                variety=sku[1],
+                packaging_size_name=sku[2],
+            )
+
+        match = re.search(r"(\d+)$", invoice_number or "")
+        if match:
+            recycled_number = int(match.group(1))
+            exists = db.query(RecycledInvoice.id).filter(
+                RecycledInvoice.factory_id == current_user.factory_id,
+                RecycledInvoice.recycled_number == recycled_number,
+            ).first()
+            if exists is None:
+                db.add(RecycledInvoice(factory_id=current_user.factory_id, recycled_number=recycled_number))
+
+        if customer_id is not None:
+            customer = db.query(Customer).filter(
+                factory_id_filter(Customer.factory_id, current_user.factory_id),
+                Customer.id == customer_id,
+            ).first()
+            if customer is not None:
+                sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+
+        deleted_at = datetime.now(timezone.utc)
+        db.add(ActivityLog(
+            factory_id=int(current_user.factory_id),
+            event_type="invoice",
+            description="Invoice deleted by owner",
+            log_date=deleted_at.date(),
+            user_id=current_user.id,
+            user_role=current_user.role,
+            user_name=current_user.full_name or current_user.username,
+            action_type="DELETE",
+            action_summary=f"Invoice {invoice_number} deleted by owner",
+            entity_name=invoice_number,
+            entity_type="invoice",
+            entity_id=invoice_document_id,
+            short_statement="Invoice deleted by owner",
+            committed_at=deleted_at,
+            metadata_json={
+                "invoice_number": invoice_number,
+                "customer_name": customer_name,
+                "amount": str(invoice_amount),
+                "deleted_by": current_user.full_name or current_user.username,
+                "deleted_at": deleted_at.isoformat(),
+            },
+        ))
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Invoice deletion failed: invoice_id=%s factory_id=%s", invoice_document_id, current_user.factory_id)
+        raise HTTPException(status_code=409, detail="Invoice could not be deleted safely") from exc
+
+    return {"status": "deleted", "invoice_id": invoice_document_id, "invoice_number": invoice_number}
 
 
 def _record_invoice_delivery(
