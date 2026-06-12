@@ -1,7 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { api, getBillingStatus } from "../lib/api";
+import {
+  api,
+  clearStoredAuthToken,
+  getAuthTokenFromResponse,
+  getBillingStatus,
+  getStoredAuthToken,
+  storeAuthToken,
+} from "../lib/api";
 
 export type UserRole = "Owner" | "Sub-Owner" | "Supervisor" | "Operator";
 export const OWNER_LEVEL_ROLES: UserRole[] = ["Owner", "Sub-Owner"];
@@ -49,8 +56,10 @@ type AuthContextValue = {
 };
 
 type TokenResponse = {
-  access_token: string;
-  token_type: string;
+  access_token?: string;
+  token?: string;
+  jwt?: string;
+  token_type?: string;
   user: {
     id: number;
     user_id?: string | null;
@@ -69,7 +78,6 @@ type TokenResponse = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-const tokenKey = "ai_erp_token";
 const userKey = "ai_erp_user";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -77,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem(tokenKey);
+    const savedToken = getStoredAuthToken();
     const savedUser = localStorage.getItem(userKey);
 
     if (!savedToken || !savedUser) {
@@ -88,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setUser(JSON.parse(savedUser) as AuthUser);
     } catch {
-      localStorage.removeItem(tokenKey);
+      clearStoredAuthToken();
       localStorage.removeItem(userKey);
     } finally {
       setIsLoading(false);
@@ -97,17 +105,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Global 401 handler: if any API call returns Unauthorized, cleanly clear session
   useEffect(() => {
+    let redirectStarted = false;
     function handleUnauthorized() {
-      const savedToken = localStorage.getItem(tokenKey);
-      // Only logout if the user was previously logged in (token exists in storage)
-      if (savedToken) {
-        localStorage.removeItem("subscription");
-        sessionStorage.removeItem("subscription");
-        localStorage.removeItem("token");
-        localStorage.removeItem("factory_id");
-        localStorage.removeItem(tokenKey);
-        localStorage.removeItem(userKey);
-        setUser(null);
+      if (redirectStarted || !getStoredAuthToken()) return;
+      redirectStarted = true;
+      localStorage.removeItem("subscription");
+      sessionStorage.removeItem("subscription");
+      localStorage.removeItem("factory_id");
+      clearStoredAuthToken();
+      localStorage.removeItem(userKey);
+      setUser(null);
+      if (window.location.pathname !== "/login") {
+        window.location.replace("/login");
       }
     }
     window.addEventListener("auth-unauthorized", handleUnauthorized);
@@ -156,8 +165,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       preferred_language: data.user.preferred_language,
     };
 
-    localStorage.setItem(tokenKey, data.access_token);
-    localStorage.setItem("token", data.access_token);
+    const accessToken = getAuthTokenFromResponse(data);
+    if (!accessToken) {
+      throw new Error("Login response did not include an access token.");
+    }
+    storeAuthToken(accessToken);
     localStorage.setItem("factory_id", String(nextUser.factory_id ?? ""));
     localStorage.setItem(userKey, JSON.stringify(nextUser));
     setUser(nextUser);
@@ -174,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem(tokenKey);
+    const savedToken = getStoredAuthToken();
     if (!savedToken || !user?.factory_id) return;
 
     let active = true;
@@ -206,9 +218,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function logout() {
     localStorage.removeItem("subscription");
     sessionStorage.removeItem("subscription");
-    localStorage.removeItem("token");
     localStorage.removeItem("factory_id");
-    localStorage.removeItem(tokenKey);
+    clearStoredAuthToken();
     localStorage.removeItem(userKey);
     setUser(null);
   }

@@ -5,7 +5,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import type { UserRole } from "../context/AuthContext";
 import { useDataRefresh } from "../context/DataRefreshContext";
-import { getUserSubscription } from "../lib/api";
+import { getStoredAuthToken, getUserSubscription } from "../lib/api";
 import type { DashboardSubscriptionStatus, UserSubscriptionResponse } from "../lib/api";
 
 type NavigationItem = {
@@ -33,7 +33,7 @@ const navigation: NavigationItem[] = [
   { label: "Invoices", href: "/invoices", icon: FileText, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Payment Collection", href: "/payments", icon: CreditCard, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Collection War Room", href: "/collection-war-room", icon: TrendingDown, roles: ["Owner"], section: "Revenue & Accounts" },
-  { label: "Outstanding", href: "/outstanding", icon: Wallet, roles: ["Owner", "Sub-Owner"], section: "Revenue & Accounts" },
+  { label: "Outstanding", href: "/outstanding", icon: Wallet, roles: ["Owner", "Sub-Owner", "Supervisor"], section: "Revenue & Accounts" },
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner", "Sub-Owner"], section: "Admin" },
   { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },
@@ -90,7 +90,7 @@ export default function Layout() {
   }
 
   async function refreshSubscriptionState() {
-    if (!user) return;
+    if (!user || !getStoredAuthToken()) return;
     const data = await getUserSubscription(Date.now());
     setSubData(data);
     setLayoutStatus(buildLayoutStatus(data, user.role));
@@ -99,7 +99,7 @@ export default function Layout() {
 
   useEffect(() => {
     let active = true;
-    if (!user) return;
+    if (!user || !getStoredAuthToken()) return;
     const currentUser = user;
     async function fetchSub() {
       try {
@@ -125,7 +125,7 @@ export default function Layout() {
   useEffect(() => {
     if (!user) return;
     function refreshOnReturn() {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === "visible" && getStoredAuthToken()) {
         refreshSubscriptionState().catch((err) => console.error("Error refreshing subscription on tab return:", err));
       }
     }

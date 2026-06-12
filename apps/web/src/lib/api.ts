@@ -1,5 +1,39 @@
 import axios from "axios";
 
+export const AUTH_TOKEN_KEYS = ["ai_erp_token", "token"] as const;
+
+export function getAuthTokenFromResponse(data: {
+  access_token?: string | null;
+  token?: string | null;
+  jwt?: string | null;
+}): string | null {
+  return data.access_token?.trim() || data.token?.trim() || data.jwt?.trim() || null;
+}
+
+export function getStoredAuthToken(): string | null {
+  for (const key of AUTH_TOKEN_KEYS) {
+    const token = localStorage.getItem(key)?.trim();
+    if (token) return token;
+  }
+  return null;
+}
+
+export function storeAuthToken(token: string) {
+  const normalized = token.trim();
+  if (!normalized) {
+    throw new Error("Login response did not include an access token.");
+  }
+  for (const key of AUTH_TOKEN_KEYS) {
+    localStorage.setItem(key, normalized);
+  }
+}
+
+export function clearStoredAuthToken() {
+  for (const key of AUTH_TOKEN_KEYS) {
+    localStorage.removeItem(key);
+  }
+}
+
 const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 const getBaseURL = () => {
@@ -47,7 +81,7 @@ export type UpgradeRequiredDetail = {
 
 // Interceptor: Har request ke sath Token bhejne ke liye (Security)
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token") || localStorage.getItem("ai_erp_token");
+  const token = getStoredAuthToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -75,7 +109,7 @@ api.interceptors.response.use(
     }
     // 401 Unauthorized: Token missing/expired. Dispatch event so AuthContext can react.
     // Do NOT throw to console — silently reject so callers can handle gracefully.
-    if (status === 401 && typeof window !== "undefined") {
+    if (status === 401 && getStoredAuthToken() && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("auth-unauthorized", { detail: { url: error?.config?.url } }));
     }
     return Promise.reject(error);

@@ -173,6 +173,8 @@ Security no-go rules:
 
 Security hardening status:
 - Authentication diagnostics use structured logging; production auth code must not use `AUTH DEBUG` or `print(...)`.
+- Frontend auth accepts `access_token`, `token`, or `jwt` login response keys, persists the normalized token, and attaches it as `Authorization: Bearer <token>` to protected API requests.
+- Subscription refresh must skip when no auth token exists; protected-route 401 responses clear auth and redirect to `/login` once.
 - `/api/super-admin/login` is limited to 5 requests per client IP per 60 seconds.
 - n8n, Telegram, and AI webhook ingress is limited to 60 requests per client IP per 60 seconds.
 - Rate-limit overflow returns HTTP 429 before webhook business processing.
@@ -195,6 +197,7 @@ Security hardening status:
 - If backend forbids a write/delete action, frontend buttons must be hidden or disabled for that role.
 - UI sidebar/nav must never hardcode production URLs for internal app routes. Use router-relative paths such as `/operations`.
 - `/munshi-control-room` must stay isolated from normal public/sidebar navigation.
+- Sales, invoices, and outstanding read routes allow Owner, Sub-Owner, and Supervisor; Collection War Room remains Owner-only in both frontend and backend.
 
 ## 11. Duplicate Model Migration Strategy
 

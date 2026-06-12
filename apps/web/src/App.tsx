@@ -190,7 +190,7 @@ export default function App() {
         <Route
           path="outstanding"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+            <PrivateRoute allowedRoles={["Owner", "Sub-Owner", "Supervisor"]}>
               <OutstandingPage />
             </PrivateRoute>
           }
@@ -198,7 +198,7 @@ export default function App() {
         <Route
           path="collection-war-room"
           element={
-            <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
+            <PrivateRoute allowedRoles={["Owner"]}>
               <CollectionWarRoomPage />
             </PrivateRoute>
           }
