@@ -240,6 +240,7 @@ Rules:
 
 - Never run `Base.metadata.create_all()` or runtime schema mutation in production startup/request handlers.
 - Schema changes are Alembic only.
+- Migrations that add columns, tables, indexes, foreign keys, or constraints must inspect the live schema and skip objects that already exist so partially applied production deploys can resume safely.
 - Baseline revision: `20260603_0001_runtime_schema_baseline.py`.
 - `deploy.sh` must create a timestamped `pg_dump -Fc` backup under `storage/backups/` before Alembic.
 - Rollback strategy is restore from `.dump` backup, not destructive Alembic downgrade.
