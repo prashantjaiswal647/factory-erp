@@ -397,7 +397,7 @@ def create_daily_production(
                 blank_stock = size_matches[0]
         requested_blank_bora = to_qty(payload.blank_used_bori)
         requested_bottom_rolls = payload.bottom_used_rolls or 0
-        if blank_stock is None and requested_blank_bora > 0:
+        if blank_stock is None:
             raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
         if blank_stock is not None and (
             not blank_stock.weight_per_bora_kg or blank_stock.weight_per_bora_kg <= 0
@@ -431,7 +431,7 @@ def create_daily_production(
             )
             if len(bottom_matches) == 1:
                 bottom_stock = bottom_matches[0]
-        if bottom_stock is None and requested_bottom_rolls > 0:
+        if bottom_stock is None:
             raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
         blank_used_bori = requested_blank_bora
         blank_weight_per_bora = to_qty(blank_stock.weight_per_bora_kg if blank_stock is not None else 0)
@@ -515,27 +515,6 @@ def create_daily_production(
                     f"Required: {bottom_used_rolls} rolls."
                 ),
             )
-
-        if blank_stock is None:
-            blank_stock = BlankStock(
-                factory_id=factory_id,
-                blank_size_ml=product_size_ml,
-                variety=variety,
-                linked_bottom_size_mm=machine_bottom_size_mm,
-                total_boras=Decimal("0.000"),
-                total_qty_kg=Decimal("0.000"),
-            )
-            db.add(blank_stock)
-        if bottom_stock is None:
-            bottom_stock = BottomStock(
-                factory_id=factory_id,
-                bottom_size_mm=machine_bottom_size_mm,
-                variety=variety,
-                total_rolls=0,
-                total_weight_kg=Decimal("0.000"),
-                total_qty_kg=Decimal("0.000"),
-            )
-            db.add(bottom_stock)
 
         blank_after = to_qty(blank_stock.total_qty_kg) - blank_used_kg
         bottom_after = to_qty(bottom_stock.total_qty_kg) - bottom_used_kg

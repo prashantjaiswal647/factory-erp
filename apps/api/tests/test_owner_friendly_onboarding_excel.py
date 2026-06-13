@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from openpyxl import Workbook
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,10 +17,12 @@ from routers.onboarding import (
     apply_bulk_rows,
     build_owner_onboarding_workbook,
     dedupe_valid_bulk_rows,
+    onboarding_step3_materials,
     read_master_bulk_excel,
     reset_active_onboarding_master_data,
     validate_bulk_cross_sheet,
 )
+from schemas import Step3Request
 from services.bulk_validation import enrich_failed_rows
 
 
@@ -435,6 +438,42 @@ def test_blank_design_defaults_to_excel_material_name_not_plain_white():
     assert errors == []
     auto_normalize_owner_mappings({"blank_stock": rows, "bottom_reel": [], "finished_goods": []})
     assert rows[0]["variety_design"] == "210 Printed Blank"
+
+
+def test_metrics_do_not_create_visible_plain_white_stock():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    db = session_factory()
+    try:
+        result = onboarding_step3_materials(
+            Step3Request(raw_material_metrics=[
+                {
+                    "material_type": "Blank",
+                    "size_ml_or_mm": 55,
+                    "weight_per_sack_kg": Decimal("20"),
+                    "total_sacks": Decimal("3"),
+                    "pieces_per_sack": 1000,
+                },
+                {
+                    "material_type": "Bottom",
+                    "size_ml_or_mm": 65,
+                    "weight_per_sack_kg": Decimal("10"),
+                    "total_sacks": Decimal("2"),
+                    "pieces_per_sack": 100,
+                },
+            ]),
+            BackgroundTasks(),
+            SimpleNamespace(id=1, factory_id=1, full_name="Owner", username="owner", role="Owner"),
+            db,
+        )
+        assert result.raw_material_metrics_saved == 2
+        assert db.query(BlankStock).filter_by(factory_id=1).count() == 0
+        assert db.query(BottomStock).filter_by(factory_id=1).count() == 0
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def _single_sheet_bytes(workbook: Workbook) -> bytes:

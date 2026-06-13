@@ -188,6 +188,7 @@ Security hardening status:
 - Production SKU options must exclude incomplete Blank/Bottom/Box mappings.
 - Every bulk sheet should behave as deterministic upsert: insert if new, update if existing, scoped by `current_user.factory_id`.
 - Master onboarding upload is a full active-baseline sync: duplicate workbook rows use last-row-wins; referenced customers/workers/machines are archived then matching rows reactivated; standalone opening-stock rows are cleared and rebuilt only from explicit workbook rows.
+- Production logging and onboarding metric helpers must never auto-create visible Blank/Bottom stock rows; missing mappings fail validation and visible inventory comes only from explicit stock entry or master workbook rows.
 - Spreadsheet-provided tenant/factory fields must never override authenticated `current_user.factory_id`.
 - Duplicate/integrity errors should be converted into useful validation-report issues whenever possible.
 - Excel validation UI must show exact sheet, section, row, column, bad value, and correction guidance.

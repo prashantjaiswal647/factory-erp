@@ -3706,40 +3706,6 @@ def onboarding_step3_materials(
 
         metric.weight_per_sack_kg = item.weight_per_sack_kg
         metric.pieces_per_sack = item.pieces_per_sack
-        total_weight_kg = item.total_weight_kg or (item.weight_per_sack_kg * item.total_sacks)
-        if item.material_type == "Blank":
-            stock = (
-                db.query(BlankStock)
-                .filter(BlankStock.factory_id == factory_id)
-                .filter(BlankStock.blank_size_ml == item.size_ml_or_mm)
-                .first()
-            )
-            if stock is None:
-                stock = BlankStock(
-                    factory_id=factory_id,
-                    blank_size_ml=item.size_ml_or_mm,
-                    linked_bottom_size_mm=item.size_ml_or_mm,
-                    total_qty_kg=Decimal("0.000"),
-                )
-                db.add(stock)
-            stock.total_qty_kg = total_weight_kg
-        if item.material_type == "Bottom":
-            stock = (
-                db.query(BottomStock)
-                .filter(BottomStock.factory_id == factory_id)
-                .filter(BottomStock.bottom_size_mm == item.size_ml_or_mm)
-                .first()
-            )
-            if stock is None:
-                stock = BottomStock(
-                    factory_id=factory_id,
-                    bottom_size_mm=item.size_ml_or_mm,
-                    total_qty_kg=Decimal("0.000"),
-                    total_weight_kg=Decimal("0.000"),
-                )
-                db.add(stock)
-            stock.total_qty_kg = total_weight_kg
-            stock.total_weight_kg = total_weight_kg
         raw_saved += 1
 
     pack_saved = 0
