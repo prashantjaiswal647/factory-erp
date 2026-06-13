@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import BottomStock, Customer, Factory, Machine, Worker, WorkerOpeningAttendance
+from models import BlankStock, BottomStock, Customer, Factory, Machine, Worker, WorkerOpeningAttendance
 from routers.onboarding import (
     apply_bulk_rows,
     build_master_onboarding_workbook,
@@ -155,6 +155,115 @@ def test_customer_bulk_upload_happy_path_and_idempotent_reupload():
         assert customers[0].balance_amount == Decimal("1750")
         assert first_stats["inserted"] == 1
         assert second_stats["updated"] == 1
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_customer_business_key_replaces_existing_row_when_restore_key_is_stale():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        db.add_all([
+            Customer(
+                factory_id=2,
+                name="Existing Customer",
+                phone_number="9876543210",
+                customer_restore_key="CUS-OLD",
+            ),
+            Customer(
+                factory_id=2,
+                name="Stale Restore Row",
+                phone_number="9000000000",
+                customer_restore_key="CUS-UPLOAD",
+            ),
+        ])
+        db.commit()
+
+        row = customer_row(
+            customer_restore_key="CUS-UPLOAD",
+            name="Replacement Customer",
+            phone_number="9876543210",
+            contact_number="9876543210",
+            previous_due=Decimal("2500"),
+        )
+        stats = {"inserted": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+        assert apply_bulk_rows(db, SimpleNamespace(id=1, factory_id=2), "customer", [row], stats) == 1
+        db.commit()
+
+        replacement = db.query(Customer).filter_by(factory_id=2, phone_number="9876543210").one()
+        stale = db.query(Customer).filter_by(factory_id=2, phone_number="9000000000").one()
+        assert replacement.name == "Replacement Customer"
+        assert replacement.customer_restore_key == "CUS-UPLOAD"
+        assert replacement.previous_due == Decimal("2500")
+        assert stale.customer_restore_key is None
+        assert stats["inserted"] == 0
+        assert stats["updated"] == 1
+
+        assert apply_bulk_rows(db, SimpleNamespace(id=1, factory_id=2), "customer", [row], {}) == 1
+        db.commit()
+        assert db.query(Customer).filter_by(factory_id=2, phone_number="9876543210").count() == 1
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_blank_stock_business_key_replaces_existing_row_when_restore_key_is_stale():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    try:
+        db.add_all([
+            BlankStock(
+                factory_id=2,
+                material_restore_key="MAT-OLD",
+                material_name="Existing Blank",
+                blank_size_ml=210,
+                variety="White",
+                linked_bottom_size_mm=65,
+                weight_per_bora_kg=Decimal("30"),
+                total_boras=Decimal("1"),
+                total_qty_kg=Decimal("30"),
+            ),
+            BlankStock(
+                factory_id=2,
+                material_restore_key="MAT-UPLOAD",
+                material_name="Stale Restore Row",
+                blank_size_ml=250,
+                variety="Blue",
+                linked_bottom_size_mm=75,
+                weight_per_bora_kg=Decimal("30"),
+                total_boras=Decimal("1"),
+                total_qty_kg=Decimal("30"),
+            ),
+        ])
+        db.commit()
+
+        row = {
+            "row_type": "ACTUAL",
+            "material_restore_key": "MAT-UPLOAD",
+            "material_name": "Replacement Blank",
+            "size_ml": 210,
+            "variety_design": "White",
+            "linked_bottom_size_mm": 65,
+            "weight_per_bora_kg": Decimal("40"),
+            "total_boras_sacks": Decimal("3"),
+        }
+        stats = {"inserted": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+        assert apply_bulk_rows(db, SimpleNamespace(id=1, factory_id=2), "blank_stock", [row], stats) == 1
+        db.commit()
+
+        replacement = db.query(BlankStock).filter_by(factory_id=2, blank_size_ml=210, variety="White").one()
+        stale = db.query(BlankStock).filter_by(factory_id=2, blank_size_ml=250, variety="Blue").one()
+        assert replacement.material_name == "Replacement Blank"
+        assert replacement.material_restore_key == "MAT-UPLOAD"
+        assert replacement.total_qty_kg == Decimal("120")
+        assert stale.material_restore_key is None
+        assert stats["inserted"] == 0
+        assert stats["updated"] == 1
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)

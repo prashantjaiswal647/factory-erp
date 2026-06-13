@@ -1588,6 +1588,10 @@ export type OnboardingBulkUploadResponse = {
   message: string;
   overall_status?: "success" | "partial" | "failed" | "ok";
   rows_inserted: number;
+  created_count?: number;
+  updated_count?: number;
+  unchanged_count?: number;
+  archived_skipped_count?: number;
   inserted_counts?: Partial<Record<OnboardingBulkUploadType | "master_onboarding", number>>;
   operation_counts?: {
     inserted?: number;

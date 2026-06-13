@@ -1072,6 +1072,33 @@ def increment_bulk_stat(stats: dict[str, int] | None, key: str, value: int = 1) 
     stats[key] = int(stats.get(key, 0)) + value
 
 
+def transfer_restore_key(
+    db: Session,
+    model,
+    *,
+    factory_id: int,
+    column,
+    restore_key: str | None,
+    target_id: int | None,
+) -> None:
+    if not restore_key:
+        return
+    stale_rows = (
+        db.query(model)
+        .filter(
+            model.factory_id == factory_id,
+            sql_func.lower(column) == restore_key.lower(),
+        )
+        .with_for_update()
+        .all()
+    )
+    for stale_row in stale_rows:
+        if target_id is None or stale_row.id != target_id:
+            setattr(stale_row, column.key, None)
+    if any(target_id is None or stale_row.id != target_id for stale_row in stale_rows):
+        db.flush()
+
+
 def read_standard_sheet(
     workbook: dict,
     sheet_name: str,
@@ -1654,20 +1681,24 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             worker = pending_workers.get(pending_key)
             if worker is not None:
                 increment_bulk_stat(stats, "updated")
-            elif restore_key:
-                worker = query.filter(sql_func.lower(Worker.worker_restore_key) == restore_key.lower()).with_for_update().first()
             elif phone:
                 worker = query.filter(Worker.phone == phone).with_for_update().first()
                 if worker is None:
                     worker = query.filter(sql_func.lower(sql_func.trim(Worker.name)) == worker_name.lower()).with_for_update().first()
             else:
                 worker = query.filter(sql_func.lower(sql_func.trim(Worker.name)) == worker_name.lower()).with_for_update().first()
+            if worker is None and restore_key:
+                worker = query.filter(sql_func.lower(Worker.worker_restore_key) == restore_key.lower()).with_for_update().first()
             if worker is None:
                 worker = Worker(factory_id=factory_id, name=worker_name)
                 db.add(worker)
                 increment_bulk_stat(stats, "inserted")
             elif pending_key not in pending_workers:
                 increment_bulk_stat(stats, "updated")
+            transfer_restore_key(
+                db, Worker, factory_id=factory_id, column=Worker.worker_restore_key,
+                restore_key=restore_key, target_id=worker.id,
+            )
             pending_workers[pending_key] = worker
             worker.worker_restore_key = restore_key
             worker.phone = phone
@@ -1725,9 +1756,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             phone_number = normalized_phone(row.get("phone_number") or row.get("contact_number")) or None
             gst_number = (row.get("gst_number") or "").strip() or None
             query = db.query(Customer).filter(Customer.factory_id == factory_id)
-            if restore_key:
-                customer = query.filter(sql_func.lower(Customer.customer_restore_key) == restore_key.lower()).with_for_update().first()
-            elif phone_number:
+            if phone_number:
                 customer = query.filter(
                     sql_func.replace(sql_func.replace(sql_func.replace(Customer.phone_number, "+91", ""), " ", ""), "-", "")
                     .like(f"%{phone_number}")
@@ -1754,12 +1783,18 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                     sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.firm_name, ""))) == normalized_identity(row.get("firm_name")),
                     sql_func.lower(sql_func.trim(sql_func.coalesce(Customer.place, ""))) == normalized_identity(row.get("place")),
                 ).with_for_update().first()
+            if customer is None and restore_key:
+                customer = query.filter(sql_func.lower(Customer.customer_restore_key) == restore_key.lower()).with_for_update().first()
             if customer is None:
                 customer = Customer(factory_id=factory_id, name=customer_name)
                 db.add(customer)
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
+            transfer_restore_key(
+                db, Customer, factory_id=factory_id, column=Customer.customer_restore_key,
+                restore_key=restore_key, target_id=customer.id,
+            )
 
             contact_number = (row.get("contact_number") or "").strip() or None
             previous_due = Decimal(str(row.get("previous_due") or "0"))
@@ -1826,18 +1861,24 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             restore_key = (row.get("machine_restore_key") or "").strip() or None
             machine_number = (row.get("machine_number") or "").strip() or None
             query = db.query(Machine).filter(Machine.factory_id == factory_id)
-            if restore_key:
-                machine = query.filter(sql_func.lower(Machine.machine_restore_key) == restore_key.lower()).with_for_update().first()
-            elif machine_number:
+            if machine_number:
                 machine = query.filter(sql_func.lower(Machine.machine_number) == machine_number.lower()).with_for_update().first()
             else:
                 machine = query.filter(sql_func.lower(sql_func.trim(Machine.name)) == machine_name.lower()).with_for_update().first()
+            if machine is None:
+                machine = query.filter(sql_func.lower(sql_func.trim(Machine.name)) == machine_name.lower()).with_for_update().first()
+            if machine is None and restore_key:
+                machine = query.filter(sql_func.lower(Machine.machine_restore_key) == restore_key.lower()).with_for_update().first()
             if machine is None:
                 machine = Machine(factory_id=factory_id, name=machine_name)
                 db.add(machine)
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
+            transfer_restore_key(
+                db, Machine, factory_id=factory_id, column=Machine.machine_restore_key,
+                restore_key=restore_key, target_id=machine.id,
+            )
             machine.name = machine_name
             machine.machine_restore_key = restore_key
             machine.machine_name = machine_name
@@ -1866,19 +1907,22 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             material_name = row["material_name"].strip()
             variety = row["variety_design"].strip()
             query = db.query(BlankStock).filter(BlankStock.factory_id == factory_id)
-            if restore_key:
+            stock = query.filter(
+                BlankStock.blank_size_ml == blank_size_ml,
+                sql_func.lower(BlankStock.variety) == variety.lower(),
+            ).with_for_update().first()
+            if stock is None and restore_key:
                 stock = query.filter(sql_func.lower(BlankStock.material_restore_key) == restore_key.lower()).with_for_update().first()
-            else:
-                stock = query.filter(
-                    BlankStock.blank_size_ml == blank_size_ml,
-                    sql_func.lower(BlankStock.variety) == variety.lower(),
-                ).with_for_update().first()
             if stock is None:
                 stock = BlankStock(factory_id=factory_id, blank_size_ml=blank_size_ml, variety=variety)
                 db.add(stock)
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
+            transfer_restore_key(
+                db, BlankStock, factory_id=factory_id, column=BlankStock.material_restore_key,
+                restore_key=restore_key, target_id=stock.id,
+            )
             stock.material_restore_key = restore_key
             stock.material_name = material_name
             stock.variety = variety
@@ -1906,19 +1950,22 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             restore_key = (row.get("material_restore_key") or "").strip() or None
             variety = row["variety_design"].strip()
             query = db.query(BottomStock).filter(BottomStock.factory_id == factory_id)
-            if restore_key:
+            stock = query.filter(
+                BottomStock.bottom_size_mm == bottom_size_mm,
+                sql_func.lower(BottomStock.variety) == variety.lower(),
+            ).with_for_update().first()
+            if stock is None and restore_key:
                 stock = query.filter(sql_func.lower(BottomStock.material_restore_key) == restore_key.lower()).with_for_update().first()
-            else:
-                stock = query.filter(
-                    BottomStock.bottom_size_mm == bottom_size_mm,
-                    sql_func.lower(BottomStock.variety) == variety.lower(),
-                ).with_for_update().first()
             if stock is None:
                 stock = BottomStock(factory_id=factory_id, bottom_size_mm=bottom_size_mm, variety=variety)
                 db.add(stock)
                 increment_bulk_stat(stats, "inserted")
             else:
                 increment_bulk_stat(stats, "updated")
+            transfer_restore_key(
+                db, BottomStock, factory_id=factory_id, column=BottomStock.material_restore_key,
+                restore_key=restore_key, target_id=stock.id,
+            )
             stock.total_rolls = row["total_individual_rolls"]
             stock.material_restore_key = restore_key
             stock.variety = variety
@@ -2081,6 +2128,10 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 fg_debug_info["created_finished_goods_stock_ids"].append(stock.id)
 
             final_stock = sync_finished_goods_to_final_product_stock(db, factory_id, stock, fg_debug_info)
+            transfer_restore_key(
+                db, FinalProductStock, factory_id=factory_id, column=FinalProductStock.product_restore_key,
+                restore_key=restore_key, target_id=final_stock.id,
+            )
             final_stock.product_restore_key = restore_key
             final_stock.loose_packets = initial_loose_packets
             final_stock.current_quantity = initial_stock_boxes
@@ -2089,6 +2140,131 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
         return saved_count
 
     return 0
+
+
+def reconcile_missing_master_rows(
+    db: Session,
+    *,
+    factory_id: int,
+    valid_by_type: dict[str, list[dict]],
+) -> tuple[list[ValidationIssue], int]:
+    issues: list[ValidationIssue] = []
+    archived_count = 0
+
+    uploaded_worker_phones = {
+        normalize_phone_number(str(row["mobile_number"]))[0]
+        for row in valid_by_type.get("worker", [])
+        if row.get("mobile_number")
+    }
+    uploaded_worker_names = {
+        normalized_identity(row.get("name"))
+        for row in valid_by_type.get("worker", [])
+    }
+    for worker in db.query(Worker).filter(Worker.factory_id == factory_id, Worker.is_active.is_(True)).all():
+        if worker.phone in uploaded_worker_phones or normalized_identity(worker.name) in uploaded_worker_names:
+            continue
+        worker.is_active = False
+        archived_count += 1
+
+    uploaded_machine_numbers = {
+        normalized_identity(row.get("machine_number"))
+        for row in valid_by_type.get("machine", [])
+        if row.get("machine_number")
+    }
+    uploaded_machine_names = {
+        normalized_identity(row.get("machine_name"))
+        for row in valid_by_type.get("machine", [])
+    }
+    for machine in db.query(Machine).filter(Machine.factory_id == factory_id, Machine.is_active.is_(True)).all():
+        if (
+            normalized_identity(machine.machine_number) in uploaded_machine_numbers
+            or normalized_identity(machine.name) in uploaded_machine_names
+        ):
+            continue
+        machine.is_active = False
+        archived_count += 1
+
+    kept_specs = [
+        (
+            "Customers",
+            db.query(Customer).filter(Customer.factory_id == factory_id).all(),
+            {
+                normalized_phone(row.get("phone_number") or row.get("contact_number"))
+                or normalized_identity(row.get("name"))
+                for row in valid_by_type.get("customer", [])
+            },
+            lambda item: normalized_phone(item.phone_number) or normalized_identity(item.name),
+        ),
+        (
+            "Cup_Blank",
+            db.query(BlankStock).filter(BlankStock.factory_id == factory_id).all(),
+            {
+                (int(row["size_ml"]), normalized_identity(row.get("variety_design")))
+                for row in valid_by_type.get("blank_stock", [])
+            },
+            lambda item: (int(item.blank_size_ml), normalized_identity(item.variety)),
+        ),
+        (
+            "Bottom_Reel",
+            db.query(BottomStock).filter(BottomStock.factory_id == factory_id).all(),
+            {
+                (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
+                for row in valid_by_type.get("bottom_reel", [])
+            },
+            lambda item: (int(item.bottom_size_mm), normalized_identity(item.variety)),
+        ),
+        (
+            "Box_Stock",
+            db.query(BoxStock).filter(BoxStock.factory_id == factory_id).all(),
+            {
+                normalized_identity(row.get("box_type"))
+                for row in valid_by_type.get("box_stock", [])
+            },
+            lambda item: normalized_identity(item.packaging_size_name),
+        ),
+        (
+            "Plastic_Stock",
+            db.query(PlasticStock).filter(PlasticStock.factory_id == factory_id).all(),
+            {
+                (normalized_identity(row.get("plastic_size_type")), int(row["used_for_cup_size_ml"]))
+                for row in valid_by_type.get("plastic_stock", [])
+            },
+            lambda item: (normalized_identity(item.plastic_size_name), int(item.cup_size_ml)),
+        ),
+        (
+            "Finished_Goods",
+            db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).all(),
+            {
+                (
+                    int(row["product_size_ml"]),
+                    normalized_identity(row.get("variety_design") or "Standard/White"),
+                    normalized_identity(
+                        row.get("packaging_size_name")
+                        or f"{int(row['product_size_ml'])}ML - {row.get('variety_design') or 'Standard/White'}"
+                    ),
+                )
+                for row in valid_by_type.get("finished_goods", [])
+            },
+            lambda item: (
+                int(item.product_size_ml),
+                normalized_identity(item.variety),
+                normalized_identity(item.packaging_size_name),
+            ),
+        ),
+    ]
+    for sheet, existing_rows, uploaded_keys, key_for in kept_specs:
+        kept_count = sum(1 for item in existing_rows if key_for(item) not in uploaded_keys)
+        if kept_count:
+            issues.append(ValidationIssue(
+                row=None,
+                field="not_present_in_upload",
+                error=f"{kept_count} existing record(s): Not present in upload; kept unchanged.",
+                severity=ValidationSeverity.INFO,
+                suggested_correction="Add these records to a future workbook if they should be replaced.",
+                sheet=sheet,
+                action_type="unchanged",
+            ))
+    return issues, archived_count
 
 
 def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
@@ -2241,6 +2417,20 @@ async def bulk_upload_master_onboarding(
                 operation_counts,
                 fg_debug_info=fg_debug_info if sub_tab_type == "finished_goods" else None
             )
+        reconciliation_issues, archived_count = reconcile_missing_master_rows(
+            db,
+            factory_id=int(current_user.factory_id),
+            valid_by_type=valid_by_type,
+        )
+        issues.extend(reconciliation_issues)
+        operation_counts["skipped"] += archived_count
+        operation_counts["unchanged"] += sum(
+            int(issue.error.split(" ", 1)[0])
+            for issue in reconciliation_issues
+        )
+        operation_counts["warnings"] = len([
+            issue for issue in issues if issue.severity == ValidationSeverity.WARNING
+        ])
         db.commit()
         total_rows = sum(inserted_counts.values())
         log_bulk_upload(background_tasks, db, current_user, "master_onboarding", total_rows)
@@ -2284,9 +2474,13 @@ async def bulk_upload_master_onboarding(
         }
 
         return {
-            "message": "Master onboarding bulk upload completed",
+            "message": "Master data replaced / updated successfully",
             "overall_status": overall_status,
             "rows_inserted": total_rows,
+            "created_count": operation_counts["inserted"],
+            "updated_count": operation_counts["updated"],
+            "unchanged_count": operation_counts["unchanged"],
+            "archived_skipped_count": operation_counts["skipped"],
             "inserted_counts": inserted_counts,
             "operation_counts": operation_counts,
             "validation_report": report.to_dict(),
@@ -2301,15 +2495,23 @@ async def bulk_upload_master_onboarding(
         raise
     except IntegrityError as exc:
         db.rollback()
-        db_issues = enrich_failed_rows([{"sheet": "Database", "row": None, "error": str(exc.orig)}])
+        db_issues = enrich_failed_rows([{
+            "sheet": "Database",
+            "row": None,
+            "error": "A conflicting master-data identity could not be resolved automatically.",
+        }])
         report = make_report(db_issues, successful_rows=0, total_rows_attempted=total_attempted)
         raise HTTPException(
             status_code=409,
             detail={
-                "message": "Database integrity error. A duplicate or conflicting record may already exist. Review the validation report and upload again.",
+                "message": "A master-data conflict could not be resolved automatically. Review the workbook for ambiguous identities.",
                 "overall_status": "failed",
                 "validation_report": report.to_dict(),
-                "failed_rows": [{"sheet": "Database", "row": None, "error": str(exc.orig)}],
+                "failed_rows": [{
+                    "sheet": "Database",
+                    "row": None,
+                    "error": "A conflicting master-data identity could not be resolved automatically.",
+                }],
             },
         ) from exc
     except Exception as exc:

@@ -114,6 +114,9 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    if (!window.confirm(
+      "This will update existing master data for this factory. Existing matching customers, workers, machines, materials, and products will be replaced with this sheet's values."
+    )) return;
 
     setIsBusy(true);
     setIssues([]);
@@ -122,7 +125,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       const response = await uploadMasterOnboardingSheet(file);
       const nextSummary = buildSummary(response.data);
       setSummary(nextSummary);
-      onToast?.(`Master onboarding upload completed: ${nextSummary.rows} rows processed.`);
+      onToast?.(`Master data replace/update completed: ${nextSummary.rows} rows processed.`);
       await onUploaded?.();
     } catch (error) {
       setIssues(extractIssues(error));
@@ -135,7 +138,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
     <div className="mt-6 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm font-semibold text-zinc-900">Master Onboarding Bulk Upload</p>
+          <p className="text-sm font-semibold text-zinc-900">Replace / Update Master Data</p>
           <p className="mt-1 text-xs text-zinc-500">Enter business details only. Munshi AI generates technical IDs and validates machine, material, product, and packaging mappings.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -155,7 +158,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
             disabled={isBusy}
           >
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
-            Upload Completed Master Sheet
+            Replace / Update Master Data
           </button>
         </div>
       </div>
