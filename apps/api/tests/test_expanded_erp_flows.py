@@ -137,8 +137,12 @@ def test_factory_isolation_flow(monkeypatch):
         # Seed stocks for Factory 1 only
         db.add(FinalProductStock(id=10, factory_id=1, product_size_ml=250, variety="Standard/White", packaging_size_name="Box-1", total_boxes=10, current_quantity=10, packets_per_box_limit=10))
         db.add(BoxStock(factory_id=1, packaging_size_name="Box-1", total_boxes=20, quantity=20))
+        db.add(BlankStock(factory_id=1, blank_size_ml=250, variety="Standard/White", linked_bottom_size_mm=52, total_boras=0, total_qty_kg=0))
+        db.add(BottomStock(factory_id=1, bottom_size_mm=52, variety="Standard/White", total_rolls=0, total_weight_kg=0, total_qty_kg=0))
         # Seed stocks for Factory 2 only
         db.add(FinalProductStock(id=20, factory_id=2, product_size_ml=250, variety="Standard/White", packaging_size_name="Box-1", total_boxes=5, current_quantity=5, packets_per_box_limit=10))
+        db.add(BlankStock(factory_id=2, blank_size_ml=250, variety="Standard/White", linked_bottom_size_mm=52, total_boras=0, total_qty_kg=0))
+        db.add(BottomStock(factory_id=2, bottom_size_mm=52, variety="Standard/White", total_rolls=0, total_weight_kg=0, total_qty_kg=0))
         
         # Seed Machine for Factory 1 and 2
         db.add(Machine(id=1, factory_id=1, name="M1", mould_size_ml=250, cup_size_ml=250, bottom_size_mm=52))
@@ -192,7 +196,7 @@ def test_factory_isolation_flow(monkeypatch):
         "bottom_used_kg": 0,
     }
     prod_res_f1 = client.post("/api/production/daily", json=prod_payload_f1)
-    assert prod_res_f1.status_code == 201
+    assert prod_res_f1.status_code == 201, prod_res_f1.text
 
     # F2 queries production logs (should not see F1's log)
     current_active_user = user_f2
