@@ -1138,7 +1138,7 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
 }
 
 export function createDailyProductionBatch(payload: ProductionBatchCreate) {
-  return api.post("/production/daily-batch", payload);
+  return api.post("/api/production/daily-batch", payload);
 }
 
 export function deleteInvoice(invoiceId: number, confirmation: string, action?: string) {
@@ -2652,5 +2652,31 @@ export function generateInvoiceFromSale(
     `/invoices/from-sale/${saleId}`,
     payload
   );
+}
+
+export type ShiftWastageCreate = {
+  date: string;
+  shift: string;
+  wastage_kg: number;
+  note?: string | null;
+};
+
+export type ShiftWastageResponse = {
+  id: number;
+  factory_id: number;
+  date: string;
+  shift: string;
+  wastage_kg: number;
+  note?: string | null;
+};
+
+export function saveShiftWastage(payload: ShiftWastageCreate) {
+  return api.post<ShiftWastageResponse>("/api/production/wastage", payload);
+}
+
+export function getShiftWastage(date: string, shift: string) {
+  return api.get<ShiftWastageResponse | null>("/api/production/wastage", {
+    params: { date, shift }
+  });
 }
 

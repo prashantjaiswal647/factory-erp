@@ -30,8 +30,9 @@ from models import (
     MaterialYield,
     ProductionBatch,
     ProductionBatchWorkerLine,
+    ShiftWastage,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.activity_logger import log_activity
@@ -1846,3 +1847,75 @@ def get_daily_sequence_logs_v1(
 
     return combined
 
+
+class ShiftWastageCreate(BaseModel):
+    date: date_cls
+    shift: str = Field(..., min_length=1, max_length=50)
+    wastage_kg: Decimal = Field(..., ge=0)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ShiftWastageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    factory_id: int
+    date: date_cls
+    shift: str
+    wastage_kg: float
+    note: Optional[str] = None
+
+
+@router.post("/production/wastage", response_model=ShiftWastageResponse, status_code=status.HTTP_201_CREATED)
+def save_shift_wastage(
+    payload: ShiftWastageCreate,
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = str(current_user.factory_id)
+    existing = (
+        db.query(ShiftWastage)
+        .filter(
+            ShiftWastage.factory_id == factory_id,
+            ShiftWastage.date == payload.date,
+            ShiftWastage.shift == payload.shift.strip()
+        )
+        .first()
+    )
+    if existing:
+        existing.wastage_kg = payload.wastage_kg
+        existing.note = payload.note
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_row = ShiftWastage(
+        factory_id=factory_id,
+        date=payload.date,
+        shift=payload.shift.strip(),
+        wastage_kg=payload.wastage_kg,
+        note=payload.note
+    )
+    db.add(new_row)
+    db.commit()
+    db.refresh(new_row)
+    return new_row
+
+
+@router.get("/production/wastage", response_model=Optional[ShiftWastageResponse])
+def get_shift_wastage(
+    date: date_cls = Query(...),
+    shift: str = Query(...),
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = str(current_user.factory_id)
+    row = (
+        db.query(ShiftWastage)
+        .filter(
+            ShiftWastage.factory_id == factory_id,
+            ShiftWastage.date == date,
+            ShiftWastage.shift == shift.strip()
+        )
+        .first()
+    )
+    return row

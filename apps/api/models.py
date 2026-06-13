@@ -1575,6 +1575,21 @@ class WastageLog(TenantMixin, Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 
+class ShiftWastage(TenantMixin, Base):
+    __tablename__ = "shift_wastages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    shift = Column(String(50), nullable=False, index=True)
+    wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "date", "shift", name="uq_shift_wastage_factory_date_shift"),
+    )
+
+
 
 # ==================== COMPATIBILITY CONSOLIDATION LISTENERS ====================
 from sqlalchemy import event, inspect

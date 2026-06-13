@@ -3,7 +3,7 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  createDailyProductionBatch,
+  createDailyProduction,
   createFinishedGoodVariant,
   getDashboardMachines,
   getDashboardWorkers,
@@ -11,6 +11,9 @@ import {
   getDailyProductionHistory,
   getProductionWorkerSummary,
   rejectDailyProduction,
+  getInventory,
+  saveShiftWastage,
+  getShiftWastage,
 } from "../lib/api";
 import type {
   DailyProductionCreate,
@@ -94,16 +97,11 @@ export default function ProductionPage() {
   const [expandedWorker, setExpandedWorker] = useState<number | null>(null);
   const [rejecting, setRejecting] = useState<ProductionHistoryEntry | null>(null);
   const [rejectReason, setRejectReason] = useState("");
-  const [workerRows, setWorkerRows] = useState([{
-    worker_id: 0,
-    boxes_made: 0,
-    loose_packets_made: 0,
-    blank_used_bora: 0,
-    bottom_used_roll: 0,
-    note: "",
-  }]);
   const [shiftWastageKg, setShiftWastageKg] = useState(0);
   const [wastageNote, setWastageNote] = useState("");
+  const [wastageDate, setWastageDate] = useState(todayDate());
+  const [wastageShift, setWastageShift] = useState<"Day" | "Night" | "Custom">("Day");
+  const [isSavingWastage, setIsSavingWastage] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -116,6 +114,42 @@ export default function ProductionPage() {
     void loadOptions();
     void loadProductionVisibility();
   }, []);
+
+  useEffect(() => {
+    async function loadShiftWastage() {
+      try {
+        const res = await getShiftWastage(dateOnly(wastageDate), wastageShift);
+        if (res.data) {
+          setShiftWastageKg(res.data.wastage_kg);
+          setWastageNote(res.data.note || "");
+        } else {
+          setShiftWastageKg(0);
+          setWastageNote("");
+        }
+      } catch (err) {
+        console.error("Failed to load shift wastage:", err);
+      }
+    }
+    void loadShiftWastage();
+  }, [wastageDate, wastageShift]);
+
+  async function submitWastage() {
+    setIsSavingWastage(true);
+    try {
+      await saveShiftWastage({
+        date: dateOnly(wastageDate),
+        shift: wastageShift,
+        wastage_kg: Number(shiftWastageKg || 0),
+        note: wastageNote.trim() || null,
+      });
+      setToast("Shift wastage saved successfully.");
+    } catch (err) {
+      console.error("Failed to save shift wastage:", err);
+      setError(axios.isAxiosError(err) ? String(err.response?.data?.detail || err.message) : "Failed to save wastage");
+    } finally {
+      setIsSavingWastage(false);
+    }
+  }
 
   const selectedProduct = useMemo(
     () => finalStockOptions.find((item) => item.id === form.product_id),
@@ -202,47 +236,38 @@ export default function ProductionPage() {
       setError("Inventory mapping incomplete for this SKU.");
       return;
     }
-    if (!workerRows.length || workerRows.some((row) => !row.worker_id)) {
-      setError("Select a worker for every production row.");
+    if (!form.worker_id) {
+      setError("Select a worker.");
       return;
     }
     setIsSaving(true);
     setError("");
     try {
       const normalizedDate = dateOnly(form.date);
-      const machineId = numberOrDefault(form.machine_id);
-      const payload: ProductionBatchCreate = {
+      const payload: DailyProductionCreate = {
         date: normalizedDate,
-        shift: String(form.shift || "Day"),
-        machine_id: machineId,
-        finished_good_id: numberOrDefault(form.product_id),
+        shift: String(form.shift || "Day") as "Day" | "Night",
+        machine_id: numberOrDefault(form.machine_id),
+        product_id: numberOrDefault(form.product_id),
         product_size_ml: numberOrDefault(form.product_size_ml),
-        variety_design: String(form.variety || "Standard/White").trim(),
+        variety: String(form.variety || "Standard/White").trim(),
         packaging_size_name: String(form.packaging_size_name || form.packaging_size || "").trim(),
-        carton_type: String(selectedProduct.carton_type || ""),
-        pcs_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
-        packets_per_box: numberOrDefault(form.packets_per_box_limit, 1) || 1,
-        worker_rows: workerRows.map((row) => ({
-          worker_id: row.worker_id,
-          boxes_made: numberOrDefault(row.boxes_made),
-          loose_packets_made: numberOrDefault(row.loose_packets_made),
-          blank_used_bora: numberOrDefault(row.blank_used_bora),
-          bottom_used_roll: numberOrDefault(row.bottom_used_roll),
-          note: row.note.trim() || null,
-        })),
-        shift_wastage_kg: numberOrDefault(shiftWastageKg),
-        wastage_note: wastageNote.trim() || null,
+        pieces_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
+        packets_per_box_limit: numberOrDefault(form.packets_per_box_limit, 1) || 1,
+        worker_id: numberOrDefault(form.worker_id),
+        total_boxes_made: numberOrDefault(form.total_boxes_made),
+        loose_packets_made: numberOrDefault(form.loose_packets_made),
+        blank_used_bori: numberOrDefault(form.blank_used_bori),
+        bottom_used_rolls: numberOrDefault(form.bottom_used_rolls),
+        wastage_kg: 0,
       };
-      const response = await createDailyProductionBatch(payload);
-      setToast("Shift production batch saved successfully.");
+      const response = await createDailyProduction(payload);
+      setToast("Production entry saved successfully.");
       window.dispatchEvent(new CustomEvent("production:daily-saved", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("attendance:updated", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("inventory:updated", { detail: response.data }));
       void loadOptions();
       void loadProductionVisibility();
-      setWorkerRows([{ worker_id: workers[0]?.id || 0, boxes_made: 0, loose_packets_made: 0, blank_used_bora: 0, bottom_used_roll: 0, note: "" }]);
-      setShiftWastageKg(0);
-      setWastageNote("");
       setForm({
         ...initialForm,
         worker_id: workers[0]?.id || 0,
@@ -463,150 +488,158 @@ export default function ProductionPage() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
-        <div className="mb-5 flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
-            <Factory className="h-5 w-5" />
-          </span>
-          <h2 className="text-lg font-semibold text-zinc-950">Daily Production</h2>
-        </div>
+      <div className="grid gap-5 md:grid-cols-3">
+        {/* Main Production Entry Card */}
+        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm md:col-span-2">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700">
+              <Factory className="h-5 w-5" />
+            </span>
+            <h2 className="text-lg font-semibold text-zinc-950">Daily Production</h2>
+          </div>
 
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Shift Header</h3>
-        <div className="grid gap-4 md:grid-cols-3">
-          <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
-          <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" | "Custom" })} options={["Day", "Night", "Custom"]} />
-          <SelectField
-            label="Machine"
-            value={form.machine_id}
-            onChange={(machine_id) => void selectMachine(machine_id)}
-          >
-            <option value={0}>Select Machine</option>
-            {machines.map((machine) => (
-              <option key={machine.id} value={machine.id}>
-                {machine.machine_number || machine.id} - {machine.machine_name || machine.machine_type} - {machine.mould_size_ml || "No mould"}{machine.mould_size_ml ? " ml" : ""}
-              </option>
-            ))}
-          </SelectField>
-          <ProductSelectField
-            label="Product"
-            value={form.product_id || 0}
-            options={finalStockOptions}
-            disabled={!form.machine_id}
-            onChange={(product_id) => {
-              const selected = finalStockOptions.find((item) => item.id === product_id);
-              const firstPackaging = finalStockOptions.find(
-                (item) =>
-                  item.product_size_ml === selected?.product_size_ml
-                  && item.variety.trim().toLowerCase() === selected?.variety.trim().toLowerCase(),
-              );
-              setForm({
-                ...form,
-                product_id: firstPackaging?.id || product_id,
-                product_size_ml: selected?.product_size_ml || form.product_size_ml,
-                variety: selected?.variety || form.variety,
-                packaging_size: firstPackaging?.packaging_size || firstPackaging?.packaging_size_name || "",
-                packaging_size_name: firstPackaging?.packaging_size_name || "",
-                pieces_per_packet: firstPackaging?.pieces_per_packet || form.pieces_per_packet,
-                packets_per_box_limit: firstPackaging?.packets_per_box || firstPackaging?.packets_per_box_limit || form.packets_per_box_limit
-              });
-            }}
-          />
-          <p className="self-end pb-2 text-xs text-zinc-500">Only products compatible with selected machine are shown.</p>
-          <div className="flex flex-col justify-end">
-            <span className="text-sm font-medium text-zinc-700">Need a new variant?</span>
-            <button
-              className="mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-100"
-              type="button"
-              disabled={!form.machine_id}
-              onClick={() => {
-                setNewVariantForm({
-                  ...emptyNewVariant,
-                  product_size_ml: form.product_size_ml ? String(form.product_size_ml) : "",
-                  variety: form.variety || "Plain White",
-                  packaging_size_name: form.packaging_size_name || "",
-                  pieces_per_packet: form.pieces_per_packet ? String(form.pieces_per_packet) : "100",
-                  packets_per_box_limit: form.packets_per_box_limit ? String(form.packets_per_box_limit) : "10",
-                });
-                setVariantError("");
-                setVariantDuplicate(null);
-                setShowNewVariantModal(true);
-              }}
+          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Production Form</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
+            <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" })} options={["Day", "Night"]} />
+            <SelectField
+              label="Machine"
+              value={form.machine_id}
+              onChange={(machine_id) => void selectMachine(machine_id)}
             >
-              <Plus className="h-4 w-4" />
-              + Add New Packing / Finished Good Variant
+              <option value={0}>Select Machine</option>
+              {machines.map((machine) => (
+                <option key={machine.id} value={machine.id}>
+                  {machine.machine_number || machine.id} - {machine.machine_name || machine.machine_type} - {machine.mould_size_ml || "No mould"}{machine.mould_size_ml ? " ml" : ""}
+                </option>
+              ))}
+            </SelectField>
+            <ProductSelectField
+              label="Product"
+              value={form.product_id || 0}
+              options={finalStockOptions}
+              disabled={!form.machine_id}
+              onChange={(product_id) => {
+                const selected = finalStockOptions.find((item) => item.id === product_id);
+                const firstPackaging = finalStockOptions.find(
+                  (item) =>
+                    item.product_size_ml === selected?.product_size_ml
+                    && item.variety.trim().toLowerCase() === selected?.variety.trim().toLowerCase(),
+                );
+                setForm({
+                  ...form,
+                  product_id: firstPackaging?.id || product_id,
+                  product_size_ml: selected?.product_size_ml || form.product_size_ml,
+                  variety: selected?.variety || form.variety,
+                  packaging_size: firstPackaging?.packaging_size || firstPackaging?.packaging_size_name || "",
+                  packaging_size_name: firstPackaging?.packaging_size_name || "",
+                  pieces_per_packet: firstPackaging?.pieces_per_packet || form.pieces_per_packet,
+                  packets_per_box_limit: firstPackaging?.packets_per_box || firstPackaging?.packets_per_box_limit || form.packets_per_box_limit
+                });
+              }}
+            />
+            <VariationSelectField
+              label="Packaging Size Variation"
+              value={form.product_id || 0}
+              options={packagingOptions}
+              disabled={!selectedProduct}
+              onChange={(product_id) => {
+                const selected = finalStockOptions.find((item) => item.id === product_id);
+                setForm({
+                  ...form,
+                  product_id,
+                  product_size_ml: selected?.product_size_ml || form.product_size_ml,
+                  variety: selected?.variety || form.variety,
+                  packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
+                  packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
+                  pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
+                  packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
+                });
+              }}
+            />
+            <div className="self-end rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+              Carton: <strong>{selectedProduct?.carton_type || "Not configured"}</strong>
+            </div>
+
+            <SelectField label="Worker Name" value={form.worker_id} onChange={(worker_id) => setForm({ ...form, worker_id })}>
+              <option value={0}>Select Worker</option>
+              {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+            </SelectField>
+
+            <NumberField label="Finished Boxes Made" value={form.total_boxes_made} onChange={(total_boxes_made) => setForm({ ...form, total_boxes_made })} />
+            <NumberField label="Loose Packets Made" value={form.loose_packets_made} onChange={(loose_packets_made) => setForm({ ...form, loose_packets_made })} />
+            <NumberField label="Blank Used / Bora Used" value={form.blank_used_bori} onChange={(blank_used_bori) => setForm({ ...form, blank_used_bori })} />
+            <NumberField label="Bottom Used / Roll Used" value={form.bottom_used_rolls} onChange={(bottom_used_rolls) => setForm({ ...form, bottom_used_rolls })} />
+
+            <div className="flex flex-col justify-end">
+              <span className="text-sm font-medium text-zinc-700">Need a new variant?</span>
+              <button
+                className="mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-100"
+                type="button"
+                disabled={!form.machine_id}
+                onClick={() => {
+                  setNewVariantForm({
+                    ...emptyNewVariant,
+                    product_size_ml: form.product_size_ml ? String(form.product_size_ml) : "",
+                    variety: form.variety || "Plain White",
+                    packaging_size_name: form.packaging_size_name || "",
+                    pieces_per_packet: form.pieces_per_packet ? String(form.pieces_per_packet) : "100",
+                    packets_per_box_limit: form.packets_per_box_limit ? String(form.packets_per_box_limit) : "10",
+                  });
+                  setVariantError("");
+                  setVariantDuplicate(null);
+                  setShowNewVariantModal(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add Variant
+              </button>
+            </div>
+          </div>
+
+          <BatchPreview
+            boxes={numberOrDefault(form.total_boxes_made)}
+            loose={numberOrDefault(form.loose_packets_made)}
+            packetsPerBox={numberOrDefault(form.packets_per_box_limit, 1)}
+            previousLoose={numberOrDefault(selectedProduct?.loose_packets)}
+            cartonType={selectedProduct?.carton_type || "Carton"}
+            blank={numberOrDefault(form.blank_used_bori)}
+            bottom={numberOrDefault(form.bottom_used_rolls)}
+          />
+
+          {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+
+          <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" data-test-id="save-production-button" disabled={isSaving} type="button" onClick={submit}>
+            <Check className="h-4 w-4" />
+            {isSaving ? "Saving..." : "Save Production"}
+          </button>
+        </section>
+
+        {/* Shift Wastage Entry Card */}
+        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm self-start">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-md bg-amber-50 text-amber-700">
+              <AlertTriangle className="h-5 w-5" />
+            </span>
+            <h2 className="text-lg font-semibold text-zinc-950">Shift Wastage Entry</h2>
+          </div>
+
+          <div className="space-y-4">
+            <Field label="Date" type="date" value={wastageDate} onChange={(date) => setWastageDate(date)} />
+            <StringSelectField label="Shift" value={wastageShift} onChange={(shift) => setWastageShift(shift as "Day" | "Night" | "Custom")} options={["Day", "Night", "Custom"]} />
+            <NumberField label="Total Shift Wastage (KG)" value={shiftWastageKg} onChange={setShiftWastageKg} />
+            <label className="block text-sm">
+              <span className="font-medium text-zinc-700">Wastage Note / Reason</span>
+              <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={wastageNote} onChange={(event) => setWastageNote(event.target.value)} />
+            </label>
+
+            <button className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-md bg-amber-600 px-4 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-zinc-300" disabled={isSavingWastage} type="button" onClick={submitWastage}>
+              <Check className="h-4 w-4" />
+              {isSavingWastage ? "Saving..." : "Save Wastage"}
             </button>
           </div>
-          <VariationSelectField
-            label="Packaging Size Variation"
-            value={form.product_id || 0}
-            options={packagingOptions}
-            disabled={!selectedProduct}
-            onChange={(product_id) => {
-              const selected = finalStockOptions.find((item) => item.id === product_id);
-              setForm({
-                ...form,
-                product_id,
-                product_size_ml: selected?.product_size_ml || form.product_size_ml,
-                variety: selected?.variety || form.variety,
-                packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
-                packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
-                pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
-                packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
-              });
-            }}
-          />
-          <div className="self-end rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-            Carton: <strong>{selectedProduct?.carton_type || "Not configured"}</strong>
-          </div>
-          <NumberField label="Pieces per Packet" value={form.pieces_per_packet} onChange={(pieces_per_packet) => setForm({ ...form, pieces_per_packet })} />
-          <NumberField label="Packets per Box" value={form.packets_per_box_limit} onChange={(packets_per_box_limit) => setForm({ ...form, packets_per_box_limit })} />
-        </div>
-
-        <div className="mt-6 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Worker Production Rows</h3>
-            <button className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" type="button" onClick={() => setWorkerRows((rows) => [...rows, { worker_id: 0, boxes_made: 0, loose_packets_made: 0, blank_used_bora: 0, bottom_used_roll: 0, note: "" }])}>Add Worker Row</button>
-          </div>
-          <div className="mt-3 space-y-3">
-            {workerRows.map((row, index) => (
-              <div className="grid gap-3 rounded-md border bg-white p-3 md:grid-cols-6" key={index}>
-                <SelectField label="Worker" value={row.worker_id} onChange={(worker_id) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, worker_id } : item))}>
-                  <option value={0}>Select Worker</option>
-                  {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
-                </SelectField>
-                <NumberField label="Boxes Made" value={row.boxes_made} onChange={(boxes_made) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, boxes_made } : item))} />
-                <NumberField label="Loose Packets" value={row.loose_packets_made} onChange={(loose_packets_made) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, loose_packets_made } : item))} />
-                <NumberField label="Blank Used (Bora)" value={row.blank_used_bora} onChange={(blank_used_bora) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, blank_used_bora } : item))} />
-                <NumberField label="Bottom Used (Roll)" value={row.bottom_used_roll} onChange={(bottom_used_roll) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, bottom_used_roll } : item))} />
-                <div className="flex items-end gap-2">
-                  <input className="h-10 min-w-0 flex-1 rounded-md border px-2 text-sm" placeholder="Optional note" value={row.note} onChange={(event) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} />
-                  <button className="h-10 rounded-md border px-3 text-red-700 disabled:text-zinc-300" disabled={workerRows.length === 1} type="button" onClick={() => setWorkerRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}>Remove</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-700" />
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-800">Daily Wastage</h3>
-          </div>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <NumberField label="Total Shift Wastage (KG)" value={shiftWastageKg} onChange={setShiftWastageKg} />
-            <label className="text-sm font-medium text-zinc-700">Wastage Note / Reason<input className="mt-1 h-10 w-full rounded-md border bg-white px-3" value={wastageNote} onChange={(event) => setWastageNote(event.target.value)} /></label>
-          </div>
-        </div>
-
-        <BatchPreview workerRows={workerRows} packetsPerBox={numberOrDefault(form.packets_per_box_limit, 1)} previousLoose={numberOrDefault(selectedProduct?.loose_packets)} cartonType={selectedProduct?.carton_type || "Carton"} wastageKg={shiftWastageKg} />
-
-        {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
-
-        <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" data-test-id="save-production-button" disabled={isSaving} type="button" onClick={submit}>
-          <Check className="h-4 w-4" />
-          {isSaving ? "Saving..." : "Save Production"}
-        </button>
-      </section>
+        </section>
+      </div>
 
       {showNewVariantModal ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 px-4" role="dialog" aria-modal="true" aria-label="Add new finished good variant">
@@ -841,24 +874,24 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 }
 
 function BatchPreview({
-  workerRows,
+  boxes,
+  loose,
   packetsPerBox,
   previousLoose,
   cartonType,
-  wastageKg,
+  blank,
+  bottom,
 }: {
-  workerRows: Array<{ boxes_made: number; loose_packets_made: number; blank_used_bora: number; bottom_used_roll: number }>;
+  boxes: number;
+  loose: number;
   packetsPerBox: number;
   previousLoose: number;
   cartonType: string;
-  wastageKg: number;
+  blank: number;
+  bottom: number;
 }) {
-  const boxes = workerRows.reduce((total, row) => total + numberOrDefault(row.boxes_made), 0);
-  const loose = workerRows.reduce((total, row) => total + numberOrDefault(row.loose_packets_made), 0);
   const converted = Math.floor((previousLoose + loose) / Math.max(packetsPerBox, 1)) - Math.floor(previousLoose / Math.max(packetsPerBox, 1));
   const remaining = (previousLoose + loose) % Math.max(packetsPerBox, 1);
-  const blank = workerRows.reduce((total, row) => total + numberOrDefault(row.blank_used_bora), 0);
-  const bottom = workerRows.reduce((total, row) => total + numberOrDefault(row.bottom_used_roll), 0);
   return (
     <div className="mt-6 rounded-lg border border-brand-200 bg-brand-50 p-4">
       <h3 className="text-sm font-semibold uppercase tracking-wide text-brand-800">Preview Before Save</h3>
@@ -871,7 +904,6 @@ function BatchPreview({
         <p>{cartonType} stock to deduct: <strong>{boxes + converted}</strong></p>
         <p>Blank to deduct: <strong>{blank} bora</strong></p>
         <p>Bottom to deduct: <strong>{bottom} rolls</strong></p>
-        <p>Shift wastage: <strong>{wastageKg} kg</strong></p>
       </div>
     </div>
   );
