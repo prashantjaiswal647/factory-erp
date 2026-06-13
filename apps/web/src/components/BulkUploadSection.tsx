@@ -98,7 +98,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       const blobUrl = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = "master_onboarding_bulk_upload.xlsx";
+      link.download = "Munshi_AI_Factory_Owner_Onboarding_Template.xlsx";
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -136,7 +136,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm font-semibold text-zinc-900">Master Onboarding Bulk Upload</p>
-          <p className="mt-1 text-xs text-zinc-500">One workbook covers Factory Profile, Workers, Customers, Machines, Raw Materials, and Packaging Materials.</p>
+          <p className="mt-1 text-xs text-zinc-500">Enter business details only. Munshi AI generates technical IDs and validates machine, material, product, and packaging mappings.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button

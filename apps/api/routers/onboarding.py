@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -103,6 +104,50 @@ BULK_MASTER_SHEETS = {
     "Finished Goods": "finished_goods",
 }
 
+OWNER_FRIENDLY_SHEETS = {
+    "Factory_Profile": "company_profile",
+    "Customers": "customer",
+    "Workers": "worker",
+    "Machines": "machine",
+    "Cup_Blank": "blank_stock",
+    "Bottom_Reel": "bottom_reel",
+    "Box_Stock": "box_stock",
+    "Plastic_Stock": "plastic_stock",
+    "Finished_Goods": "finished_goods",
+    "Costing_Optional": "costing_optional",
+}
+
+OWNER_HEADER_ALIASES = {
+    "customer": {
+        "customer_phone": "phone_number",
+        "mobile_number": "phone_number",
+        "customer_firm_name": "firm_name",
+        "opening_outstanding": "previous_due",
+    },
+    "worker": {"worker_phone": "mobile_number", "phone_number": "mobile_number"},
+    "machine": {"size_ml": "mould_size_ml", "machine_speed": "default_operating_speed"},
+    "blank_stock": {
+        "cup_size_ml": "size_ml",
+        "product_size_ml": "size_ml",
+        "carton_type": "material_name",
+    },
+    "bottom_reel": {"linked_bottom_size_mm": "bottom_size_mm"},
+    "box_stock": {
+        "carton_type": "box_type",
+        "packaging_size_name": "box_type",
+        "quantity": "box_quantity_pieces",
+    },
+    "plastic_stock": {
+        "cup_size_ml": "used_for_cup_size_ml",
+        "product_size_ml": "used_for_cup_size_ml",
+    },
+    "finished_goods": {
+        "cup_size_ml": "product_size_ml",
+        "carton_type": "packaging_size_name",
+        "box_type": "packaging_size_name",
+    },
+}
+
 RAW_MATERIAL_SECTIONS = {
     "blank_stock": {"label_row": 1, "header_row": 2, "data_start": 3, "data_end": 15, "title": "SECTION A: CUP BLANK MATERIAL", "marker": "CUP BLANK"},
     "bottom_reel": {"label_row": 17, "header_row": 18, "data_start": 19, "data_end": 35, "title": "SECTION B: BOTTOM REEL MATERIAL", "marker": "BOTTOM REEL"},
@@ -111,6 +156,19 @@ RAW_MATERIAL_SECTIONS = {
 }
 
 MASTER_ONBOARDING_FILENAME = "master_onboarding_bulk_upload.xlsx"
+OWNER_ONBOARDING_FILENAME = "Munshi_AI_Factory_Owner_Onboarding_Template.xlsx"
+OWNER_TEMPLATE_COLUMNS = {
+    "Factory_Profile": ["Factory Name", "GST Number", "Factory Address", "Invoice Prefix"],
+    "Customers": ["Customer Name", "Phone", "Firm Name", "Place", "Address", "Opening Outstanding"],
+    "Workers": ["Worker Name", "Mobile", "Daily Wages", "Duty Hours", "Shift Timing", "Shift Type"],
+    "Machines": ["Machine Number", "Machine Name", "Machine Type", "Machine Size ML", "Bottom Size MM"],
+    "Cup_Blank": ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG", "Total Boras Sacks"],
+    "Bottom_Reel": ["Bottom Size MM", "Design", "Total Individual Rolls", "Total Weight KG", "Bottom Price Per KG"],
+    "Box_Stock": ["Carton Type", "Carton Quantity", "Price Per Box Rs"],
+    "Plastic_Stock": ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
+    "Finished_Goods": ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes", "Opening Loose Packets"],
+    "Costing_Optional": ["Paper Price Per KG", "Bottom Price Per KG", "Plastic Price Per KG", "Carton Price"],
+}
 TEXT_BULK_COLUMNS = {
     "row_type",
     "factory_name",
@@ -157,6 +215,33 @@ HEADER_ALIASES = {
     "quantity of total bora": "total_boras_sacks",
     "total_plastic_kg": "total_plastic_kg_automatic_calculation",
     "total_plastic_kg=": "total_plastic_kg_automatic_calculation",
+    "factory_name": "factory_name",
+    "factory_address": "factory_address",
+    "gst_number": "gstin",
+    "worker_name": "name",
+    "worker_mobile": "mobile_number",
+    "mobile": "mobile_number",
+    "machine_size_ml": "mould_size_ml",
+    "cup_size_ml": "product_size_ml",
+    "cup_size": "product_size_ml",
+    "cup_size_ml_": "product_size_ml",
+    "design": "variety_design",
+    "variety": "variety_design",
+    "packing_name": "packaging_size_name",
+    "packaging_name": "packaging_size_name",
+    "carton_type": "packaging_size_name",
+    "carton_name": "packaging_size_name",
+    "pieces_per_packet": "pcs_per_packet",
+    "packets_per_carton": "packets_per_box",
+    "carton_quantity": "box_quantity_pieces",
+    "bottom_size": "bottom_size_mm",
+    "linked_bottom_size": "linked_bottom_size_mm",
+    "cup_blank_size_ml": "size_ml",
+    "blank_size_ml": "size_ml",
+    "stock_bora": "total_boras_sacks",
+    "stock_rolls": "total_individual_rolls",
+    "opening_boxes": "initial_stock_boxes",
+    "opening_loose_packets": "initial_loose_packets",
 }
 
 OPTIONAL_BULK_HEADERS = {
@@ -415,6 +500,48 @@ def normalized_identity(value) -> str:
 def normalized_phone(value) -> str:
     digits = re.sub(r"\D", "", bulk_str(value))
     return digits[-10:] if len(digits) >= 10 else digits
+
+
+def generated_restore_key(prefix: str, *identity_parts) -> str:
+    identity = "|".join(normalized_identity(part) for part in identity_parts)
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}-{digest}"
+
+
+def generate_owner_restore_keys(valid_by_type: dict[str, list[dict]]) -> None:
+    for row in valid_by_type.get("customer", []):
+        if not row.get("customer_restore_key"):
+            phone = normalized_phone(row.get("phone_number") or row.get("contact_number"))
+            row["customer_restore_key"] = generated_restore_key(
+                "CUS", phone or row.get("name"), row.get("firm_name"), row.get("place")
+            )
+    for row in valid_by_type.get("worker", []):
+        if not row.get("worker_restore_key"):
+            row["worker_restore_key"] = generated_restore_key(
+                "WRK", normalized_phone(row.get("mobile_number")) or row.get("name")
+            )
+    for row in valid_by_type.get("machine", []):
+        if not row.get("machine_restore_key"):
+            row["machine_restore_key"] = generated_restore_key(
+                "MAC", row.get("machine_number") or row.get("machine_name"), row.get("mould_size_ml")
+            )
+    for sub_tab_type, prefix, size_field in (
+        ("blank_stock", "MAT-BL", "size_ml"),
+        ("bottom_reel", "MAT-BT", "bottom_size_mm"),
+    ):
+        for row in valid_by_type.get(sub_tab_type, []):
+            if not row.get("material_restore_key"):
+                row["material_restore_key"] = generated_restore_key(
+                    prefix, sub_tab_type, row.get(size_field), row.get("variety_design")
+                )
+    for row in valid_by_type.get("finished_goods", []):
+        if not row.get("product_restore_key"):
+            row["product_restore_key"] = generated_restore_key(
+                "SKU",
+                row.get("product_size_ml"),
+                row.get("variety_design"),
+                row.get("packaging_size_name"),
+            )
 
 
 def normalize_bulk_cell(key: str, value):
@@ -844,6 +971,97 @@ def read_raw_material_section(
     )
 
 
+def read_owner_friendly_sheet(
+    raw_frame,
+    sub_tab_type: str,
+    sheet_name: str,
+    compatibility_warnings: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
+    header_index = None
+    headers: list[str] = []
+    for index, raw_row in raw_frame.head(10).iterrows():
+        candidate = []
+        for value in raw_row.tolist():
+            raw_header = canonical_bulk_header(value)
+            candidate.append(OWNER_HEADER_ALIASES.get(sub_tab_type, {}).get(raw_header, raw_header))
+        recognized = [header for header in candidate if header in expected]
+        if len(recognized) >= 1:
+            header_index = int(index)
+            headers = candidate
+            break
+    if header_index is None:
+        return [], [{"sheet": sheet_name, "row": 1, "error": "Could not find a recognized header row"}]
+
+    frame = raw_frame.iloc[header_index + 1:].copy()
+    frame.columns = headers
+    frame = frame.loc[:, [column for column in frame.columns if column]]
+    frame = canonicalize_bulk_frame(frame)
+    if "row_type" not in frame.columns:
+        frame.insert(0, "row_type", "ACTUAL")
+    else:
+        frame["row_type"] = frame["row_type"].fillna("ACTUAL")
+        frame.loc[frame["row_type"].astype(str).str.strip() == "", "row_type"] = "ACTUAL"
+    for column in expected:
+        if column not in frame.columns:
+            frame[column] = None
+
+    owner_defaults = {
+        "company_profile": {
+            "invoice_prefix": "INV-",
+            "advance_upi_discount": Decimal("2"),
+            "bill_of_supply_start_seq": 1,
+            "tax_invoice_start_seq": 1,
+            "bill_of_supply_simple_start_seq": 1,
+        },
+        "machine": {
+            "machine_type": "Paper Cup",
+            "default_operating_speed": 0,
+            "target_output_per_shift": 0,
+        },
+        "blank_stock": {"material_name": "Cup Blank"},
+    }
+    for column, default in owner_defaults.get(sub_tab_type, {}).items():
+        frame[column] = frame[column].where(frame[column].notna(), default)
+        frame.loc[frame[column].astype(str).str.strip() == "", column] = default
+
+    return validate_bulk_frame(
+        frame,
+        sub_tab_type,
+        sheet_name,
+        row_offset=header_index + 2,
+        strict_validation=False,
+        compatibility_warnings=compatibility_warnings,
+    )
+
+
+def read_owner_friendly_excel(workbook: dict) -> tuple[dict[str, list[dict]], list[dict]]:
+    valid_by_type: dict[str, list[dict]] = {key: [] for key in BULK_ROW_MODELS}
+    failed_rows: list[dict] = []
+    compatibility_warnings: list[dict] = []
+    normalized_sheets = {canonical_bulk_header(name): name for name in workbook}
+
+    for owner_sheet, sub_tab_type in OWNER_FRIENDLY_SHEETS.items():
+        actual_name = normalized_sheets.get(canonical_bulk_header(owner_sheet))
+        if sub_tab_type == "costing_optional":
+            continue
+        if actual_name is None:
+            failed_rows.append({"sheet": owner_sheet, "row": None, "error": "Required worksheet is missing"})
+            continue
+        rows, errors = read_owner_friendly_sheet(
+            workbook[actual_name],
+            sub_tab_type,
+            actual_name,
+            compatibility_warnings,
+        )
+        valid_by_type[sub_tab_type] = rows
+        failed_rows.extend(errors)
+
+    generate_owner_restore_keys(valid_by_type)
+    failed_rows.extend(compatibility_warnings)
+    return valid_by_type, failed_rows
+
+
 def detect_master_template_version(file_bytes: bytes) -> int:
     try:
         from openpyxl import load_workbook
@@ -860,6 +1078,18 @@ def detect_master_template_version(file_bytes: bytes) -> int:
     return 1
 
 
+def is_owner_friendly_workbook(file_bytes: bytes) -> bool:
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(BytesIO(file_bytes), read_only=True)
+        names = {canonical_bulk_header(name) for name in workbook.sheetnames}
+        expected = {canonical_bulk_header(name) for name in OWNER_FRIENDLY_SHEETS}
+        return len(names & expected) >= 5
+    except Exception:
+        return False
+
+
 def read_master_bulk_excel(
     file_bytes: bytes,
     *,
@@ -874,6 +1104,11 @@ def read_master_bulk_excel(
         workbook = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=object)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Unable to read Excel file: {exc}") from exc
+
+    normalized_sheet_names = {canonical_bulk_header(name) for name in workbook}
+    owner_sheet_names = {canonical_bulk_header(name) for name in OWNER_FRIENDLY_SHEETS}
+    if len(normalized_sheet_names & owner_sheet_names) >= 5:
+        return read_owner_friendly_excel(workbook)
 
     template_version = detect_master_template_version(file_bytes)
     effective_strict_validation = bool(strict_validation) or template_version >= 2
@@ -1024,6 +1259,30 @@ def build_master_onboarding_workbook() -> BytesIO:
                 worksheet.cell(row=2, column=column_index).fill = header_fill
                 worksheet.cell(row=2, column=column_index).font = header_font
                 worksheet.column_dimensions[get_column_letter(column_index)].width = 24
+    output.seek(0)
+    return output
+
+
+def build_owner_onboarding_workbook() -> BytesIO:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    header_fill = PatternFill("solid", fgColor="EDE9FE")
+    for sheet_name, headers in OWNER_TEMPLATE_COLUMNS.items():
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.append(headers)
+        for index, header in enumerate(headers, start=1):
+            cell = sheet.cell(row=1, column=index)
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+            sheet.column_dimensions[get_column_letter(index)].width = max(18, len(header) + 4)
+        for _ in range(12):
+            sheet.append([None] * len(headers))
+    output = BytesIO()
+    workbook.save(output)
     output.seek(0)
     return output
 
@@ -1655,9 +1914,9 @@ def download_master_onboarding_template(
     current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
 ):
     return StreamingResponse(
-        build_master_onboarding_workbook(),
+        build_owner_onboarding_workbook(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{MASTER_ONBOARDING_FILENAME}"'},
+        headers={"Content-Disposition": f'attachment; filename="{OWNER_ONBOARDING_FILENAME}"'},
     )
 
 
@@ -1675,7 +1934,11 @@ async def validate_master_onboarding(
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
     file_bytes = await file.read()
-    effective_strict = strict_validation or detect_master_template_version(file_bytes) >= 2
+    effective_strict = (
+        strict_validation
+        or detect_master_template_version(file_bytes) >= 2
+        or is_owner_friendly_workbook(file_bytes)
+    )
     valid_by_type, failed_rows = read_master_bulk_excel(file_bytes, strict_validation=effective_strict)
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
     cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type, strict_validation=effective_strict)
@@ -1708,7 +1971,11 @@ async def bulk_upload_master_onboarding(
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
     file_bytes = await file.read()
-    effective_strict = strict_validation or detect_master_template_version(file_bytes) >= 2
+    effective_strict = (
+        strict_validation
+        or detect_master_template_version(file_bytes) >= 2
+        or is_owner_friendly_workbook(file_bytes)
+    )
     fg_debug_info = inspect_finished_goods_sheet(file_bytes)
     valid_by_type, failed_rows = read_master_bulk_excel(file_bytes, strict_validation=effective_strict)
 
