@@ -242,7 +242,10 @@ def test_partial_plastic_row_has_simple_error_and_duplicates_are_grouped():
     issues = enrich_failed_rows(errors)
     assert issues
     assert all("PlasticStockBulkRow" not in issue.error for issue in issues)
-    assert any("पूरा नंबर" in issue.error or "whole number" in issue.error for issue in issues)
+    assert any(
+        issue.error == "Cup size can be written as 210 or 210,250,300."
+        for issue in issues
+    )
 
 
 def test_owner_template_plastic_bottom_and_missing_blank_validation():
@@ -298,6 +301,11 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
     ]
     assert valid["bottom_reel"][0]["variety_design"] == "Plain White"
     assert not [row for row in failed if row.get("entity_type") in {"plastic_stock", "bottom_reel"}]
+    assert any(
+        row.get("sheet") == "Bottom_Reel"
+        and "auto-defaulted" in row.get("error", "")
+        for row in failed
+    )
 
     fatal = [
         issue
@@ -306,9 +314,28 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
     ]
     assert len(fatal) == 2
     assert {issue.suggested_correction for issue in fatal} == {
-        "Add Cup_Blank row for 65 ml black.",
-        "Add Cup_Blank row for 65 ml hot.",
+        "Add Cup Blank row for 65 ml black",
+        "Add Cup Blank row for 65 ml hot",
     }
+
+
+def test_partial_plastic_size_uses_business_validation_message():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Plastic_Stock"
+    sheet.append(["Plastic Type", "Used For Cup Sizes ML"])
+    sheet.append(["Sleeve", "not a cup size"])
+    from routers.onboarding import read_owner_friendly_sheet
+
+    rows, errors = read_owner_friendly_sheet(
+        __import__("pandas").read_excel(BytesIO(_single_sheet_bytes(workbook)), header=None),
+        "plastic_stock",
+        "Plastic_Stock",
+        [],
+    )
+
+    assert rows == []
+    assert errors[0]["error"] == "Cup size can be written as 210 or 210,250,300."
 
 
 def _single_sheet_bytes(workbook: Workbook) -> bytes:

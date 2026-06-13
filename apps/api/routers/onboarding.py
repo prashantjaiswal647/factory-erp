@@ -736,6 +736,19 @@ def validate_bulk_frame(
                 validated_row["_row_number"] = int(index) + 1
                 valid_rows.append(validated_row)
         except Exception as exc:
+            if sub_tab_type == "plastic_stock":
+                failed_rows.append({
+                    "sheet": sheet_name or sub_tab_type,
+                    "row": int(index) + 1,
+                    "field": "used_for_cup_size_ml",
+                    "error": "Cup size can be written as 210 or 210,250,300.",
+                    "suggested_correction": "Enter at least one valid cup size, for example 210 or 55 ml, 65 ml.",
+                    "severity": ValidationSeverity.FATAL.value,
+                    "action_type": "error",
+                    "values": row,
+                    "entity_type": sub_tab_type,
+                })
+                continue
             failed_rows.append({
                 "sheet": sheet_name or sub_tab_type,
                 "row": int(index) + 1,
@@ -858,7 +871,10 @@ def auto_normalize_owner_mappings(
             fixes.append(ValidationIssue(
                 row=row.get("_row_number"),
                 field="variety_design",
-                error="Bottom Reel design was set to Plain White. / Bottom Reel डिज़ाइन Plain White रखा गया।",
+                error=(
+                    "Bottom size exists but variety was missing, auto-defaulted to Plain White. / "
+                    "Bottom size मिला, variety खाली थी इसलिए Plain White रखा गया।"
+                ),
                 severity=ValidationSeverity.INFO,
                 suggested_correction="No action needed / कोई बदलाव ज़रूरी नहीं।",
                 sheet="Bottom_Reel",
@@ -977,7 +993,9 @@ def validate_bulk_cross_sheet(
 
     for row in valid_by_type.get("finished_goods", []):
         packaging = normalized_identity(row.get("packaging_size_name"))
-        sku = (int(row["product_size_ml"]), normalized_identity(row.get("variety_design")))
+        product_size = int(row["product_size_ml"])
+        product_variety = normalized_identity(row.get("variety_design"))
+        sku = (product_size, product_variety)
         if packaging not in boxes:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="packaging_size_name",
@@ -988,14 +1006,28 @@ def validate_bulk_cross_sheet(
                 raw_value=row.get("packaging_size_name"), action_type=action_type,
             ))
         if sku not in blanks:
+            available_varieties = sorted({
+                variety
+                for size, variety in blanks
+                if size == product_size and variety
+            })
+            if not product_variety and len(available_varieties) > 1:
+                error = "More than one Cup Blank design exists for this size. Please choose the product design."
+                correction = (
+                    f"Choose one design for {product_size} ml: "
+                    f"{', '.join(available_varieties)}."
+                )
+            else:
+                error = "Matching Cup Blank was not found for this product size and design."
+                correction = (
+                    f"Add Cup Blank row for {product_size} ml "
+                    f"{bulk_str(row.get('variety_design')).lower() or 'design'}"
+                )
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="variety_design",
-                error="Matching Cup Blank was not found for this product size and design. / इस size और design का Cup Blank नहीं मिला।",
+                error=error,
                 severity=severity,
-                suggested_correction=(
-                    f"Add Cup_Blank row for {row.get('product_size_ml')} ml "
-                    f"{bulk_str(row.get('variety_design')).lower() or 'design'}."
-                ),
+                suggested_correction=correction,
                 sheet="Finished Goods", section="Finished Goods",
                 raw_value=row.get("variety_design"), action_type=action_type,
             ))
