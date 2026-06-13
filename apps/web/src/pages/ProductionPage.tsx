@@ -135,7 +135,7 @@ export default function ProductionPage() {
     }
 
     try {
-      const finalStockRes = await getFinalStockOptions();
+      const finalStockRes = await getFinalStockOptions(undefined, true);
       variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
       setMappingMessage(variations.length === 0 ? "Inventory mapping incomplete for this SKU." : "");
     } catch (err) {

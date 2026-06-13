@@ -365,13 +365,31 @@ def create_daily_production(
             .first()
         )
         if blank_stock is None:
+            size_matches = (
+                db.query(BlankStock)
+                .filter(BlankStock.factory_id == factory_id)
+                .filter(BlankStock.blank_size_ml == product_size_ml)
+                .with_for_update()
+                .all()
+            )
+            if len(size_matches) == 1:
+                blank_stock = size_matches[0]
+        requested_blank_bora = to_qty(payload.blank_used_bori)
+        requested_bottom_rolls = payload.bottom_used_rolls or 0
+        if blank_stock is None and requested_blank_bora > 0:
             raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
-        if not blank_stock.weight_per_bora_kg or blank_stock.weight_per_bora_kg <= 0:
+        if blank_stock is not None and (
+            not blank_stock.weight_per_bora_kg or blank_stock.weight_per_bora_kg <= 0
+        ) and requested_blank_bora > 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Blank stock weight per bora is not configured for this size. Please update inventory first.",
             )
-        machine_bottom_size_mm = blank_stock.linked_bottom_size_mm
+        machine_bottom_size_mm = (
+            blank_stock.linked_bottom_size_mm if blank_stock is not None else machine.bottom_size_mm
+        )
+        if not machine_bottom_size_mm:
+            raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
         if machine.bottom_size_mm and machine.bottom_size_mm != machine_bottom_size_mm:
             raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
         bottom_stock = (
@@ -383,8 +401,18 @@ def create_daily_production(
             .first()
         )
         if bottom_stock is None:
+            bottom_matches = (
+                db.query(BottomStock)
+                .filter(BottomStock.factory_id == factory_id)
+                .filter(BottomStock.bottom_size_mm == machine_bottom_size_mm)
+                .with_for_update()
+                .all()
+            )
+            if len(bottom_matches) == 1:
+                bottom_stock = bottom_matches[0]
+        if bottom_stock is None and requested_bottom_rolls > 0:
             raise HTTPException(status_code=400, detail="Inventory mapping incomplete for this SKU.")
-        blank_used_bori = to_qty(payload.blank_used_bori)
+        blank_used_bori = requested_blank_bora
         blank_weight_per_bora = to_qty(blank_stock.weight_per_bora_kg if blank_stock is not None else 0)
         if blank_weight_per_bora <= 0 and blank_used_bori > 0:
             raise HTTPException(
@@ -393,7 +421,7 @@ def create_daily_production(
             )
         blank_used_kg = to_qty(blank_used_bori * blank_weight_per_bora)
 
-        bottom_used_rolls = payload.bottom_used_rolls or 0
+        bottom_used_rolls = requested_bottom_rolls
         bottom_weight_per_roll = Decimal("0.000")
         if bottom_used_rolls > 0:
             if bottom_stock is not None and bottom_stock.bag_weight_kg and bottom_stock.rolls_per_bag and bottom_stock.rolls_per_bag > 0:

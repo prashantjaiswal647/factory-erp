@@ -235,6 +235,17 @@ def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductSt
         )
         .first()
     )
+    if blank is None:
+        blank_matches = (
+            db.query(BlankStock)
+            .filter(
+                BlankStock.factory_id == factory_id,
+                BlankStock.blank_size_ml == stock.product_size_ml,
+            )
+            .all()
+        )
+        if len(blank_matches) == 1:
+            blank = blank_matches[0]
     if blank is None or not blank.weight_per_bora_kg or blank.weight_per_bora_kg <= 0:
         return "Inventory mapping incomplete for this SKU."
     bottom = (
@@ -246,6 +257,17 @@ def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductSt
         )
         .first()
     )
+    if bottom is None and blank.linked_bottom_size_mm is not None:
+        bottom_matches = (
+            db.query(BottomStock)
+            .filter(
+                BottomStock.factory_id == factory_id,
+                BottomStock.bottom_size_mm == blank.linked_bottom_size_mm,
+            )
+            .all()
+        )
+        if len(bottom_matches) == 1:
+            bottom = bottom_matches[0]
     if bottom is None:
         return "Inventory mapping incomplete for this SKU."
     box = (
@@ -1149,6 +1171,7 @@ def save_final_stock(
 @router.get("/final-stock", response_model=List[FinalStockRow])
 def list_final_stock(
     search: Optional[str] = None,
+    production_ready_only: bool = False,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -1185,7 +1208,8 @@ def list_final_stock(
         ).all()
         processed_rows = []
         for row in rows:
-            if production_mapping_issue(db, str(current_user.factory_id), row):
+            mapping_issue = production_mapping_issue(db, str(current_user.factory_id), row)
+            if production_ready_only and mapping_issue:
                 continue
             live_boxes, live_loose = calculate_live_sku_stock(
                 db=db,
@@ -1227,6 +1251,8 @@ def list_final_stock(
                     image_url=fg_stock.image_url if fg_stock else None,
                     category=fg_stock.category if fg_stock else "CUP_FINISHED",
                     variant_name=fg_stock.variant_name if fg_stock else f"{row.product_size_ml}ml_{row.variety}",
+                    mapping_complete=mapping_issue is None,
+                    mapping_message=mapping_issue,
                 )
             )
         db.commit()

@@ -319,7 +319,7 @@ class BlankStockBulkRow(BaseModel):
     material_name: str = Field(..., min_length=1, max_length=255)
     variety_design: str = Field(..., min_length=1, max_length=100)
     size_ml: int = Field(..., gt=0)
-    linked_bottom_size_mm: int = Field(..., gt=0)
+    linked_bottom_size_mm: Optional[int] = Field(default=None, gt=0)
     weight_per_bora_kg: Decimal = Field(default=Decimal("0"), ge=0)
     total_boras_sacks: Decimal = Field(default=Decimal("0"), ge=0)
 
@@ -511,11 +511,25 @@ def actual_rows_only(frame):
     return frame[mask]
 
 
-def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None, row_offset: int = 2) -> tuple[list[dict], list[dict]]:
+def validate_bulk_frame(
+    frame,
+    sub_tab_type: str,
+    sheet_name: str | None = None,
+    row_offset: int = 2,
+    *,
+    strict_validation: bool = False,
+    compatibility_warnings: list[dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
     frame = canonicalize_bulk_frame(frame)
     headers = [str(column).strip() for column in frame.columns.tolist()]
-    optional_headers = OPTIONAL_BULK_HEADERS.get(sub_tab_type, set())
+    optional_headers = set(OPTIONAL_BULK_HEADERS.get(sub_tab_type, set()))
+    if not strict_validation:
+        optional_headers.update({
+            "blank_stock": {"variety_design", "linked_bottom_size_mm"},
+            "bottom_reel": {"variety_design"},
+            "finished_goods": {"initial_loose_packets"},
+        }.get(sub_tab_type, set()))
     missing_headers = [column for column in expected if column not in headers and column not in optional_headers]
     if missing_headers:
         return [], [{
@@ -539,8 +553,32 @@ def validate_bulk_frame(frame, sub_tab_type: str, sheet_name: str | None = None,
             sub_tab_type,
             {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected},
         )
+        if not strict_validation and sub_tab_type == "blank_stock":
+            if is_blank_bulk_value(row.get("variety_design")):
+                row["variety_design"] = bulk_str(row.get("material_name"))
+                if compatibility_warnings is not None:
+                    compatibility_warnings.append({
+                        "sheet": sheet_name or sub_tab_type,
+                        "row": int(index) + 1,
+                        "error": "Blank variety missing; defaulted to material_name.",
+                        "values": {"variety_design": row["variety_design"]},
+                    })
+        if not strict_validation and sub_tab_type == "bottom_reel":
+            if is_blank_bulk_value(row.get("variety_design")):
+                row["variety_design"] = "Plain White"
+                if compatibility_warnings is not None:
+                    compatibility_warnings.append({
+                        "sheet": sheet_name or sub_tab_type,
+                        "row": int(index) + 1,
+                        "error": "Bottom variety missing; defaulted to Plain White.",
+                        "values": {"variety_design": "Plain White"},
+                    })
         try:
             for row_variant in expand_bulk_row_variants(sub_tab_type, row):
+                if strict_validation and sub_tab_type == "blank_stock" and is_blank_bulk_value(
+                    row_variant.get("linked_bottom_size_mm")
+                ):
+                    raise ValueError("linked_bottom_size_mm is required in strict validation mode")
                 validated_row = model.model_validate(row_variant).model_dump()
                 if sub_tab_type == "blank_stock" and "total_boras_sacks" not in headers:
                     validated_row.pop("total_boras_sacks", None)
@@ -643,8 +681,14 @@ def dedupe_valid_bulk_rows(valid_by_type: dict[str, list[dict]]) -> tuple[dict[s
     return deduped, warnings
 
 
-def validate_bulk_cross_sheet(valid_by_type: dict[str, list[dict]]) -> list[ValidationIssue]:
+def validate_bulk_cross_sheet(
+    valid_by_type: dict[str, list[dict]],
+    *,
+    strict_validation: bool = True,
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    severity = ValidationSeverity.FATAL if strict_validation else ValidationSeverity.WARNING
+    action_type = "error" if strict_validation else "unchanged"
     boxes = {normalized_identity(row.get("box_type")) for row in valid_by_type.get("box_stock", [])}
     bottoms = {
         (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
@@ -663,32 +707,43 @@ def validate_bulk_cross_sheet(valid_by_type: dict[str, list[dict]]) -> list[Vali
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="packaging_size_name",
                 error="Finished Goods packaging does not match any Box Packaging box_type.",
-                severity=ValidationSeverity.FATAL,
+                severity=severity,
                 suggested_correction="Add the same packaging name in Raw Materials / Box Packaging.",
                 sheet="Finished Goods", section="Finished Goods",
-                raw_value=row.get("packaging_size_name"), action_type="error",
+                raw_value=row.get("packaging_size_name"), action_type=action_type,
             ))
         if sku not in blanks:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="variety_design",
                 error="Finished Goods size and variety do not have matching Blank stock.",
-                severity=ValidationSeverity.FATAL,
+                severity=severity,
                 suggested_correction="Add a Cup Blank row with the same size_ml and variety_design.",
                 sheet="Finished Goods", section="Finished Goods",
-                raw_value=row.get("variety_design"), action_type="error",
+                raw_value=row.get("variety_design"), action_type=action_type,
             ))
 
     for row in valid_by_type.get("blank_stock", []):
-        linked_size = int(row["linked_bottom_size_mm"])
+        linked_value = row.get("linked_bottom_size_mm")
+        if linked_value is None:
+            issues.append(ValidationIssue(
+                row=row.get("_row_number"), field="linked_bottom_size_mm",
+                error="Blank bottom mapping is incomplete.",
+                severity=severity,
+                suggested_correction="Set linked_bottom_size_mm before using this SKU in production.",
+                sheet="Raw Materials", section="Cup Blank",
+                raw_value=None, action_type=action_type,
+            ))
+            continue
+        linked_size = int(linked_value)
         variety = normalized_identity(row.get("variety_design"))
         if (linked_size, variety) not in bottoms:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="linked_bottom_size_mm",
                 error="Blank linked bottom size and variety do not match a Bottom Reel row.",
-                severity=ValidationSeverity.FATAL,
+                severity=severity,
                 suggested_correction="Add a Bottom Reel row with the linked size and same variety_design.",
                 sheet="Raw Materials", section="Cup Blank",
-                raw_value=row.get("linked_bottom_size_mm"), action_type="error",
+                raw_value=row.get("linked_bottom_size_mm"), action_type=action_type,
             ))
 
     for row in valid_by_type.get("machine", []):
@@ -696,10 +751,10 @@ def validate_bulk_cross_sheet(valid_by_type: dict[str, list[dict]]) -> list[Vali
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="bottom_size_mm",
                 error="Machine bottom size does not exist in Bottom Reel stock.",
-                severity=ValidationSeverity.FATAL,
+                severity=severity,
                 suggested_correction="Add the machine bottom_size_mm to Raw Materials / Bottom Reel.",
                 sheet="Machines", section="Machines",
-                raw_value=row.get("bottom_size_mm"), action_type="error",
+                raw_value=row.get("bottom_size_mm"), action_type=action_type,
             ))
     return issues
 
@@ -710,7 +765,14 @@ def increment_bulk_stat(stats: dict[str, int] | None, key: str, value: int = 1) 
     stats[key] = int(stats.get(key, 0)) + value
 
 
-def read_standard_sheet(workbook: dict, sheet_name: str, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
+def read_standard_sheet(
+    workbook: dict,
+    sheet_name: str,
+    sub_tab_type: str,
+    *,
+    strict_validation: bool,
+    compatibility_warnings: list[dict],
+) -> tuple[list[dict], list[dict]]:
     if sheet_name not in workbook:
         return [], [{"sheet": sheet_name, "row": None, "error": "Required worksheet is missing"}]
     raw_frame = workbook[sheet_name]
@@ -723,7 +785,14 @@ def read_standard_sheet(workbook: dict, sheet_name: str, sub_tab_type: str) -> t
     frame = raw_frame.iloc[2:].copy()
     frame.columns = headers
     frame = frame.loc[:, [column for column in frame.columns if column]]
-    return validate_bulk_frame(frame, sub_tab_type, sheet_name, row_offset=2)
+    return validate_bulk_frame(
+        frame,
+        sub_tab_type,
+        sheet_name,
+        row_offset=2,
+        strict_validation=strict_validation,
+        compatibility_warnings=compatibility_warnings,
+    )
 
 
 def find_raw_section_label_rows(raw_frame) -> dict[str, int]:
@@ -739,7 +808,13 @@ def find_raw_section_label_rows(raw_frame) -> dict[str, int]:
     return label_rows
 
 
-def read_raw_material_section(raw_frame, sub_tab_type: str) -> tuple[list[dict], list[dict]]:
+def read_raw_material_section(
+    raw_frame,
+    sub_tab_type: str,
+    *,
+    strict_validation: bool,
+    compatibility_warnings: list[dict],
+) -> tuple[list[dict], list[dict]]:
     section = RAW_MATERIAL_SECTIONS[sub_tab_type]
     label_rows = find_raw_section_label_rows(raw_frame)
     if sub_tab_type not in label_rows:
@@ -759,10 +834,37 @@ def read_raw_material_section(raw_frame, sub_tab_type: str) -> tuple[list[dict],
     frame = raw_frame.iloc[start_index:end_index].copy()
     frame.columns = headers
     frame = frame.loc[:, [column for column in frame.columns if column]]
-    return validate_bulk_frame(frame, sub_tab_type, "Raw Materials", row_offset=start_index)
+    return validate_bulk_frame(
+        frame,
+        sub_tab_type,
+        "Raw Materials",
+        row_offset=start_index,
+        strict_validation=strict_validation,
+        compatibility_warnings=compatibility_warnings,
+    )
 
 
-def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], list[dict]]:
+def detect_master_template_version(file_bytes: bytes) -> int:
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+        for sheet in workbook.worksheets:
+            for row in sheet.iter_rows(min_row=1, max_row=3, min_col=1, max_col=3, values_only=True):
+                for value in row:
+                    match = re.search(r"template_version\s*[=:]\s*(\d+)", bulk_str(value), re.IGNORECASE)
+                    if match:
+                        return int(match.group(1))
+    except Exception:
+        return 1
+    return 1
+
+
+def read_master_bulk_excel(
+    file_bytes: bytes,
+    *,
+    strict_validation: bool | None = None,
+) -> tuple[dict[str, list[dict]], list[dict]]:
     try:
         import pandas as pd
     except Exception as exc:
@@ -773,8 +875,11 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Unable to read Excel file: {exc}") from exc
 
+    template_version = detect_master_template_version(file_bytes)
+    effective_strict_validation = bool(strict_validation) or template_version >= 2
     valid_by_type: dict[str, list[dict]] = {key: [] for key in BULK_ROW_MODELS}
     failed_rows: list[dict] = []
+    compatibility_warnings: list[dict] = []
 
     for sheet_name, sub_tab_type in BULK_MASTER_SHEETS.items():
         if sub_tab_type == "raw_materials":
@@ -782,14 +887,46 @@ def read_master_bulk_excel(file_bytes: bytes) -> tuple[dict[str, list[dict]], li
                 failed_rows.append({"sheet": sheet_name, "row": None, "error": "Required worksheet is missing"})
                 continue
             for raw_sub_type in RAW_MATERIAL_SECTIONS:
-                valid_rows, sheet_errors = read_raw_material_section(workbook[sheet_name], raw_sub_type)
+                valid_rows, sheet_errors = read_raw_material_section(
+                    workbook[sheet_name],
+                    raw_sub_type,
+                    strict_validation=effective_strict_validation,
+                    compatibility_warnings=compatibility_warnings,
+                )
                 valid_by_type[raw_sub_type] = valid_rows
                 failed_rows.extend(sheet_errors)
             continue
 
-        valid_rows, sheet_errors = read_standard_sheet(workbook, sheet_name, sub_tab_type)
+        valid_rows, sheet_errors = read_standard_sheet(
+            workbook,
+            sheet_name,
+            sub_tab_type,
+            strict_validation=effective_strict_validation,
+            compatibility_warnings=compatibility_warnings,
+        )
         valid_by_type[sub_tab_type] = valid_rows
         failed_rows.extend(sheet_errors)
+    if not effective_strict_validation:
+        bottom_by_cup_size: dict[int, set[int]] = {}
+        for machine in valid_by_type.get("machine", []):
+            if machine.get("mould_size_ml") and machine.get("bottom_size_mm"):
+                bottom_by_cup_size.setdefault(int(machine["mould_size_ml"]), set()).add(int(machine["bottom_size_mm"]))
+        for blank in valid_by_type.get("blank_stock", []):
+            if blank.get("linked_bottom_size_mm") is not None:
+                continue
+            matches = bottom_by_cup_size.get(int(blank["size_ml"]), set())
+            if len(matches) == 1:
+                blank["linked_bottom_size_mm"] = next(iter(matches))
+                message = "Blank linked bottom size missing; defaulted from the unique matching machine."
+            else:
+                message = "Blank linked bottom size missing; mapping left incomplete for production."
+            compatibility_warnings.append({
+                "sheet": "Raw Materials",
+                "row": blank.get("_row_number"),
+                "error": message,
+                "values": {"linked_bottom_size_mm": blank.get("linked_bottom_size_mm")},
+            })
+    failed_rows.extend(compatibility_warnings)
     return valid_by_type, failed_rows
 
 
@@ -847,7 +984,7 @@ def build_master_onboarding_workbook() -> BytesIO:
                 continue
             frame = pd.DataFrame(
                 [
-                    [f"Instruction: keep row_type as SAMPLE for examples and ACTUAL for rows to import."],
+                    ["Instruction: template_version=2; keep row_type as SAMPLE for examples and ACTUAL for rows to import."],
                     BULK_TEMPLATE_COLUMNS[sub_tab_type],
                     SAMPLE_BULK_ROWS[sub_tab_type],
                     *[[None] * len(BULK_TEMPLATE_COLUMNS[sub_tab_type]) for _ in range(10)],
@@ -1047,6 +1184,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
 
     if sub_tab_type == "worker":
         worker_rows: list[tuple[Worker, dict]] = []
+        pending_workers: dict[tuple[str, str], Worker] = {}
         for row in valid_rows:
             worker_name = row["name"].strip()
             if not worker_name:
@@ -1054,8 +1192,16 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 continue
             phone, _ = normalize_phone_number(str(row["mobile_number"])) if row.get("mobile_number") else (None, None)
             restore_key = (row.get("worker_restore_key") or "").strip() or None
+            pending_key = (
+                ("restore", normalized_identity(restore_key))
+                if restore_key
+                else ("fallback", phone or normalized_identity(worker_name))
+            )
             query = db.query(Worker).filter(Worker.factory_id == factory_id)
-            if restore_key:
+            worker = pending_workers.get(pending_key)
+            if worker is not None:
+                increment_bulk_stat(stats, "updated")
+            elif restore_key:
                 worker = query.filter(sql_func.lower(Worker.worker_restore_key) == restore_key.lower()).with_for_update().first()
             elif phone:
                 worker = query.filter(Worker.phone == phone).with_for_update().first()
@@ -1067,8 +1213,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 worker = Worker(factory_id=factory_id, name=worker_name)
                 db.add(worker)
                 increment_bulk_stat(stats, "inserted")
-            else:
+            elif pending_key not in pending_workers:
                 increment_bulk_stat(stats, "updated")
+            pending_workers[pending_key] = worker
             worker.worker_restore_key = restore_key
             worker.phone = phone
             worker.daily_wage_rate = row["daily_wages"]
@@ -1282,7 +1429,11 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             stock.material_restore_key = restore_key
             stock.material_name = material_name
             stock.variety = variety
-            stock.linked_bottom_size_mm = int(row["linked_bottom_size_mm"])
+            stock.linked_bottom_size_mm = (
+                int(row["linked_bottom_size_mm"])
+                if row.get("linked_bottom_size_mm") is not None
+                else None
+            )
             stock.weight_per_bora_kg = row["weight_per_bora_kg"]
             if "total_boras_sacks" in row:
                 total_boras = row.get("total_boras_sacks") or Decimal("0")
@@ -1394,7 +1545,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             pieces_per_packet = max(int(row["pcs_per_packet"]), 1)
             packets_per_box = max(int(row["packets_per_box"]), 1)
             initial_stock_boxes = max(int(row["initial_stock_boxes"]), 0)
-            initial_loose_packets = max(int(row["initial_loose_packets"]), 0)
+            initial_loose_packets = max(int(row.get("initial_loose_packets") or 0), 0)
 
             box_inventory = get_or_create_inventory(db, factory_id, packaging_size_name, "Packaging", "pieces")
             poly_inventory = get_or_create_inventory(db, factory_id, f"{product_size_ml}ml Polybag", "Packaging", "pieces")
@@ -1513,6 +1664,7 @@ def download_master_onboarding_template(
 @v1_router.post("/bulk-upload/master/validate")
 async def validate_master_onboarding(
     file: UploadFile = File(...),
+    strict_validation: bool = False,
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
 ):
     """
@@ -1522,9 +1674,11 @@ async def validate_master_onboarding(
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
-    valid_by_type, failed_rows = read_master_bulk_excel(await file.read())
+    file_bytes = await file.read()
+    effective_strict = strict_validation or detect_master_template_version(file_bytes) >= 2
+    valid_by_type, failed_rows = read_master_bulk_excel(file_bytes, strict_validation=effective_strict)
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
-    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type)
+    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type, strict_validation=effective_strict)
 
     # Count total ACTUAL rows across all sheets
     total_attempted = sum(len(rows) for rows in valid_by_type.values())
@@ -1546,6 +1700,7 @@ async def validate_master_onboarding(
 async def bulk_upload_master_onboarding(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    strict_validation: bool = False,
     current_user: User = Depends(check_permissions(OWNER_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -1553,11 +1708,12 @@ async def bulk_upload_master_onboarding(
         raise HTTPException(status_code=422, detail="Only .xlsx master onboarding files are supported")
 
     file_bytes = await file.read()
+    effective_strict = strict_validation or detect_master_template_version(file_bytes) >= 2
     fg_debug_info = inspect_finished_goods_sheet(file_bytes)
-    valid_by_type, failed_rows = read_master_bulk_excel(file_bytes)
+    valid_by_type, failed_rows = read_master_bulk_excel(file_bytes, strict_validation=effective_strict)
 
     valid_by_type, duplicate_warnings = dedupe_valid_bulk_rows(valid_by_type)
-    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type)
+    cross_sheet_issues = validate_bulk_cross_sheet(valid_by_type, strict_validation=effective_strict)
 
     # Build enriched validation report
     total_attempted = sum(len(rows) for rows in valid_by_type.values()) + len(failed_rows)

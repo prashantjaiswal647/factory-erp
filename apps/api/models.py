@@ -1205,7 +1205,7 @@ class BlankStock(TenantMixin, Base):
     material_name = Column(String(255), nullable=True)
     blank_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Plain White", server_default="Plain White", index=True)
-    linked_bottom_size_mm = Column(Integer, nullable=False, index=True)
+    linked_bottom_size_mm = Column(Integer, nullable=True, index=True)
     weight_per_bora_kg = Column(Numeric(14, 3), nullable=True)
     total_boras = Column(Numeric(14, 3), nullable=True)
     total_qty_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
@@ -1572,13 +1572,27 @@ def _sync_worker_employee_reference(session: Session, obj) -> None:
 
 @event.listens_for(Session, 'before_flush')
 def before_session_flush(session, flush_context, instances):
+    pending_employees = {
+        (str(employee.factory_id), " ".join((employee.name or "").casefold().split()))
+        for employee in session.new
+        if isinstance(employee, Employee)
+    }
     # 1. Handle inserts (session.new)
     for obj in list(session.new):
         if isinstance(obj, (AttendanceLog, AdvancePayment)):
             _sync_worker_employee_reference(session, obj)
         elif isinstance(obj, Worker):
-            existing = session.query(Employee).filter(Employee.factory_id == obj.factory_id, Employee.name == obj.name).first()
-            if not existing:
+            employee_key = (
+                str(obj.factory_id),
+                " ".join((obj.name or "").casefold().split()),
+            )
+            existing = None
+            if employee_key not in pending_employees:
+                existing = session.query(Employee).filter(
+                    Employee.factory_id == obj.factory_id,
+                    func.lower(func.trim(Employee.name)) == employee_key[1],
+                ).first()
+            if existing is None and employee_key not in pending_employees:
                 employee = Employee(
                     factory_id=obj.factory_id,
                     name=obj.name,
@@ -1586,6 +1600,7 @@ def before_session_flush(session, flush_context, instances):
                     daily_wage=obj.daily_wages or obj.daily_wage_rate or 0
                 )
                 session.add(employee)
+                pending_employees.add(employee_key)
         elif isinstance(obj, FactoryExpense):
             existing = session.query(ExpenseLog).filter(
                 ExpenseLog.factory_id == obj.factory_id,

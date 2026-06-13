@@ -1228,9 +1228,12 @@ export function getInventory() {
   return api.get<LiveStockRow[]>("/api/inventory/");
 }
 
-export function getFinalStockOptions(search?: string) {
+export function getFinalStockOptions(search?: string, productionReadyOnly = false) {
   return api.get<FinalStockOption[]>("/api/inventory/final-stock", {
-    params: search && search.trim() ? { search: search.trim() } : undefined,
+    params: {
+      ...(search && search.trim() ? { search: search.trim() } : {}),
+      ...(productionReadyOnly ? { production_ready_only: true } : {}),
+    },
   });
 }
 
