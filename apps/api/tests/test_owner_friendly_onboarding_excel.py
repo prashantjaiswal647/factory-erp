@@ -1,12 +1,16 @@
 from io import BytesIO
+from decimal import Decimal
 from types import SimpleNamespace
 
 from openpyxl import Workbook
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
+from auth import get_current_user
+from main import app
 from models import BlankStock, Customer, Factory, FinalProductStock, Machine, Worker
 from routers.onboarding import (
     apply_bulk_rows,
@@ -122,3 +126,45 @@ def test_downloaded_owner_template_hides_technical_restore_keys():
         if value
     }
     assert not any("restore_key" in header for header in headers)
+
+
+def test_bulk_upload_decimal_validation_error_returns_422_not_500():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Factory_Profile"
+    sheet.append(["Factory Name"])
+    sheet.append(["Owner Factory"])
+    for name in (
+        "Customers", "Workers", "Machines", "Cup_Blank", "Bottom_Reel",
+        "Box_Stock", "Plastic_Stock", "Finished_Goods", "Costing_Optional",
+    ):
+        workbook.create_sheet(name)
+    cup_blank = workbook["Cup_Blank"]
+    cup_blank.append([
+        "Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM",
+        "Weight Per Bora KG", "Total Boras Sacks",
+    ])
+    cup_blank.append(["Blank", 210, "White", 0, Decimal("40.50"), Decimal("2.25")])
+    output = BytesIO()
+    workbook.save(output)
+
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=1, factory_id=1, role="Owner", username="owner", full_name="Owner"
+    )
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/onboarding/bulk-upload/master",
+            files={
+                "file": (
+                    "Munshi_AI_Factory_Owner_Onboarding_Template.xlsx",
+                    output.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["overall_status"] == "failed"
+    assert "40.5" in response.text or "2.25" in response.text

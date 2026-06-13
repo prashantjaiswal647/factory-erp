@@ -1,4 +1,7 @@
 import pytest
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from uuid import UUID
 from fastapi.testclient import TestClient
 from main import app
 
@@ -37,6 +40,21 @@ def http_exception_400_route():
     from fastapi import HTTPException
 
     raise HTTPException(status_code=400, detail="Actionable validation message")
+
+
+@app.get("/api/test-http-exception-complex-detail-route")
+def http_exception_complex_detail_route():
+    from fastapi import HTTPException
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "amount": Decimal("12.50"),
+            "date": date(2026, 6, 13),
+            "timestamp": datetime(2026, 6, 13, 10, 30, tzinfo=timezone.utc),
+            "id": UUID("12345678-1234-5678-1234-567812345678"),
+        },
+    )
 
 
 def test_unhandled_exception_sanitizer():
@@ -94,3 +112,18 @@ def test_http_4xx_detail_remains_actionable():
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Actionable validation message"}
+
+
+def test_http_exception_complex_detail_is_json_safe():
+    ensure_testclient_compatibility()
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/api/test-http-exception-complex-detail-route"
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "amount": 12.5,
+        "date": "2026-06-13",
+        "timestamp": "2026-06-13T10:30:00+00:00",
+        "id": "12345678-1234-5678-1234-567812345678",
+    }

@@ -13,7 +13,7 @@ from urllib.error import URLError
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.exception_handlers import http_exception_handler
+from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -265,7 +265,11 @@ def _request_id(request: Request) -> str:
 async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
     """Keep established API contracts while hiding explicit HTTP 500 details."""
     if exc.status_code != status.HTTP_500_INTERNAL_SERVER_ERROR:
-        return await http_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": jsonable_encoder(exc.detail)},
+            headers=exc.headers,
+        )
 
     request_id = _request_id(request)
     logging.getLogger(__name__).error(

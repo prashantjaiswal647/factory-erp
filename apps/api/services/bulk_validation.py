@@ -21,6 +21,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
+
 
 # ─────────────────────────── severity ──────────────────────────────────────
 
@@ -52,7 +54,7 @@ class ValidationIssue:
         # Truncate raw_value so it is always JSON-safe
         if self.raw_value is not None:
             d["raw_value"] = str(self.raw_value)[:120]
-        return d
+        return jsonable_encoder(d)
 
 
 # ─────────────────────────── report dataclass ───────────────────────────────
@@ -79,7 +81,7 @@ class BulkValidationReport:
             self.info_issues.append(issue)
 
     def to_dict(self) -> dict:
-        return {
+        return jsonable_encoder({
             "fatal_count": len(self.fatal_issues),
             "warning_count": len(self.warning_issues),
             "info_count": len(self.info_issues),
@@ -88,7 +90,7 @@ class BulkValidationReport:
             "fatal_errors": [i.to_dict() for i in self.fatal_issues],
             "warnings": [i.to_dict() for i in self.warning_issues],
             "info": [i.to_dict() for i in self.info_issues],
-        }
+        })
 
 
 # ─────────────────────────── field-level hints ──────────────────────────────
