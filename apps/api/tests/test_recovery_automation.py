@@ -118,6 +118,7 @@ from services.recovery_automation import (
     action_skip,
     action_mark_done,
     action_snooze,
+    _today_utc,
 )
 
 
@@ -131,7 +132,7 @@ def test_high_risk_generates_suggestions(recovery_db):
     returned for high-risk only."""
     db, factory_a, _, owner_a, _, customer_high_risk, customer_normal, customer_snoozed, _ = recovery_db
 
-    today = date.today()
+    today = _today_utc()
 
     # Bill 1: high-risk — ₹3,00,000 due, 18 days overdue
     bill_high = OutstandingBill(
@@ -243,7 +244,7 @@ def test_copy_action_logs_followup(recovery_db):
     assert status='copied' and last_action_at is set."""
     db, factory_a, _, owner_a, _, customer_high_risk, _, _, _ = recovery_db
 
-    today = date.today()
+    today = _today_utc()
     bill = OutstandingBill(
         factory_id=1,
         customer_id=customer_high_risk.id,
@@ -289,7 +290,7 @@ def test_snooze_hides_suggestion(recovery_db):
     assert status='snoozed', snoozed_until within 3 days from now."""
     db, factory_a, _, owner_a, _, customer_high_risk, _, _, _ = recovery_db
 
-    today = date.today()
+    today = _today_utc()
     bill = OutstandingBill(
         factory_id=1,
         customer_id=customer_high_risk.id,
@@ -342,7 +343,7 @@ def test_followup_done_status_persists(recovery_db):
     assert status='followup_done'."""
     db, factory_a, _, owner_a, _, customer_high_risk, _, _, _ = recovery_db
 
-    today = date.today()
+    today = _today_utc()
     bill = OutstandingBill(
         factory_id=1,
         customer_id=customer_high_risk.id,
@@ -392,7 +393,7 @@ def test_cross_factory_customer_blocked(recovery_db):
         customer_high_risk, _, _, customer_b,
     ) = recovery_db
 
-    today = date.today()
+    today = _today_utc()
     # Bill for customer_high_risk in factory A
     bill_a = OutstandingBill(
         factory_id=1,
@@ -456,7 +457,7 @@ def test_skip_action(recovery_db):
     assert status='skipped'."""
     db, factory_a, _, owner_a, _, customer_high_risk, _, _, _ = recovery_db
 
-    today = date.today()
+    today = _today_utc()
     bill = OutstandingBill(
         factory_id=1,
         customer_id=customer_high_risk.id,

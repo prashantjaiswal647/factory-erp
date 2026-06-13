@@ -144,6 +144,7 @@ def handle_outstanding_view(
     factory_id: int,
     chat_id: str,
     payload: Dict[str, Any],
+    user: Optional[User] = None,
 ) -> TelegramActionResult:
     """Fetch outstanding and format for Telegram."""
     try:
@@ -172,6 +173,8 @@ def handle_outstanding_view(
 
         customer_map: Dict[int, Any] = {}
         grand_total = Decimal("0.00")
+        is_sub_owner = user is not None and hasattr(user, "role") and user.role == "Sub-Owner"
+
         for bill in bills:
             if not bill.customer:
                 continue
@@ -181,14 +184,23 @@ def handle_outstanding_view(
                     customer_name=bill.customer.name,
                     current_pending_balance=Decimal("0.00"),
                 )
-            customer_map[cid].current_pending_balance += Decimal(str(bill.balance_amount or 0))
-            grand_total += Decimal(str(bill.balance_amount or 0))
+            if not is_sub_owner:
+                customer_map[cid].current_pending_balance += Decimal(str(bill.balance_amount or 0))
+                grand_total += Decimal(str(bill.balance_amount or 0))
 
-        outstanding = SimpleNamespace(
-            grand_total_outstanding=grand_total,
-            customers=list(customer_map.values()),
-        )
-        text = format_outstanding_for_telegram(outstanding)
+        if is_sub_owner:
+            uniq_customers = {b.customer.name for b in bills if b.customer}
+            text = "💵 *Outstanding Balances*\nTotal Outstanding: [Masked]\n\n*Top Customers:*\n"
+            for idx, name in enumerate(list(uniq_customers)[:5], 1):
+                text += f"{idx}. *{name}*: [Masked]\n"
+            if not uniq_customers:
+                text += "No outstanding payments."
+        else:
+            outstanding = SimpleNamespace(
+                grand_total_outstanding=grand_total,
+                customers=list(customer_map.values()),
+            )
+            text = format_outstanding_for_telegram(outstanding)
 
     except Exception:
         logger.exception("Outstanding view failed factory_id=%s", factory_id)
@@ -757,3 +769,981 @@ def handle_ask_start(
         ),
         buttons=_main_buttons(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Additional Read Actions (Role Masking & Services)
+# ---------------------------------------------------------------------------
+
+def handle_dashboard_summary_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    from models import DailyProduction, OutstandingBill, SalesInvoice, UnifiedAlert, AttendanceLog, BillPayment
+    from sqlalchemy import func
+    from datetime import date
+    
+    today = date.today()
+    
+    boxes_today = db.query(func.coalesce(func.sum(DailyProduction.total_boxes_made), 0)).filter(
+        DailyProduction.factory_id == str(factory_id),
+        DailyProduction.date == today,
+        DailyProduction.status == "ACTIVE"
+    ).scalar() or 0
+    
+    workers_present = db.query(func.count(AttendanceLog.id)).filter(
+        AttendanceLog.factory_id == factory_id,
+        AttendanceLog.date == today,
+        AttendanceLog.status == "Present"
+    ).scalar() or 0
+    
+    open_alerts = db.query(func.count(UnifiedAlert.id)).filter(
+        UnifiedAlert.factory_id == factory_id,
+        UnifiedAlert.status == "OPEN"
+    ).scalar() or 0
+
+    is_sub_owner = user is not None and user.role == "Sub-Owner"
+    
+    if is_sub_owner:
+        revenue_str = "[Masked]"
+        collections_str = "[Masked]"
+        outstanding_str = "[Masked]"
+    else:
+        revenue_today = db.query(func.coalesce(func.sum(SalesInvoice.total_amount), 0)).filter(
+            SalesInvoice.factory_id == factory_id,
+            SalesInvoice.date == today
+        ).scalar() or 0
+        revenue_str = f"₹{float(revenue_today):,.2f}"
+        
+        collections_today = db.query(func.coalesce(func.sum(BillPayment.amount_allocated), 0)).filter(
+            BillPayment.factory_id == factory_id,
+            BillPayment.payment_date == today
+        ).scalar() or 0
+        collections_str = f"₹{float(collections_today):,.2f}"
+        
+        outstanding_total = db.query(func.coalesce(func.sum(OutstandingBill.balance_amount), 0)).filter(
+            OutstandingBill.factory_id == factory_id,
+            OutstandingBill.status.in_(["active", "partial"])
+        ).scalar() or 0
+        outstanding_str = f"₹{float(outstanding_total):,.2f}"
+        
+    msg = (
+        "📈 *Munshi AI Dashboard Summary*\n\n"
+        f"• *Production Today:* {boxes_today} boxes\n"
+        f"• *Workers Present:* {workers_present}\n"
+        f"• *Open Alerts:* {open_alerts}\n"
+        f"• *Today's Revenue:* {revenue_str}\n"
+        f"• *Today's Collections:* {collections_str}\n"
+        f"• *Total Outstanding:* {outstanding_str}"
+    )
+    _audit(db, factory_id, "A10_DASHBOARD_SUMMARY", "Viewed dashboard summary via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message=msg, buttons=_main_buttons())
+
+
+def handle_inventory_rm_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import BlankStock, BottomStock, BoxStock
+    
+    blanks = db.query(BlankStock).filter(BlankStock.factory_id == str(factory_id)).all()
+    bottoms = db.query(BottomStock).filter(BottomStock.factory_id == str(factory_id)).all()
+    boxes = db.query(BoxStock).filter(BoxStock.factory_id == str(factory_id)).all()
+    
+    lines = ["📦 *Raw Material Stock Levels*", ""]
+    
+    if blanks:
+        lines.append("*Blanks:*")
+        for b in blanks[:5]:
+            qty = (b.total_boras or 0) * (b.weight_per_bora_kg or 0) if (b.total_boras or 0) > 0 else (b.total_qty_kg or 0)
+            lines.append(f"• {b.blank_size_ml}ml ({b.variety or 'Plain'}): {float(qty):,.1f} kg ({b.total_boras or 0} boras)")
+            
+    if bottoms:
+        lines.append("\n*Bottom Rolls:*")
+        for b in bottoms[:5]:
+            lines.append(f"• {b.bottom_size_mm}mm ({b.variety or 'Plain'}): {float(b.total_qty_kg or 0):,.1f} kg ({b.total_rolls or 0} rolls)")
+            
+    if boxes:
+        lines.append("\n*Boxes / Cartons:*")
+        for b in boxes[:5]:
+            lines.append(f"• {b.box_type or b.packaging_size_name}: {b.quantity or 0} pcs")
+            
+    if not blanks and not bottoms and not boxes:
+        lines.append("No raw material inventory found.")
+        
+    _audit(db, factory_id, "A2_INVENTORY_RM_VIEW", "Viewed raw material stock via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_inventory_fg_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import FinalProductStock
+    from routers.inventory import calculate_live_sku_stock
+    
+    fg_items = db.query(FinalProductStock).filter(FinalProductStock.factory_id == str(factory_id)).all()
+    lines = ["📦 *Finished Goods Stock Levels*", ""]
+    
+    for item in fg_items[:15]:
+        live_boxes, live_loose = calculate_live_sku_stock(
+            db=db,
+            factory_id=str(factory_id),
+            product_size_ml=item.product_size_ml,
+            variety=item.variety,
+            packaging_size_name=item.packaging_size_name,
+            onboarding_boxes=item.total_boxes or 0,
+            onboarding_loose=item.loose_packets or 0,
+            packets_per_box_limit=item.packets_per_box_limit or 1000,
+        )
+        lines.append(f"• *{item.product_size_ml}ml {item.variety}* ({item.packaging_size_name}): {live_boxes} boxes")
+        
+    if not fg_items:
+        lines.append("No finished goods stock found.")
+        
+    _audit(db, factory_id, "A2_INVENTORY_FG_VIEW", "Viewed finished goods stock via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_production_summary_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import DailyProduction
+    from datetime import date
+    
+    today = date.today()
+    prods = db.query(DailyProduction).filter(
+        DailyProduction.factory_id == str(factory_id),
+        DailyProduction.date == today,
+        DailyProduction.status == "ACTIVE"
+    ).all()
+    
+    lines = ["📋 *Today's Production Summary*", f"Date: {today.isoformat()}", ""]
+    for p in prods:
+        m_name = p.machine.name if p.machine else f"Machine {p.machine_id}"
+        w_name = p.worker.name if p.worker else "Unknown"
+        lines.append(f"• *{p.product_size_ml}ml* on {m_name} (Worker: {w_name}): {p.total_boxes_made} boxes")
+        
+    if not prods:
+        lines.append("No production recorded today yet.")
+        
+    _audit(db, factory_id, "A11_PRODUCTION_VIEW", "Viewed daily production summary via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_attendance_summary_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import AttendanceLog
+    from datetime import date
+    
+    today = date.today()
+    records = db.query(AttendanceLog).filter(
+        AttendanceLog.factory_id == factory_id,
+        AttendanceLog.date == today
+    ).all()
+    
+    lines = ["📅 *Today's Attendance Summary*", f"Date: {today.isoformat()}", ""]
+    p_count = sum(1 for r in records if r.status == "Present")
+    a_count = sum(1 for r in records if r.status == "Absent")
+    h_count = sum(1 for r in records if r.status == "Half-day")
+    
+    lines.append(f"• *Present:* {p_count}")
+    lines.append(f"• *Absent:* {a_count}")
+    lines.append(f"• *Half-day:* {h_count}")
+    lines.append("")
+    lines.append("*Details:*")
+    for r in records:
+        w_name = r.worker.name if r.worker else f"Worker {r.worker_id}"
+        lines.append(f"• {w_name}: {r.status}")
+        
+    if not records:
+        lines.append("No attendance marked today.")
+        
+    _audit(db, factory_id, "A4_ATTENDANCE_SUMMARY_VIEW", "Viewed worker attendance via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_invoices_search_start(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    if user and user.role == "Sub-Owner":
+        return TelegramActionResult(message="⚠️ Unauthorized: Financial access restricted.", buttons=_main_buttons())
+        
+    create_session(db, factory_id, chat_id, "invoices", "search_query", {})
+    return TelegramActionResult(
+        message="🧾 *Search Invoices*\n\nPlease reply directly to this message or send the Customer Name or Invoice Number to search.",
+        buttons=[[InlineButton("❌ Cancel", "A12:cancel")]],
+    )
+
+
+def handle_invoices_search_query(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    query_text: str,
+    user: Optional[User],
+) -> TelegramActionResult:
+    if user and user.role == "Sub-Owner":
+        return TelegramActionResult(message="⚠️ Unauthorized: Financial access restricted.", buttons=_main_buttons())
+        
+    from models import SalesInvoice, Customer
+    from sqlalchemy import or_
+    
+    invoices = db.query(SalesInvoice).filter(
+        SalesInvoice.factory_id == factory_id
+    ).filter(
+        or_(
+            SalesInvoice.invoice_number.ilike(f"%{query_text}%"),
+            SalesInvoice.customer.has(Customer.name.ilike(f"%{query_text}%"))
+        )
+    ).order_by(SalesInvoice.date.desc()).limit(5).all()
+    
+    lines = [f"🧾 *Invoice Search Results for '{query_text}':*", ""]
+    for inv in invoices:
+        c_name = inv.customer.name if inv.customer else "Unknown"
+        lines.append(
+            f"• *{inv.invoice_number}* - {c_name}\n"
+            f"  Date: {inv.date.isoformat()} | Amount: ₹{float(inv.total_amount):,.2f}\n"
+            f"  [PDF Download](https://munshiai.co.in/api/invoices/{inv.id}/pdf)"
+        )
+        
+    if not invoices:
+        lines.append("No matching invoices found.")
+        
+    _audit(db, factory_id, "A12_INVOICE_SEARCH", f"Searched invoices for query: {query_text}", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_payments_summary_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    if user and user.role == "Sub-Owner":
+        return TelegramActionResult(message="⚠️ Unauthorized: Financial access restricted.", buttons=_main_buttons())
+        
+    from models import BillPayment
+    from datetime import date
+    
+    today = date.today()
+    payments = db.query(BillPayment).filter(
+        BillPayment.factory_id == factory_id,
+        BillPayment.payment_date == today
+    ).all()
+    
+    lines = ["💸 *Today's Collection Summary*", f"Date: {today.isoformat()}", ""]
+    total = sum(p.amount_allocated for p in payments)
+    lines.append(f"Total Collections: *₹{float(total):,.2f}*")
+    lines.append("")
+    
+    for p in payments:
+        cust_name = p.bill.customer.name if p.bill and p.bill.customer else "Unknown"
+        lines.append(f"• {cust_name}: ₹{float(p.amount_allocated):,.2f} (Received by: {p.received_by_name or 'System'})")
+        
+    if not payments:
+        lines.append("No payment collection recorded today.")
+        
+    _audit(db, factory_id, "A13_PAYMENT_VIEW", "Viewed payment collection summary via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+def handle_wastage_summary_view(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import ShiftWastage
+    from datetime import date
+    
+    today = date.today()
+    records = db.query(ShiftWastage).filter(
+        ShiftWastage.factory_id == factory_id,
+        ShiftWastage.date == today
+    ).all()
+    
+    lines = ["🗑️ *Today's Wastage Summary*", f"Date: {today.isoformat()}", ""]
+    day_w = sum(r.wastage_kg for r in records if r.shift.lower() == "day")
+    night_w = sum(r.wastage_kg for r in records if r.shift.lower() == "night")
+    
+    lines.append(f"• *Day Shift:* {float(day_w):,.3f} kg")
+    lines.append(f"• *Night Shift:* {float(night_w):,.3f} kg")
+    lines.append(f"• *Total Wastage:* {float(day_w + night_w):,.3f} kg")
+    
+    _audit(db, factory_id, "A14_WASTAGE_VIEW", "Viewed wastage summary via Telegram", user_name="telegram-action")
+    return TelegramActionResult(message="\n".join(lines), buttons=_main_buttons())
+
+
+# ---------------------------------------------------------------------------
+# Additional Write Actions (State Machines, Confirm/Rollback)
+# ---------------------------------------------------------------------------
+
+ACTION_WASTAGE = "wastage"
+
+def handle_wastage_start(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    create_session(db, factory_id, chat_id, ACTION_WASTAGE, "shift", {})
+    return TelegramActionResult(
+        message="🗑️ *Record Shift Wastage*\n\nSelect Shift:",
+        buttons=[
+            [InlineButton("☀️ Day", "W2:shift:Day"), InlineButton("🌙 Night", "W2:shift:Night")],
+            [InlineButton("❌ Cancel", "W2:cancel")]
+        ]
+    )
+
+def handle_wastage_shift(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    shift: str,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_WASTAGE)
+    new_payload = dict(session.payload_json) if session else {}
+    new_payload["shift"] = shift
+    update_session(db, session.session_id if session else None, "kg", new_payload)
+    
+    return TelegramActionResult(
+        message=f"✅ Shift: *{shift}*\n\nSelect wastage amount (kg):",
+        buttons=[
+            [InlineButton("5 kg", "W2:kg:5"), InlineButton("10 kg", "W2:kg:10"), InlineButton("15 kg", "W2:kg:15")],
+            [InlineButton("20 kg", "W2:kg:20"), InlineButton("25 kg", "W2:kg:25"), InlineButton("30 kg", "W2:kg:30")],
+            [InlineButton("❌ Cancel", "W2:cancel")]
+        ]
+    )
+
+def handle_wastage_kg(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    kg: float,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_WASTAGE)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+    new_payload = dict(session.payload_json)
+    new_payload["wastage_kg"] = kg
+    update_session(db, session.session_id, "confirm", new_payload)
+    
+    preview = (
+        "📝 *Confirm Wastage Entry*\n\n"
+        f"• *Shift:* {new_payload.get('shift')}\n"
+        f"• *Weight:* {kg} kg\n\n"
+        "Do you want to confirm this entry?"
+    )
+    return TelegramActionResult(
+        message=preview,
+        buttons=[
+            [InlineButton("✅ Confirm", "W2:confirm"), InlineButton("❌ Cancel", "W2:cancel")]
+        ]
+    )
+
+def handle_wastage_confirm(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_WASTAGE)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+    
+    sess_payload = dict(session.payload_json)
+    update_session(db, session.session_id, "committed", sess_payload, status="committed")
+    
+    shift = sess_payload.get("shift")
+    kg = sess_payload.get("wastage_kg", 0)
+    
+    try:
+        from models import ShiftWastage
+        from datetime import date
+        from decimal import Decimal
+        today = date.today()
+        
+        existing = db.query(ShiftWastage).filter(
+            ShiftWastage.factory_id == factory_id,
+            ShiftWastage.date == today,
+            ShiftWastage.shift == shift
+        ).first()
+        
+        if existing:
+            existing.wastage_kg = Decimal(str(kg))
+        else:
+            db.add(ShiftWastage(
+                factory_id=factory_id,
+                date=today,
+                shift=shift,
+                wastage_kg=Decimal(str(kg))
+            ))
+        db.flush()
+        
+        _audit(
+            db, factory_id, "W2_WASTAGE_COMMITTED",
+            f"Wastage recorded via Telegram: {kg} kg for {shift} shift",
+            user_id=user.id if user else None,
+            user_name=user.username if user else "telegram"
+        )
+        return TelegramActionResult(
+            message=f"✅ *Wastage Recorded!*\n\n• Shift: {shift}\n• Weight: {kg} kg\n• Date: {today.isoformat()}",
+            buttons=_main_buttons()
+        )
+    except Exception as exc:
+        logger.exception("Wastage commit failed")
+        update_session(db, session.session_id, "failed", sess_payload, status="cancelled")
+        return TelegramActionResult(message=f"❌ Error: {str(exc)[:100]}", buttons=_main_buttons())
+
+def handle_wastage_cancel(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_WASTAGE)
+    if session:
+        update_session(db, session.session_id, "cancelled", {}, status="cancelled")
+    return TelegramActionResult(message="❌ Wastage entry cancelled.", buttons=_main_buttons())
+
+
+ACTION_INVOICE = "invoice"
+
+def handle_invoice_start(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    if user and user.role == "Sub-Owner":
+        return TelegramActionResult(message="⚠️ Unauthorized: Financial access restricted.", buttons=_main_buttons())
+        
+    from models import Customer
+    customers = db.query(Customer).filter(Customer.factory_id == factory_id).limit(5).all()
+    if not customers:
+        return TelegramActionResult(message="⚠️ No customers found.", buttons=_main_buttons())
+        
+    create_session(db, factory_id, chat_id, ACTION_INVOICE, "customer", {})
+    buttons = [[InlineButton(c.name, f"W3:customer:{c.id}")] for c in customers]
+    return TelegramActionResult(
+        message="🧾 *Create Invoice*\n\nSelect Customer:",
+        buttons=buttons + [[InlineButton("❌ Cancel", "W3:cancel")]]
+    )
+
+def handle_invoice_customer(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    customer_id: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_INVOICE)
+    new_payload = dict(session.payload_json) if session else {}
+    new_payload["customer_id"] = customer_id
+    
+    from models import Customer
+    cust = db.query(Customer).filter(Customer.id == customer_id, Customer.factory_id == factory_id).first()
+    new_payload["customer_name"] = cust.name if cust else "Unknown"
+    update_session(db, session.session_id if session else None, "size", new_payload)
+    
+    from models import Machine
+    sizes = db.query(Machine.mould_size_ml).filter(Machine.factory_id == str(factory_id)).distinct().all()
+    buttons = [[InlineButton(f"{r[0]} ml", f"W3:size:{r[0]}")] for r in sizes if r[0]]
+    return TelegramActionResult(
+        message=f"✅ Customer: *{new_payload['customer_name']}*\n\nSelect cup size:",
+        buttons=buttons + [[InlineButton("❌ Cancel", "W3:cancel")]]
+    )
+
+def handle_invoice_size(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    size: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_INVOICE)
+    new_payload = dict(session.payload_json) if session else {}
+    new_payload["size_ml"] = size
+    update_session(db, session.session_id if session else None, "boxes", new_payload)
+    
+    return TelegramActionResult(
+        message=f"✅ Size: *{size} ml*\n\nSelect quantity (boxes):",
+        buttons=[
+            [InlineButton("10 boxes", "W3:boxes:10"), InlineButton("20 boxes", "W3:boxes:20")],
+            [InlineButton("50 boxes", "W3:boxes:50"), InlineButton("100 boxes", "W3:boxes:100")],
+            [InlineButton("❌ Cancel", "W3:cancel")]
+        ]
+    )
+
+def handle_invoice_boxes(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    boxes: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_INVOICE)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+    new_payload = dict(session.payload_json)
+    new_payload["boxes"] = boxes
+    update_session(db, session.session_id, "confirm", new_payload)
+    
+    preview = (
+        "📝 *Confirm Invoice Creation*\n\n"
+        f"• *Customer:* {new_payload.get('customer_name')}\n"
+        f"• *Cup Size:* {new_payload.get('size_ml')} ml\n"
+        f"• *Boxes:* {boxes}\n\n"
+        "Do you want to confirm invoice creation?"
+    )
+    return TelegramActionResult(
+        message=preview,
+        buttons=[
+            [InlineButton("✅ Confirm", "W3:confirm"), InlineButton("❌ Cancel", "W3:cancel")]
+        ]
+    )
+
+def handle_invoice_confirm(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_INVOICE)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+        
+    sess_payload = dict(session.payload_json)
+    update_session(db, session.session_id, "committed", sess_payload, status="committed")
+    
+    customer_id = sess_payload.get("customer_id")
+    size_ml = sess_payload.get("size_ml")
+    boxes = sess_payload.get("boxes", 0)
+    
+    try:
+        from models import SalesInvoice, PackagingProfile
+        from datetime import date
+        from decimal import Decimal
+        
+        profile = db.query(PackagingProfile).filter(
+            PackagingProfile.factory_id == str(factory_id),
+            PackagingProfile.cup_size_ml == size_ml
+        ).first()
+        
+        if not profile:
+            return TelegramActionResult(message="⚠️ Packaging profile not found for size.", buttons=_main_buttons())
+            
+        today = date.today()
+        import random
+        invoice_num = f"INV-{today.strftime('%Y%m%d')}-{random.randint(100, 999)}"
+        invoice = SalesInvoice(
+            factory_id=factory_id,
+            customer_id=customer_id,
+            invoice_number=invoice_num,
+            date=today,
+            cup_size_ml=size_ml,
+            packaging_profile_id=profile.id,
+            boxes_sold=boxes,
+            total_amount=Decimal(str(boxes * 1200)),
+            amount_paid=Decimal("0.00"),
+            payment_status="Unpaid"
+        )
+        db.add(invoice)
+        db.flush()
+        
+        from models import OutstandingBill
+        bill = OutstandingBill(
+            factory_id=factory_id,
+            customer_id=customer_id,
+            sales_invoice_id=invoice.id,
+            bill_date=today,
+            total_amount=invoice.total_amount,
+            balance_amount=invoice.total_amount,
+            status="active"
+        )
+        db.add(bill)
+        db.flush()
+        
+        _audit(
+            db, factory_id, "W3_INVOICE_COMMITTED",
+            f"Created Sales Invoice {invoice_num} for customer {sess_payload.get('customer_name')}",
+            user_id=user.id if user else None,
+            user_name=user.username if user else "telegram"
+        )
+        
+        return TelegramActionResult(
+            message=f"✅ *Invoice Created!*\n\n• Invoice: {invoice_num}\n• Customer: {sess_payload.get('customer_name')}\n• Amount: ₹{float(invoice.total_amount):,.2f}",
+            buttons=_main_buttons()
+        )
+    except Exception as exc:
+        logger.exception("Invoice creation failed")
+        update_session(db, session.session_id, "failed", sess_payload, status="cancelled")
+        return TelegramActionResult(message=f"❌ Error: {str(exc)[:100]}", buttons=_main_buttons())
+
+def handle_invoice_cancel(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_INVOICE)
+    if session:
+        update_session(db, session.session_id, "cancelled", {}, status="cancelled")
+    return TelegramActionResult(message="❌ Invoice creation cancelled.", buttons=_main_buttons())
+
+
+ACTION_PAYMENT = "payment"
+
+def handle_payment_start(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    if user and user.role == "Sub-Owner":
+        return TelegramActionResult(message="⚠️ Unauthorized: Financial access restricted.", buttons=_main_buttons())
+        
+    from models import Customer, OutstandingBill
+    
+    customers = db.query(Customer).join(OutstandingBill).filter(
+        OutstandingBill.factory_id == factory_id,
+        OutstandingBill.balance_amount > 0,
+        OutstandingBill.status.in_(["active", "partial"])
+    ).group_by(Customer.id).limit(5).all()
+    
+    if not customers:
+        return TelegramActionResult(message="⚠️ No customers with outstanding balance found.", buttons=_main_buttons())
+        
+    create_session(db, factory_id, chat_id, ACTION_PAYMENT, "customer", {})
+    buttons = [[InlineButton(c.name, f"W4:customer:{c.id}")] for c in customers]
+    return TelegramActionResult(
+        message="💰 *Record Collection*\n\nSelect Customer:",
+        buttons=buttons + [[InlineButton("❌ Cancel", "W4:cancel")]]
+    )
+
+def handle_payment_customer(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    customer_id: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_PAYMENT)
+    new_payload = dict(session.payload_json) if session else {}
+    new_payload["customer_id"] = customer_id
+    
+    from models import Customer
+    cust = db.query(Customer).filter(Customer.id == customer_id, Customer.factory_id == factory_id).first()
+    new_payload["customer_name"] = cust.name if cust else "Unknown"
+    
+    from models import OutstandingBill
+    from sqlalchemy import func
+    total_due = db.query(func.coalesce(func.sum(OutstandingBill.balance_amount), 0)).filter(
+        OutstandingBill.customer_id == customer_id,
+        OutstandingBill.factory_id == factory_id,
+        OutstandingBill.status.in_(["active", "partial"])
+    ).scalar() or 0
+    
+    new_payload["total_due"] = float(total_due)
+    update_session(db, session.session_id if session else None, "amount", new_payload)
+    
+    return TelegramActionResult(
+        message=f"👤 Customer: *{new_payload['customer_name']}*\nOutstanding Balance: *₹{float(total_due):,.2f}*\n\nSelect payment amount:",
+        buttons=[
+            [InlineButton("₹5,000", "W4:amount:5000"), InlineButton("₹10,000", "W4:amount:10000")],
+            [InlineButton("₹20,000", "W4:amount:20000"), InlineButton("₹50,000", "W4:amount:50000")],
+            [InlineButton("❌ Cancel", "W4:cancel")]
+        ]
+    )
+
+def handle_payment_amount(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    amount: float,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_PAYMENT)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+    new_payload = dict(session.payload_json)
+    new_payload["amount"] = amount
+    update_session(db, session.session_id, "confirm", new_payload)
+    
+    preview = (
+        "📝 *Confirm Payment Collection*\n\n"
+        f"• *Customer:* {new_payload.get('customer_name')}\n"
+        f"• *Amount:* ₹{amount:,.2f}\n\n"
+        "Do you want to confirm this payment?"
+    )
+    return TelegramActionResult(
+        message=preview,
+        buttons=[
+            [InlineButton("✅ Confirm", "W4:confirm"), InlineButton("❌ Cancel", "W4:cancel")]
+        ]
+    )
+
+def handle_payment_confirm(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_PAYMENT)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+        
+    sess_payload = dict(session.payload_json)
+    update_session(db, session.session_id, "committed", sess_payload, status="committed")
+    
+    customer_id = sess_payload.get("customer_id")
+    amount = Decimal(str(sess_payload.get("amount", 0)))
+    
+    try:
+        from models import OutstandingBill, BillPayment
+        from datetime import date
+        from decimal import Decimal
+        
+        bills = db.query(OutstandingBill).filter(
+            OutstandingBill.customer_id == customer_id,
+            OutstandingBill.factory_id == factory_id,
+            OutstandingBill.balance_amount > 0,
+            OutstandingBill.status.in_(["active", "partial"])
+        ).order_by(OutstandingBill.bill_date.asc()).all()
+        
+        remaining = amount
+        today = date.today()
+        
+        for bill in bills:
+            if remaining <= 0:
+                break
+            allocation = min(bill.balance_amount, remaining)
+            bill.balance_amount -= allocation
+            if bill.balance_amount == 0:
+                bill.status = "paid"
+            else:
+                bill.status = "partial"
+                
+            db.add(BillPayment(
+                factory_id=factory_id,
+                bill_id=bill.id,
+                amount_allocated=allocation,
+                payment_date=today,
+                received_by_name=user.username if user else "Telegram"
+            ))
+            remaining -= allocation
+            
+        db.flush()
+        
+        _audit(
+            db, factory_id, "W4_PAYMENT_COMMITTED",
+            f"Recorded payment of ₹{float(amount):,.2f} for customer {sess_payload.get('customer_name')}",
+            user_id=user.id if user else None,
+            user_name=user.username if user else "telegram"
+        )
+        
+        return TelegramActionResult(
+            message=f"✅ *Payment Recorded!*\n\n• Customer: {sess_payload.get('customer_name')}\n• Amount: ₹{float(amount):,.2f}",
+            buttons=_main_buttons()
+        )
+    except Exception as exc:
+        logger.exception("Payment commit failed")
+        update_session(db, session.session_id, "failed", sess_payload, status="cancelled")
+        return TelegramActionResult(message=f"❌ Error: {str(exc)[:100]}", buttons=_main_buttons())
+
+def handle_payment_cancel(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_PAYMENT)
+    if session:
+        update_session(db, session.session_id, "cancelled", {}, status="cancelled")
+    return TelegramActionResult(message="❌ Payment entry cancelled.", buttons=_main_buttons())
+
+
+ACTION_EDIT_PRODUCTION = "edit_production"
+
+def handle_edit_production_start(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    from models import DailyProduction
+    
+    prods = db.query(DailyProduction).filter(
+        DailyProduction.factory_id == str(factory_id),
+        DailyProduction.status == "ACTIVE"
+    ).order_by(DailyProduction.date.desc(), DailyProduction.id.desc()).limit(3).all()
+    
+    if not prods:
+        return TelegramActionResult(message="⚠️ No recent active production entries found.", buttons=_main_buttons())
+        
+    create_session(db, factory_id, chat_id, ACTION_EDIT_PRODUCTION, "select", {})
+    buttons = []
+    for p in prods:
+        m_name = p.machine.name if p.machine else f"Machine {p.machine_id}"
+        label = f"{p.date.strftime('%d-%b')} | {p.product_size_ml}ml | {m_name} ({p.total_boxes_made} boxes)"
+        buttons.append([InlineButton(label, f"W5:prod:{p.id}")])
+        
+    return TelegramActionResult(
+        message="✏️ *Edit Daily Production*\n\nSelect entry to update:",
+        buttons=buttons + [[InlineButton("❌ Cancel", "W5:cancel")]]
+    )
+
+def handle_edit_production_select(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    prod_id: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_EDIT_PRODUCTION)
+    new_payload = dict(session.payload_json) if session else {}
+    new_payload["prod_id"] = prod_id
+    
+    from models import DailyProduction
+    p = db.query(DailyProduction).filter(DailyProduction.id == prod_id, DailyProduction.factory_id == str(factory_id)).first()
+    if not p:
+        return TelegramActionResult(message="⚠️ Entry not found.", buttons=_main_buttons())
+        
+    m_name = p.machine.name if p.machine else f"Machine {p.machine_id}"
+    new_payload["old_boxes"] = p.total_boxes_made
+    new_payload["label"] = f"{p.date.strftime('%d-%b')} | {p.product_size_ml}ml | {m_name}"
+    
+    new_payload["product_size_ml"] = p.product_size_ml
+    new_payload["variety"] = p.variety
+    new_payload["packaging_size_name"] = p.packaging_size_name
+    
+    update_session(db, session.session_id if session else None, "new_boxes", new_payload)
+    
+    return TelegramActionResult(
+        message=f"✏️ Entry: *{new_payload['label']}*\nCurrent Boxes: *{p.total_boxes_made}*\n\nSelect new boxes quantity:",
+        buttons=[
+            [InlineButton("25 boxes", "W5:boxes:25"), InlineButton("50 boxes", "W5:boxes:50")],
+            [InlineButton("100 boxes", "W5:boxes:100"), InlineButton("200 boxes", "W5:boxes:200")],
+            [InlineButton("❌ Cancel", "W5:cancel")]
+        ]
+    )
+
+def handle_edit_production_boxes(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    boxes: int,
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_EDIT_PRODUCTION)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+    new_payload = dict(session.payload_json)
+    new_payload["new_boxes"] = boxes
+    update_session(db, session.session_id, "confirm", new_payload)
+    
+    preview = (
+        "📝 *Confirm Production Update*\n\n"
+        f"• *Entry:* {new_payload.get('label')}\n"
+        f"• *Old Boxes:* {new_payload.get('old_boxes')}\n"
+        f"• *New Boxes:* {boxes}\n\n"
+        "Do you want to confirm this update?"
+    )
+    return TelegramActionResult(
+        message=preview,
+        buttons=[
+            [InlineButton("✅ Confirm", "W5:confirm"), InlineButton("❌ Cancel", "W5:cancel")]
+        ]
+    )
+
+def handle_edit_production_confirm(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+    user: Optional[User],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_EDIT_PRODUCTION)
+    if not session:
+        return TelegramActionResult(message="⚠️ Session expired.", buttons=_main_buttons())
+        
+    sess_payload = dict(session.payload_json)
+    update_session(db, session.session_id, "committed", sess_payload, status="committed")
+    
+    prod_id = sess_payload.get("prod_id")
+    new_boxes = sess_payload.get("new_boxes", 0)
+    old_boxes = sess_payload.get("old_boxes", 0)
+    
+    try:
+        from models import DailyProduction
+        p = db.query(DailyProduction).filter(DailyProduction.id == prod_id, DailyProduction.factory_id == str(factory_id)).first()
+        if not p:
+            return TelegramActionResult(message="⚠️ Entry not found.", buttons=_main_buttons())
+            
+        p.total_boxes_made = new_boxes
+        db.flush()
+        
+        from routers.inventory import recalculate_and_sync_sku_stock
+        recalculate_and_sync_sku_stock(
+            db=db,
+            factory_id=str(factory_id),
+            product_size_ml=sess_payload.get("product_size_ml"),
+            variety=sess_payload.get("variety"),
+            packaging_size_name=sess_payload.get("packaging_size_name")
+        )
+        
+        _audit(
+            db, factory_id, "W5_PRODUCTION_EDITED",
+            f"Updated Daily Production ID {prod_id} boxes from {old_boxes} to {new_boxes}",
+            user_id=user.id if user else None,
+            user_name=user.username if user else "telegram"
+        )
+        
+        return TelegramActionResult(
+            message=f"✅ *Production Updated!*\n\n• Entry: {sess_payload.get('label')}\n• New Quantity: {new_boxes} boxes",
+            buttons=_main_buttons()
+        )
+    except Exception as exc:
+        logger.exception("Production edit failed")
+        update_session(db, session.session_id, "failed", sess_payload, status="cancelled")
+        return TelegramActionResult(message=f"❌ Error: {str(exc)[:100]}", buttons=_main_buttons())
+
+def handle_edit_production_cancel(
+    db: Session,
+    factory_id: int,
+    chat_id: str,
+    payload: Dict[str, Any],
+) -> TelegramActionResult:
+    session = get_session(db, factory_id, chat_id, ACTION_EDIT_PRODUCTION)
+    if session:
+        update_session(db, session.session_id, "cancelled", {}, status="cancelled")
+    return TelegramActionResult(message="❌ Production update cancelled.", buttons=_main_buttons())
+

@@ -64,11 +64,13 @@ def teardown_module(module):
 def build_app():
     app = FastAPI()
     app.include_router(router)
+    mock_db = MagicMock()
+    mock_db.query.return_value.filter.return_value.first.return_value = None
+    app.dependency_overrides[get_db] = lambda: mock_db
     return app
 
 
 VALID_HEADERS = {"X-N8N-API-KEY": TEST_N8N_API_KEY}
-
 FACTORY_1_CHAT = "chat_factory_1_integration"
 FACTORY_2_CHAT = "chat_factory_2_integration"
 

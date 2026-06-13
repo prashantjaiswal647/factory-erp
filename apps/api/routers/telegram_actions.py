@@ -31,10 +31,12 @@ from sqlalchemy.orm import Session
 from db import get_db
 from datetime import date
 
-from models import Customer, Factory, OutstandingBill, User
+from models import Customer, Factory, OutstandingBill, User, TelegramUserBinding
 from routers.integrations import require_n8n_api_key
 from services.telegram_callback_dedupe import dedupe_check
 from services.telegram_actions import (
+    _audit,
+    _main_buttons,
     TelegramActionResult,
     InlineButton,
     handle_outstanding_view,
@@ -52,6 +54,36 @@ from services.telegram_actions import (
     handle_attendance_cancel,
     handle_briefing_full,
     handle_ask_start,
+    handle_dashboard_summary_view,
+    handle_inventory_rm_view,
+    handle_inventory_fg_view,
+    handle_production_summary_view,
+    handle_attendance_summary_view,
+    handle_invoices_search_start,
+    handle_invoices_search_query,
+    handle_payments_summary_view,
+    handle_wastage_summary_view,
+    handle_wastage_start,
+    handle_wastage_shift,
+    handle_wastage_kg,
+    handle_wastage_confirm,
+    handle_wastage_cancel,
+    handle_invoice_start,
+    handle_invoice_customer,
+    handle_invoice_size,
+    handle_invoice_boxes,
+    handle_invoice_confirm,
+    handle_invoice_cancel,
+    handle_payment_start,
+    handle_payment_customer,
+    handle_payment_amount,
+    handle_payment_confirm,
+    handle_payment_cancel,
+    handle_edit_production_start,
+    handle_edit_production_select,
+    handle_edit_production_boxes,
+    handle_edit_production_confirm,
+    handle_edit_production_cancel,
 )
 from telegram_crypto import decrypt_token
 
@@ -166,14 +198,6 @@ def telegram_action_callback(
 ) -> TelegramActionResponse:
     """
     Central handler for all Telegram inline-button callbacks.
-
-    callback_data format:
-      A1:view
-      A2:view
-      A3:start | A3:size:<ml> | A3:machine:<id> | A3:boxes:<n> | A3:confirm | A3:cancel
-      A4:start | A4:worker:<id> | A4:status:<status>:<id> | A4:confirm | A4:cancel
-      A5:full
-      A6:start
     """
     chat_id = body.chat_id.strip()
     callback_id = body.callback_id.strip()
@@ -181,6 +205,15 @@ def telegram_action_callback(
 
     # 1. Resolve factory from chat_id
     factory = _resolve_factory(db, chat_id)
+    binding = None
+    if not factory:
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True)
+        ).first()
+        if binding:
+            factory = db.query(Factory).filter(Factory.id == binding.factory_id, Factory.is_active.is_(True)).first()
+
     if not factory:
         logger.warning("Telegram callback from unknown chat_id=%s action=%s — rejected", chat_id, callback_data)
         return TelegramActionResponse(
@@ -196,8 +229,19 @@ def telegram_action_callback(
         logger.info("Duplicate callback_id=%s factory_id=%s — skipped", callback_id, factory_id)
         return TelegramActionResponse(status="duplicate", message="Already processed")
 
-    # 3. Dispatch
-    owner = _owner_for_factory(db, factory_id)
+    # 3. Resolve user role / details
+    if not binding:
+        binding = db.query(TelegramUserBinding).filter(
+            TelegramUserBinding.telegram_chat_id == chat_id,
+            TelegramUserBinding.is_active.is_(True)
+        ).first()
+
+    user = None
+    if binding and binding.factory_id == factory.id:
+        user = db.query(User).filter(User.id == binding.user_id, User.is_active.is_(True)).first()
+    if not user:
+        user = _owner_for_factory(db, factory.id)
+
     result: Optional[TelegramActionResult] = None
     parts = callback_data.split(":")
 
@@ -205,10 +249,16 @@ def telegram_action_callback(
         action = parts[0]
 
         if action == "A1":
-            result = handle_outstanding_view(db, factory_id, chat_id, {})
+            result = handle_outstanding_view(db, factory_id, chat_id, {}, user)
 
         elif action == "A2":
-            result = handle_inventory_view(db, factory_id, chat_id, {})
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "view_rm":
+                result = handle_inventory_rm_view(db, factory_id, chat_id, {})
+            elif step == "view_fg":
+                result = handle_inventory_fg_view(db, factory_id, chat_id, {})
+            else:
+                result = handle_inventory_view(db, factory_id, chat_id, {})
 
         elif action == "A3":
             step = parts[1] if len(parts) > 1 else ""
@@ -233,7 +283,7 @@ def telegram_action_callback(
                     boxes = 0
                 result = handle_production_boxes(db, factory_id, chat_id, {}, boxes)
             elif step == "confirm":
-                result = handle_production_confirm(db, factory_id, chat_id, {}, owner)
+                result = handle_production_confirm(db, factory_id, chat_id, {}, user)
             elif step == "cancel":
                 result = handle_production_cancel(db, factory_id, chat_id, {})
             else:
@@ -257,17 +307,137 @@ def telegram_action_callback(
                     worker_id = 0
                 result = handle_attendance_status(db, factory_id, chat_id, {}, worker_id, att_status)
             elif step == "confirm":
-                result = handle_attendance_confirm(db, factory_id, chat_id, {}, owner)
+                result = handle_attendance_confirm(db, factory_id, chat_id, {}, user)
             elif step == "cancel":
                 result = handle_attendance_cancel(db, factory_id, chat_id, {})
+            elif step == "view_summary":
+                result = handle_attendance_summary_view(db, factory_id, chat_id, {})
             else:
                 result = handle_attendance_start(db, factory_id, chat_id, {})
 
         elif action == "A5":
-            result = handle_briefing_full(db, factory_id, chat_id, {}, owner)
+            result = handle_briefing_full(db, factory_id, chat_id, {}, user)
 
         elif action == "A6":
             result = handle_ask_start(db, factory_id, chat_id, {})
+
+        elif action == "A10":
+            result = handle_dashboard_summary_view(db, factory_id, chat_id, {}, user)
+
+        elif action == "A11":
+            result = handle_production_summary_view(db, factory_id, chat_id, {})
+
+        elif action == "A12":
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "start":
+                result = handle_invoices_search_start(db, factory_id, chat_id, {}, user)
+            elif step == "query" and len(parts) > 2:
+                q_text = parts[2]
+                result = handle_invoices_search_query(db, factory_id, chat_id, {}, q_text, user)
+            elif step == "cancel":
+                result = TelegramActionResult(message="❌ Invoice search cancelled.", buttons=_main_buttons())
+            else:
+                result = handle_invoices_search_start(db, factory_id, chat_id, {}, user)
+
+        elif action == "A13":
+            result = handle_payments_summary_view(db, factory_id, chat_id, {}, user)
+
+        elif action == "A14":
+            result = handle_wastage_summary_view(db, factory_id, chat_id, {})
+
+        elif action == "W2":
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "start":
+                result = handle_wastage_start(db, factory_id, chat_id, {})
+            elif step == "shift" and len(parts) > 2:
+                result = handle_wastage_shift(db, factory_id, chat_id, {}, parts[2])
+            elif step == "kg" and len(parts) > 2:
+                try:
+                    kg_val = float(parts[2])
+                except ValueError:
+                    kg_val = 0.0
+                result = handle_wastage_kg(db, factory_id, chat_id, {}, kg_val)
+            elif step == "confirm":
+                result = handle_wastage_confirm(db, factory_id, chat_id, {}, user)
+            elif step == "cancel":
+                result = handle_wastage_cancel(db, factory_id, chat_id, {})
+            else:
+                result = handle_wastage_start(db, factory_id, chat_id, {})
+
+        elif action == "W3":
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "start":
+                result = handle_invoice_start(db, factory_id, chat_id, {}, user)
+            elif step == "customer" and len(parts) > 2:
+                try:
+                    cust_id = int(parts[2])
+                except ValueError:
+                    cust_id = 0
+                result = handle_invoice_customer(db, factory_id, chat_id, {}, cust_id)
+            elif step == "size" and len(parts) > 2:
+                try:
+                    sz_ml = int(parts[2])
+                except ValueError:
+                    sz_ml = 0
+                result = handle_invoice_size(db, factory_id, chat_id, {}, sz_ml)
+            elif step == "boxes" and len(parts) > 2:
+                try:
+                    bx_cnt = int(parts[2])
+                except ValueError:
+                    bx_cnt = 0
+                result = handle_invoice_boxes(db, factory_id, chat_id, {}, bx_cnt)
+            elif step == "confirm":
+                result = handle_invoice_confirm(db, factory_id, chat_id, {}, user)
+            elif step == "cancel":
+                result = handle_invoice_cancel(db, factory_id, chat_id, {})
+            else:
+                result = handle_invoice_start(db, factory_id, chat_id, {}, user)
+
+        elif action == "W4":
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "start":
+                result = handle_payment_start(db, factory_id, chat_id, {}, user)
+            elif step == "customer" and len(parts) > 2:
+                try:
+                    cust_id = int(parts[2])
+                except ValueError:
+                    cust_id = 0
+                result = handle_payment_customer(db, factory_id, chat_id, {}, cust_id)
+            elif step == "amount" and len(parts) > 2:
+                try:
+                    amt_val = float(parts[2])
+                except ValueError:
+                    amt_val = 0.0
+                result = handle_payment_amount(db, factory_id, chat_id, {}, amt_val)
+            elif step == "confirm":
+                result = handle_payment_confirm(db, factory_id, chat_id, {}, user)
+            elif step == "cancel":
+                result = handle_payment_cancel(db, factory_id, chat_id, {})
+            else:
+                result = handle_payment_start(db, factory_id, chat_id, {}, user)
+
+        elif action == "W5":
+            step = parts[1] if len(parts) > 1 else ""
+            if step == "start":
+                result = handle_edit_production_start(db, factory_id, chat_id, {})
+            elif step == "prod" and len(parts) > 2:
+                try:
+                    pr_id = int(parts[2])
+                except ValueError:
+                    pr_id = 0
+                result = handle_edit_production_select(db, factory_id, chat_id, {}, pr_id)
+            elif step == "boxes" and len(parts) > 2:
+                try:
+                    bx_cnt = int(parts[2])
+                except ValueError:
+                    bx_cnt = 0
+                result = handle_edit_production_boxes(db, factory_id, chat_id, {}, bx_cnt)
+            elif step == "confirm":
+                result = handle_edit_production_confirm(db, factory_id, chat_id, {}, user)
+            elif step == "cancel":
+                result = handle_edit_production_cancel(db, factory_id, chat_id, {})
+            else:
+                result = handle_edit_production_start(db, factory_id, chat_id, {})
 
         elif action == "R1":
             sub_action = parts[1] if len(parts) > 1 else ""
@@ -278,10 +448,9 @@ def telegram_action_callback(
                 from services.recovery_automation import render_reminder_text
                 customer = db.query(Customer).filter(Customer.id == customer_id, Customer.factory_id == factory_id).first()
                 if customer:
-                    action_copy_reminder(db, factory_id, customer_id, owner.id if owner else 0)
+                    action_copy_reminder(db, factory_id, customer_id, user.id if user else 0)
                     factory_obj = db.query(Factory).filter(Factory.id == factory_id).first()
                     factory_name = factory_obj.name if factory_obj else "Factory"
-                    # Get outstanding total
                     from sqlalchemy import func
                     total = db.query(func.coalesce(func.sum(OutstandingBill.balance_amount), 0)).filter(
                         OutstandingBill.customer_id == customer_id,
@@ -307,17 +476,17 @@ def telegram_action_callback(
 
             elif sub_action == "skip":
                 from services.recovery_automation import action_skip
-                action_skip(db, factory_id, customer_id, owner.id if owner else 0)
+                action_skip(db, factory_id, customer_id, user.id if user else 0)
                 result = TelegramActionResult(message="✅ Skipped. No reminder sent.", buttons=[])
 
             elif sub_action == "done":
                 from services.recovery_automation import action_mark_done
-                action_mark_done(db, factory_id, customer_id, owner.id if owner else 0)
+                action_mark_done(db, factory_id, customer_id, user.id if user else 0)
                 result = TelegramActionResult(message="✅ Marked follow-up done.", buttons=[])
 
             elif sub_action == "snooze":
                 from services.recovery_automation import action_snooze
-                action_snooze(db, factory_id, customer_id, owner.id if owner else 0, days=3)
+                action_snooze(db, factory_id, customer_id, user.id if user else 0, days=3)
                 result = TelegramActionResult(message="🔇 Snoozed for 3 days.", buttons=[])
 
             else:
