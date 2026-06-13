@@ -2285,6 +2285,23 @@ async def validate_master_onboarding(
     # Count total ACTUAL rows across all sheets
     total_attempted = sum(len(rows) for rows in valid_by_type.values())
     successful_rows = total_attempted  # in dry-run all valid rows are "would succeed"
+    issues = duplicate_warnings + cross_sheet_issues
+    report = make_report(issues, successful_rows=successful_rows, total_rows_attempted=total_attempted)
+    overall_status = "partial" if report.warning_issues else "ok"
+    
+    would_import_counts = {
+        k: len(v) for k, v in valid_by_type.items()
+    }
+    
+    return {
+        "message": "Dry-run validation successful",
+        "overall_status": overall_status,
+        "validation_report": report.to_dict(),
+        "would_import_counts": would_import_counts,
+        "failed_rows": failed_rows,
+    }
+
+
 @v1_router.post("/bulk-upload/master")
 async def bulk_upload_master_onboarding(
     background_tasks: BackgroundTasks,

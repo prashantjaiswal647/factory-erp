@@ -329,8 +329,11 @@ def test_pilot_zero_touch_acceptance_walks_all_thirteen_steps(pilot_app):
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         headers=auth,
     )
-    assert validate.status_code == 200, f"validate: {validate.text}"
+    assert validate.status_code == 200, f"validate: {validate.status_code} {validate.text}"
     validate_body = validate.json()
+    print("DEBUG EXCEL VALIDATE RESPONSE:", validate_body)
+    assert validate_body is not None, f"validate_body is None: {validate.text}"
+    assert "overall_status" in validate_body, f"overall_status key missing: {validate_body}"
     assert validate_body["overall_status"] in ("ok", "partial"), validate_body
     validation_report = validate_body.get("validation_report") or {}
     if "has_fatal" in validation_report:
