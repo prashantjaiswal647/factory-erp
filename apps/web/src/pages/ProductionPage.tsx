@@ -102,6 +102,7 @@ export default function ProductionPage() {
   const [wastageDate, setWastageDate] = useState(todayDate());
   const [wastageShift, setWastageShift] = useState<"Day" | "Night" | "Custom">("Day");
   const [isSavingWastage, setIsSavingWastage] = useState(false);
+  const [hasExistingWastage, setHasExistingWastage] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -122,12 +123,15 @@ export default function ProductionPage() {
         if (res.data) {
           setShiftWastageKg(res.data.wastage_kg);
           setWastageNote(res.data.note || "");
+          setHasExistingWastage(true);
         } else {
           setShiftWastageKg(0);
           setWastageNote("");
+          setHasExistingWastage(false);
         }
       } catch (err) {
         console.error("Failed to load shift wastage:", err);
+        setHasExistingWastage(false);
       }
     }
     void loadShiftWastage();
@@ -143,6 +147,7 @@ export default function ProductionPage() {
         note: wastageNote.trim() || null,
       });
       setToast("Shift wastage saved successfully.");
+      setHasExistingWastage(true);
     } catch (err) {
       console.error("Failed to save shift wastage:", err);
       setError(axios.isAxiosError(err) ? String(err.response?.data?.detail || err.message) : "Failed to save wastage");
@@ -635,7 +640,7 @@ export default function ProductionPage() {
 
             <button className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-md bg-amber-600 px-4 text-sm font-semibold text-white hover:bg-amber-700 disabled:bg-zinc-300" disabled={isSavingWastage} type="button" onClick={submitWastage}>
               <Check className="h-4 w-4" />
-              {isSavingWastage ? "Saving..." : "Save Wastage"}
+              {isSavingWastage ? "Saving..." : hasExistingWastage ? "Update Wastage" : "Save Wastage"}
             </button>
           </div>
         </section>

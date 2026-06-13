@@ -1083,6 +1083,9 @@ export type DashboardSummary = {
   current_total_market_outstanding: number | string;
   average_wastage_percent_last_7_days: number | string;
   raw_material_low_stock_alerts: number;
+  today_day_wastage_kg?: number;
+  today_night_wastage_kg?: number;
+  today_total_wastage_kg?: number;
 };
 
 export function getDashboardSummary() {

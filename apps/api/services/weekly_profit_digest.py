@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models import DailyFactoryHealthSnapshot, DailyProduction, DailyProfitSnapshot, Worker
+from models import DailyFactoryHealthSnapshot, DailyProduction, DailyProfitSnapshot, Worker, ShiftWastage
 from services.briefing_translations import translations_for
 from services.timezone_utils import KOLKATA_ZONE
 
@@ -98,6 +98,15 @@ def compute_weekly_digest(db: Session, factory_id: int, week_start: date, week_e
         product = f"{row.product_size_ml}ml {row.variety}"
         product_totals[product] = product_totals.get(product, 0) + int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0)
     top_worker = max(worker_totals, key=lambda item: int(item[2] or 0), default=None)
+    weekly_wastage_kg = (
+        db.query(func.coalesce(func.sum(ShiftWastage.wastage_kg), 0))
+        .filter(
+            ShiftWastage.factory_id == str(factory_id),
+            ShiftWastage.date >= week_start,
+            ShiftWastage.date <= week_end,
+        )
+        .scalar()
+    )
     return {
         "factory_id": factory_id,
         "week_start": week_start.isoformat(),
@@ -129,6 +138,7 @@ def compute_weekly_digest(db: Session, factory_id: int, week_start: date, week_e
             {"worker_name": top_worker[1] or "Worker removed", "boxes": int(top_worker[2] or 0)}
             if top_worker else None
         ),
+        "weekly_wastage_kg": float(Decimal(weekly_wastage_kg or 0)),
     }
 
 
@@ -162,6 +172,7 @@ def render_weekly_digest(digest: dict, language: str = "hinglish") -> str:
             f"Bottom Used: {digest['bottom_rolls_used']} rolls",
             f"Finished Goods Produced: {digest['boxes_produced']} boxes",
             f"Loose Packets Produced: {digest['loose_packets_produced']}",
+            f"Shift Wastage: {digest.get('weekly_wastage_kg', 0.0):g} KG",
             (
                 f"Top Worker: {digest['top_worker']['worker_name']} - {digest['top_worker']['boxes']} boxes"
                 if digest["top_worker"] else "Top Worker: Data not available"

@@ -181,3 +181,44 @@ def test_production_save_and_wastage_behavior(db_session):
     # Assert Factory 1 still has its original wastage
     w_f1_check = get_shift_wastage(date=date(2026, 6, 13), shift="Day", current_user=u1, db=db)
     assert w_f1_check.wastage_kg == 15.0
+
+    # 7. Day & Night wastage saved separately and summary endpoint
+    save_shift_wastage(
+        payload=ShiftWastageCreate(
+            date=date(2026, 6, 13),
+            shift="Night",
+            wastage_kg=Decimal("10.5"),
+            note="Night shift clean"
+        ),
+        current_user=u1,
+        db=db
+    )
+    
+    from routers.operations import get_shift_wastage_summary, get_shift_wastage_weekly_summary
+    sum_res = get_shift_wastage_summary(date=date(2026, 6, 13), current_user=u1, db=db)
+    assert sum_res["day_wastage_kg"] == 15.0
+    assert sum_res["night_wastage_kg"] == 10.5
+    assert sum_res["total_wastage_kg"] == 25.5
+    assert len(sum_res["notes"]) == 2
+
+    # 8. Weekly summary
+    week_res = get_shift_wastage_weekly_summary(start_date=date(2026, 6, 10), end_date=date(2026, 6, 15), current_user=u1, db=db)
+    assert week_res.weekly_total_kg == 25.5
+    
+    # 9. Dashboard stats includes wastage summary
+    from routers.dashboard import get_dashboard_summary
+    from unittest.mock import patch
+    import datetime
+    
+    with patch("routers.dashboard.date") as mock_date:
+        mock_date.today.return_value = datetime.date(2026, 6, 13)
+        
+        dash_res = get_dashboard_summary(current_user=u1, db=db)
+        assert dash_res.today_day_wastage_kg == 15.0
+        assert dash_res.today_night_wastage_kg == 10.5
+        assert dash_res.today_total_wastage_kg == 25.5
+
+    # 10. GET return None when no entry exists (no 500)
+    w_empty = get_shift_wastage(date=date(2026, 6, 14), shift="Day", current_user=u1, db=db)
+    assert w_empty is None
+

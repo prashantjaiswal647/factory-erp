@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, Response
 from openai import OpenAI
@@ -14,7 +15,7 @@ from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import DASHBOARD_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog, OutstandingBill
+from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog, OutstandingBill, ShiftWastage
 from schemas import AnalyticsSummaryResponse
 
 
@@ -35,6 +36,9 @@ class AiDashboardStats(BaseModel):
     current_total_market_outstanding: Decimal
     average_wastage_percent_last_7_days: Decimal
     raw_material_low_stock_alerts: int
+    today_day_wastage_kg: Optional[Decimal] = Decimal("0.0")
+    today_night_wastage_kg: Optional[Decimal] = Decimal("0.0")
+    today_total_wastage_kg: Optional[Decimal] = Decimal("0.0")
 
 
 class AiInsightsResponse(BaseModel):
@@ -206,12 +210,31 @@ def get_dashboard_summary(
     low_stock_alerts += db.query(BottomStock).filter(BottomStock.factory_id == factory_id).filter(BottomStock.total_weight_kg < 0).count()
     low_stock_alerts += db.query(BoxStock).filter(BoxStock.factory_id == factory_id).filter(BoxStock.total_boxes < 0).count()
 
+    today_wastages = (
+        db.query(ShiftWastage)
+        .filter(ShiftWastage.factory_id == factory_id)
+        .filter(ShiftWastage.date == today)
+        .all()
+    )
+    today_day = Decimal("0.0")
+    today_night = Decimal("0.0")
+    for row in today_wastages:
+        val = Decimal(str(row.wastage_kg or 0))
+        if row.shift.strip().lower() == "day":
+            today_day = val
+        elif row.shift.strip().lower() == "night":
+            today_night = val
+    today_total = today_day + today_night
+
     stats = {
         "total_sales_last_7_days": total_sales,
         "total_collection_last_7_days": total_collection,
         "current_total_market_outstanding": current_outstanding,
         "average_wastage_percent_last_7_days": avg_wastage,
         "raw_material_low_stock_alerts": low_stock_alerts,
+        "today_day_wastage_kg": today_day,
+        "today_night_wastage_kg": today_night,
+        "today_total_wastage_kg": today_total,
     }
 
     if r is not None:
@@ -270,12 +293,31 @@ def ai_insights(
     low_stock_alerts += db.query(BottomStock).filter(BottomStock.factory_id == factory_id).filter(BottomStock.total_weight_kg < 0).count()
     low_stock_alerts += db.query(BoxStock).filter(BoxStock.factory_id == factory_id).filter(BoxStock.total_boxes < 0).count()
 
+    today_wastages = (
+        db.query(ShiftWastage)
+        .filter(ShiftWastage.factory_id == factory_id)
+        .filter(ShiftWastage.date == today)
+        .all()
+    )
+    today_day = Decimal("0.0")
+    today_night = Decimal("0.0")
+    for row in today_wastages:
+        val = Decimal(str(row.wastage_kg or 0))
+        if row.shift.strip().lower() == "day":
+            today_day = val
+        elif row.shift.strip().lower() == "night":
+            today_night = val
+    today_total = today_day + today_night
+
     stats = {
         "total_sales_last_7_days": total_sales,
         "total_collection_last_7_days": total_collection,
         "current_total_market_outstanding": current_outstanding,
         "average_wastage_percent_last_7_days": avg_wastage,
         "raw_material_low_stock_alerts": low_stock_alerts,
+        "today_day_wastage_kg": today_day,
+        "today_night_wastage_kg": today_night,
+        "today_total_wastage_kg": today_total,
     }
     insights, source = generate_llm_insights(stats)
 

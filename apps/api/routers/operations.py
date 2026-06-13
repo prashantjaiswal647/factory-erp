@@ -1919,3 +1919,98 @@ def get_shift_wastage(
         .first()
     )
     return row
+
+
+class ShiftWastageSummaryResponse(BaseModel):
+    date: date_cls
+    day_wastage_kg: Decimal = Decimal("0.0")
+    night_wastage_kg: Decimal = Decimal("0.0")
+    total_wastage_kg: Decimal = Decimal("0.0")
+    notes: List[str] = Field(default_factory=list)
+
+
+def get_wastage_summary(factory_id: str, date_val: date_cls, db: Session) -> dict:
+    rows = (
+        db.query(ShiftWastage)
+        .filter(
+            ShiftWastage.factory_id == str(factory_id),
+            ShiftWastage.date == date_val
+        )
+        .all()
+    )
+    day = Decimal("0.0")
+    night = Decimal("0.0")
+    notes = []
+    for r in rows:
+        val = Decimal(str(r.wastage_kg or 0))
+        if r.shift.strip().lower() == "day":
+            day = val
+        elif r.shift.strip().lower() == "night":
+            night = val
+        if r.note and r.note.strip():
+            notes.append(f"{r.shift}: {r.note.strip()}")
+    return {
+        "date": date_val,
+        "day_wastage_kg": day,
+        "night_wastage_kg": night,
+        "total_wastage_kg": day + night,
+        "notes": notes
+    }
+
+
+@router.get("/production/wastage/summary", response_model=ShiftWastageSummaryResponse)
+def get_shift_wastage_summary(
+    date: date_cls = Query(...),
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return get_wastage_summary(str(current_user.factory_id), date, db)
+
+
+class DailyWastageSummaryRow(BaseModel):
+    date: date_cls
+    wastage_kg: Decimal
+
+
+class ShiftWastageWeeklySummaryResponse(BaseModel):
+    start_date: date_cls
+    end_date: date_cls
+    daily_totals: List[DailyWastageSummaryRow]
+    weekly_total_kg: Decimal
+
+
+@router.get("/production/wastage/weekly-summary", response_model=ShiftWastageWeeklySummaryResponse)
+def get_shift_wastage_weekly_summary(
+    start_date: date_cls = Query(...),
+    end_date: date_cls = Query(...),
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = str(current_user.factory_id)
+    rows = (
+        db.query(ShiftWastage)
+        .filter(
+            ShiftWastage.factory_id == factory_id,
+            ShiftWastage.date >= start_date,
+            ShiftWastage.date <= end_date
+        )
+        .all()
+    )
+    by_date = {}
+    curr = start_date
+    while curr <= end_date:
+        by_date[curr] = Decimal("0.0")
+        curr += timedelta(days=1)
+        
+    for r in rows:
+        by_date[r.date] = by_date.get(r.date, Decimal("0.0")) + Decimal(str(r.wastage_kg or 0))
+        
+    daily_totals = [DailyWastageSummaryRow(date=d, wastage_kg=v) for d, v in sorted(by_date.items())]
+    weekly_total_kg = sum((item.wastage_kg for item in daily_totals), Decimal("0.0"))
+    
+    return ShiftWastageWeeklySummaryResponse(
+        start_date=start_date,
+        end_date=end_date,
+        daily_totals=daily_totals,
+        weekly_total_kg=weekly_total_kg
+    )

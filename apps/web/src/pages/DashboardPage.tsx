@@ -38,8 +38,9 @@ import {
   getPendingSales,
   getProductionAlerts,
   getTelegramConnectionStatus,
-  rejectSalesOrder
-  ,validateMasterBackup
+  rejectSalesOrder,
+  validateMasterBackup,
+  getDashboardSummary
 } from "../lib/api";
 import type {
   AnalyticsBIResponse,
@@ -49,8 +50,9 @@ import type {
   PendingSale,
   ProductionAlertsResponse,
   TelegramConnectionStatus,
-  UnifiedAlert
-  ,MasterBackupValidation
+  UnifiedAlert,
+  MasterBackupValidation,
+  DashboardSummary
 } from "../lib/api";
 
 type StockRisk = {
@@ -91,6 +93,7 @@ export default function DashboardPage() {
   const [backupValidation, setBackupValidation] = useState<MasterBackupValidation | null>(null);
   const [backupMessage, setBackupMessage] = useState("");
   const [backupBusy, setBackupBusy] = useState(false);
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null);
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -143,12 +146,18 @@ export default function DashboardPage() {
       if (alertRes.status === "fulfilled") setProductionAlerts(alertRes.value.data);
 
       if (user?.role === "Owner" || user?.role === "Sub-Owner") {
-        const ownerResults = await Promise.allSettled([getPendingSales(), getDashboardAnalytics(), getTopAlerts(5)]);
+        const ownerResults = await Promise.allSettled([
+          getPendingSales(),
+          getDashboardAnalytics(),
+          getTopAlerts(5),
+          getDashboardSummary()
+        ]);
         if (ownerResults[0].status === "fulfilled") {
           setPendingSales(Array.isArray(ownerResults[0].value.data) ? ownerResults[0].value.data : []);
         }
         if (ownerResults[1].status === "fulfilled") setAnalyticsData(ownerResults[1].value.data);
         if (ownerResults[2].status === "fulfilled") setUnifiedAlerts(ownerResults[2].value.items);
+        if (ownerResults[3].status === "fulfilled") setDashboardSummary(ownerResults[3].value.data);
       }
 
       if (rejected) setError("Some dashboard data could not be refreshed. Showing available data.");
@@ -477,8 +486,8 @@ export default function DashboardPage() {
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-bold text-zinc-950">Collections</h2>
-            <p className="text-xs text-zinc-500">Current financial snapshot from existing dashboard analytics.</p>
+            <h2 className="text-sm font-bold text-zinc-950">Collections & Wastage Summary</h2>
+            <p className="text-xs text-zinc-500">Current financial and shift wastage snapshot.</p>
           </div>
           <Link className="text-xs font-semibold text-brand-700" to="/outstanding">View outstanding</Link>
         </div>
@@ -486,8 +495,14 @@ export default function DashboardPage() {
           <CompactMetric icon={IndianRupee} label="Collected" value={`Rs ${formatNumber(financials.collections)}`} />
           <CompactMetric icon={Boxes} label="Sales" value={`Rs ${formatNumber(financials.sales)}`} />
           <CompactMetric icon={CalendarDays} label="Expenses" value={`Rs ${formatNumber(financials.expenses)}`} />
-          <CompactMetric icon={AlertTriangle} label="Wastage" value={`${totalWastage.toFixed(1)} kg`} />
+          <CompactMetric icon={AlertTriangle} label="Today Total Wastage" value={`${(dashboardSummary?.today_total_wastage_kg ?? totalWastage).toFixed(1)} kg`} />
         </div>
+        {dashboardSummary && (dashboardSummary.today_day_wastage_kg !== undefined || dashboardSummary.today_night_wastage_kg !== undefined) && (
+          <div className="mt-2 border-t pt-2 grid grid-cols-2 gap-2 text-xs text-zinc-500">
+            <div>Day Shift Wastage: <strong className="text-zinc-900">{(dashboardSummary.today_day_wastage_kg ?? 0).toFixed(1)} kg</strong></div>
+            <div>Night Shift Wastage: <strong className="text-zinc-900">{(dashboardSummary.today_night_wastage_kg ?? 0).toFixed(1)} kg</strong></div>
+          </div>
+        )}
       </section>
 
       {(user?.role === "Owner" || user?.role === "Sub-Owner") && safeArray(pendingSales).length > 0 ? (

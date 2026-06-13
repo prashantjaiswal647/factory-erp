@@ -113,6 +113,17 @@ def render_morning_briefing_message(
                 "",
             ]
         )
+    shift_w = snapshot.get("shift_wastage")
+    if shift_w and (shift_w.get("day_wastage_kg", 0) > 0 or shift_w.get("night_wastage_kg", 0) > 0):
+        lines.extend(
+            [
+                "Shift Wastage Yesterday:",
+                f"Day Shift: {shift_w.get('day_wastage_kg', 0):g} KG",
+                f"Night Shift: {shift_w.get('night_wastage_kg', 0):g} KG",
+                f"Total Shift Wastage: {shift_w.get('total_wastage_kg', 0):g} KG",
+                "",
+            ]
+        )
     if profit and profit["data_available"]:
         lines.extend(
             [
@@ -269,6 +280,8 @@ def build_briefing(
     snapshot["wastage"] = compute_wastage_snapshot(db, factory_id, briefing_date)
     snapshot["profit"] = compute_profit_snapshot(db, factory_id, briefing_date)
     snapshot["per_size_profit"] = compute_per_size_profit(db, factory_id, briefing_date)
+    from routers.operations import get_wastage_summary
+    snapshot["shift_wastage"] = get_wastage_summary(str(factory_id), briefing_date, db)
     unified_alert_rows = top_alerts(db, factory_id, 3)
     snapshot["unified_alerts"] = [
         {
