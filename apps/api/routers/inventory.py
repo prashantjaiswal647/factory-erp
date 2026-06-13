@@ -354,10 +354,20 @@ def list_live_stock(
 
         # 1. Fetch standard Inventory items
         try:
+            profile_inventory_ids = (
+                db.query(PackagingProfile.box_inventory_id.label("inventory_id"))
+                .filter(PackagingProfile.factory_id == factory_id)
+                .union(
+                    db.query(PackagingProfile.poly_inventory_id.label("inventory_id"))
+                    .filter(PackagingProfile.factory_id == factory_id)
+                )
+                .subquery()
+            )
             inventory_items = (
                 db.query(Inventory)
                 .filter(Inventory.factory_id == factory_id)
                 .filter(or_(Inventory.item_name.is_(None), ~Inventory.item_name.like("[DELETED]%")))
+                .filter(~Inventory.id.in_(db.query(profile_inventory_ids.c.inventory_id)))
                 .order_by(Inventory.item_name.asc().nullslast(), Inventory.id.asc())
                 .all()
             )

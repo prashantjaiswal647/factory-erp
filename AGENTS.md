@@ -187,7 +187,7 @@ Security hardening status:
 - Blank `material_name` is descriptive only; production identity uses `variety`, `weight_per_bora_kg`, and `linked_bottom_size_mm`. Never infer Bottom MM from cup ML.
 - Production SKU options must exclude incomplete Blank/Bottom/Box mappings.
 - Every bulk sheet should behave as deterministic upsert: insert if new, update if existing, scoped by `current_user.factory_id`.
-- Master onboarding upload is replace/update semantics: business keys are authoritative, duplicate workbook rows use last-row-wins, omitted workers/machines are deactivated, and omitted models without archive support are kept unchanged and reported.
+- Master onboarding upload is a full active-baseline sync: duplicate workbook rows use last-row-wins; referenced customers/workers/machines are archived then matching rows reactivated; standalone opening-stock rows are cleared and rebuilt only from explicit workbook rows.
 - Spreadsheet-provided tenant/factory fields must never override authenticated `current_user.factory_id`.
 - Duplicate/integrity errors should be converted into useful validation-report issues whenever possible.
 - Excel validation UI must show exact sheet, section, row, column, bad value, and correction guidance.

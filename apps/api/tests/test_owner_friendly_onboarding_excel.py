@@ -11,12 +11,13 @@ from sqlalchemy.pool import StaticPool
 from db import Base
 from auth import get_current_user
 from main import app
-from models import BlankStock, Customer, Factory, FinalProductStock, Machine, Worker
+from models import BlankStock, BottomStock, BoxStock, Customer, Factory, FinalProductStock, Machine, PlasticStock, Worker
 from routers.onboarding import (
     apply_bulk_rows,
     build_owner_onboarding_workbook,
     dedupe_valid_bulk_rows,
     read_master_bulk_excel,
+    reset_active_onboarding_master_data,
     validate_bulk_cross_sheet,
 )
 from services.bulk_validation import enrich_failed_rows
@@ -187,7 +188,7 @@ def test_owner_validation_auto_normalizes_mapping_and_plastic_units():
             ["Bottom Size MM", "Design", "Total Individual Rolls", "Total Weight KG"],
             [[68, "White", 10, 20]],
         ),
-        "Box_Stock": (["Carton Type", "Carton Quantity"], [["210 - White", 5]]),
+        "Box_Stock": (["Carton Type", "Carton Quantity"], [["210-White", 5]]),
         "Plastic_Stock": (
             ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
             [["Sleeve", "210 ml", 2, 20, 100], [None, None, None, None, None]],
@@ -210,8 +211,8 @@ def test_owner_validation_auto_normalizes_mapping_and_plastic_units():
     issues = enrich_failed_rows(failed)
     assert valid["plastic_stock"][0]["used_for_cup_size_ml"] == 210
     assert len(valid["plastic_stock"]) == 1
-    assert valid["blank_stock"][0]["variety_design"] == "White"
-    assert valid["finished_goods"][0]["variety_design"] == "White"
+    assert valid["blank_stock"][0]["variety_design"] == "Blank"
+    assert valid["finished_goods"][0]["variety_design"] == "Blank"
     assert not [issue for issue in validate_bulk_cross_sheet(valid, strict_validation=True) if issue.severity.value == "fatal"]
     assert all("BulkRow" not in issue.error for issue in issues)
 
@@ -285,7 +286,10 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
                 [57, 10, 20],
             ],
         ),
-        "Box_Stock": (["Carton Type", "Carton Quantity"], [["65 White", 5]]),
+        "Box_Stock": (
+            ["Carton Type", "Carton Quantity"],
+            [["65 White", 5], ["65 Black", 5], ["65 Hot", 5]],
+        ),
         "Plastic_Stock": (
             ["Plastic Type", "Used For Cup Sizes ML", "Total Boras Sacks"],
             [
@@ -355,6 +359,82 @@ def test_partial_plastic_size_uses_business_validation_message():
 
     assert rows == []
     assert errors[0]["error"] == "Cup size can be written as 210 or 210,250,300."
+
+
+def test_master_replacement_removes_old_active_machines_and_inventory_rows():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    db = session_factory()
+    user = SimpleNamespace(id=1, factory_id=1)
+    try:
+        db.add(Factory(id=1, name="Factory"))
+        db.commit()
+
+        sheet_a = {
+            "machine": [
+                {"machine_name": "M1", "machine_number": "1", "machine_type": "Paper Cup", "mould_size_ml": 210, "bottom_size_mm": 65, "default_operating_speed": 10, "target_output_per_shift": 100},
+                {"machine_name": "M2", "machine_number": "2", "machine_type": "Paper Cup", "mould_size_ml": 250, "bottom_size_mm": 75, "default_operating_speed": 10, "target_output_per_shift": 100},
+            ],
+            "blank_stock": [
+                {"material_restore_key": None, "material_name": "210 Printed", "size_ml": 210, "variety_design": "Printed", "linked_bottom_size_mm": 65, "weight_per_bora_kg": Decimal("40"), "total_boras_sacks": Decimal("2")},
+                {"material_restore_key": None, "material_name": "250 Printed", "size_ml": 250, "variety_design": "Printed", "linked_bottom_size_mm": 75, "weight_per_bora_kg": Decimal("40"), "total_boras_sacks": Decimal("2")},
+            ],
+            "bottom_reel": [
+                {"material_restore_key": None, "bottom_size_mm": 65, "variety_design": "Plain White", "total_individual_rolls": 10, "total_weight_kg": Decimal("20"), "bottom_price_per_kg": Decimal("0")},
+                {"material_restore_key": None, "bottom_size_mm": 75, "variety_design": "Plain White", "total_individual_rolls": 10, "total_weight_kg": Decimal("20"), "bottom_price_per_kg": Decimal("0")},
+            ],
+        }
+        for entity, rows in sheet_a.items():
+            apply_bulk_rows(db, user, entity, rows, {})
+        db.commit()
+
+        removed = reset_active_onboarding_master_data(db, factory_id=1)
+        sheet_b = {
+            "machine": [sheet_a["machine"][0]],
+            "blank_stock": [sheet_a["blank_stock"][0]],
+            "bottom_reel": [sheet_a["bottom_reel"][0]],
+        }
+        for entity, rows in sheet_b.items():
+            apply_bulk_rows(db, user, entity, rows, {})
+        db.commit()
+
+        assert removed >= 4
+        assert [row.name for row in db.query(Machine).filter_by(factory_id=1, is_active=True).all()] == ["M1"]
+        assert [(row.blank_size_ml, row.variety) for row in db.query(BlankStock).filter_by(factory_id=1).all()] == [(210, "Printed")]
+        assert [(row.bottom_size_mm, row.variety) for row in db.query(BottomStock).filter_by(factory_id=1).all()] == [(65, "Plain White")]
+        assert db.query(BoxStock).filter_by(factory_id=1).count() == 0
+        assert db.query(PlasticStock).filter_by(factory_id=1).count() == 0
+
+        reset_active_onboarding_master_data(db, factory_id=1)
+        for entity, rows in sheet_b.items():
+            apply_bulk_rows(db, user, entity, rows, {})
+        db.commit()
+        assert db.query(BlankStock).filter_by(factory_id=1).count() == 1
+        assert db.query(Machine).filter_by(factory_id=1, is_active=True).count() == 1
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_blank_design_defaults_to_excel_material_name_not_plain_white():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Cup_Blank"
+    sheet.append(["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG"])
+    sheet.append(["210 Printed Blank", 210, "", 65, 40])
+    from routers.onboarding import auto_normalize_owner_mappings, read_owner_friendly_sheet
+
+    rows, errors = read_owner_friendly_sheet(
+        __import__("pandas").read_excel(BytesIO(_single_sheet_bytes(workbook)), header=None),
+        "blank_stock",
+        "Cup_Blank",
+        [],
+    )
+    assert errors == []
+    auto_normalize_owner_mappings({"blank_stock": rows, "bottom_reel": [], "finished_goods": []})
+    assert rows[0]["variety_design"] == "210 Printed Blank"
 
 
 def _single_sheet_bytes(workbook: Workbook) -> bytes:

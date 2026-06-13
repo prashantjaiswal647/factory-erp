@@ -465,6 +465,7 @@ class Customer(TenantMixin, Base):
     balance_amount = Column(Numeric(14, 2), nullable=False, default=0)
     pending_dues = Column(Float, nullable=False, default=0.0, server_default="0")
     pending_balance = Column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
 
     sales_invoices = relationship("SalesInvoice", back_populates="customer")
     orders = relationship("Order", back_populates="customer")

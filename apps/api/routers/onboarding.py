@@ -896,24 +896,13 @@ def auto_normalize_owner_mappings(
                     sheet="Finished Goods", action_type="updated",
                 ))
 
-    explicit_bottom_varieties = {
-        int(row["bottom_size_mm"]): bulk_str(row.get("variety_design"))
-        for row in valid_by_type.get("bottom_reel", [])
-        if bulk_str(row.get("variety_design"))
-    }
     for row in valid_by_type.get("blank_stock", []):
         if normalized_identity(row.get("variety_design")):
             continue
-        linked = row.get("linked_bottom_size_mm")
-        if linked and int(linked) in explicit_bottom_varieties:
-            row["variety_design"] = explicit_bottom_varieties[int(linked)]
-        elif linked and len(bottoms_by_size.get(int(linked), [])) == 1:
-            row["variety_design"] = "Plain White"
-        else:
-            continue
+        row["variety_design"] = bulk_str(row.get("material_name")) or "Cup Blank"
         fixes.append(ValidationIssue(
             row=row.get("_row_number"), field="variety_design",
-            error="Cup Blank design was filled from the matching Bottom Reel.",
+            error="Cup Blank design was filled from its material name.",
             severity=ValidationSeverity.INFO,
             suggested_correction="No action needed / कोई बदलाव जरूरी नहीं।",
             sheet="Cup_Blank", action_type="updated",
@@ -941,34 +930,6 @@ def auto_normalize_owner_mappings(
                 action_type="updated",
             ))
 
-    existing_boxes = {
-        normalized_identity(row.get("box_type"))
-        for row in valid_by_type.get("box_stock", [])
-    }
-    missing_boxes: dict[str, str] = {}
-    for row in valid_by_type.get("finished_goods", []):
-        packaging = bulk_str(row.get("packaging_size_name"))
-        normalized = normalized_identity(packaging)
-        if normalized and normalized not in existing_boxes:
-            missing_boxes[normalized] = packaging
-    for normalized, packaging in missing_boxes.items():
-        valid_by_type.setdefault("box_stock", []).append({
-            "row_type": "ACTUAL",
-            "box_type": packaging,
-            "box_quantity_pieces": 0,
-            "price_per_box_rs": 0,
-            "_row_number": None,
-        })
-        existing_boxes.add(normalized)
-    if missing_boxes:
-        names = ", ".join(sorted(missing_boxes.values()))
-        fixes.append(ValidationIssue(
-            row=None, field="packaging_size_name",
-            error=f"Carton mapping was created automatically for: {names}.",
-            severity=ValidationSeverity.WARNING,
-            suggested_correction="Add opening carton stock before production / उत्पादन से पहले carton stock भरें।",
-            sheet="Box_Stock", action_type="created",
-        ))
     return fixes
 
 
@@ -1819,6 +1780,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             customer.pending_dues = float(previous_due)
             customer.pending_balance = previous_due
             customer.balance_amount = previous_due
+            customer.is_active = True
             
             db.flush()
             if previous_due > 0:
@@ -2142,129 +2104,36 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
     return 0
 
 
-def reconcile_missing_master_rows(
+def reset_active_onboarding_master_data(
     db: Session,
     *,
     factory_id: int,
-    valid_by_type: dict[str, list[dict]],
-) -> tuple[list[ValidationIssue], int]:
-    issues: list[ValidationIssue] = []
-    archived_count = 0
+) -> int:
+    archived_count = (
+        db.query(Worker)
+        .filter(Worker.factory_id == factory_id, Worker.is_active.is_(True))
+        .update({Worker.is_active: False}, synchronize_session=False)
+    )
+    archived_count += (
+        db.query(Machine)
+        .filter(Machine.factory_id == factory_id, Machine.is_active.is_(True))
+        .update({Machine.is_active: False}, synchronize_session=False)
+    )
+    archived_count += (
+        db.query(Customer)
+        .filter(Customer.factory_id == factory_id, Customer.is_active.is_(True))
+        .update({Customer.is_active: False}, synchronize_session=False)
+    )
 
-    uploaded_worker_phones = {
-        normalize_phone_number(str(row["mobile_number"]))[0]
-        for row in valid_by_type.get("worker", [])
-        if row.get("mobile_number")
-    }
-    uploaded_worker_names = {
-        normalized_identity(row.get("name"))
-        for row in valid_by_type.get("worker", [])
-    }
-    for worker in db.query(Worker).filter(Worker.factory_id == factory_id, Worker.is_active.is_(True)).all():
-        if worker.phone in uploaded_worker_phones or normalized_identity(worker.name) in uploaded_worker_names:
-            continue
-        worker.is_active = False
-        archived_count += 1
-
-    uploaded_machine_numbers = {
-        normalized_identity(row.get("machine_number"))
-        for row in valid_by_type.get("machine", [])
-        if row.get("machine_number")
-    }
-    uploaded_machine_names = {
-        normalized_identity(row.get("machine_name"))
-        for row in valid_by_type.get("machine", [])
-    }
-    for machine in db.query(Machine).filter(Machine.factory_id == factory_id, Machine.is_active.is_(True)).all():
-        if (
-            normalized_identity(machine.machine_number) in uploaded_machine_numbers
-            or normalized_identity(machine.name) in uploaded_machine_names
-        ):
-            continue
-        machine.is_active = False
-        archived_count += 1
-
-    kept_specs = [
-        (
-            "Customers",
-            db.query(Customer).filter(Customer.factory_id == factory_id).all(),
-            {
-                normalized_phone(row.get("phone_number") or row.get("contact_number"))
-                or normalized_identity(row.get("name"))
-                for row in valid_by_type.get("customer", [])
-            },
-            lambda item: normalized_phone(item.phone_number) or normalized_identity(item.name),
-        ),
-        (
-            "Cup_Blank",
-            db.query(BlankStock).filter(BlankStock.factory_id == factory_id).all(),
-            {
-                (int(row["size_ml"]), normalized_identity(row.get("variety_design")))
-                for row in valid_by_type.get("blank_stock", [])
-            },
-            lambda item: (int(item.blank_size_ml), normalized_identity(item.variety)),
-        ),
-        (
-            "Bottom_Reel",
-            db.query(BottomStock).filter(BottomStock.factory_id == factory_id).all(),
-            {
-                (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
-                for row in valid_by_type.get("bottom_reel", [])
-            },
-            lambda item: (int(item.bottom_size_mm), normalized_identity(item.variety)),
-        ),
-        (
-            "Box_Stock",
-            db.query(BoxStock).filter(BoxStock.factory_id == factory_id).all(),
-            {
-                normalized_identity(row.get("box_type"))
-                for row in valid_by_type.get("box_stock", [])
-            },
-            lambda item: normalized_identity(item.packaging_size_name),
-        ),
-        (
-            "Plastic_Stock",
-            db.query(PlasticStock).filter(PlasticStock.factory_id == factory_id).all(),
-            {
-                (normalized_identity(row.get("plastic_size_type")), int(row["used_for_cup_size_ml"]))
-                for row in valid_by_type.get("plastic_stock", [])
-            },
-            lambda item: (normalized_identity(item.plastic_size_name), int(item.cup_size_ml)),
-        ),
-        (
-            "Finished_Goods",
-            db.query(FinalProductStock).filter(FinalProductStock.factory_id == factory_id).all(),
-            {
-                (
-                    int(row["product_size_ml"]),
-                    normalized_identity(row.get("variety_design") or "Standard/White"),
-                    normalized_identity(
-                        row.get("packaging_size_name")
-                        or f"{int(row['product_size_ml'])}ML - {row.get('variety_design') or 'Standard/White'}"
-                    ),
-                )
-                for row in valid_by_type.get("finished_goods", [])
-            },
-            lambda item: (
-                int(item.product_size_ml),
-                normalized_identity(item.variety),
-                normalized_identity(item.packaging_size_name),
-            ),
-        ),
-    ]
-    for sheet, existing_rows, uploaded_keys, key_for in kept_specs:
-        kept_count = sum(1 for item in existing_rows if key_for(item) not in uploaded_keys)
-        if kept_count:
-            issues.append(ValidationIssue(
-                row=None,
-                field="not_present_in_upload",
-                error=f"{kept_count} existing record(s): Not present in upload; kept unchanged.",
-                severity=ValidationSeverity.INFO,
-                suggested_correction="Add these records to a future workbook if they should be replaced.",
-                sheet=sheet,
-                action_type="unchanged",
-            ))
-    return issues, archived_count
+    removed_count = 0
+    for model in (BlankStock, BottomStock, BoxStock, PlasticStock, FinalProductStock):
+        removed_count += (
+            db.query(model)
+            .filter(model.factory_id == factory_id)
+            .delete(synchronize_session=False)
+        )
+    db.flush()
+    return archived_count + removed_count
 
 
 def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
@@ -2408,6 +2277,10 @@ async def bulk_upload_master_onboarding(
         "warnings": len([issue for issue in issues if issue.severity == ValidationSeverity.WARNING]),
     }
     try:
+        operation_counts["skipped"] = reset_active_onboarding_master_data(
+            db,
+            factory_id=int(current_user.factory_id),
+        )
         for sub_tab_type in BULK_TEMPLATE_COLUMNS:
             inserted_counts[sub_tab_type] = apply_bulk_rows(
                 db,
@@ -2417,17 +2290,6 @@ async def bulk_upload_master_onboarding(
                 operation_counts,
                 fg_debug_info=fg_debug_info if sub_tab_type == "finished_goods" else None
             )
-        reconciliation_issues, archived_count = reconcile_missing_master_rows(
-            db,
-            factory_id=int(current_user.factory_id),
-            valid_by_type=valid_by_type,
-        )
-        issues.extend(reconciliation_issues)
-        operation_counts["skipped"] += archived_count
-        operation_counts["unchanged"] += sum(
-            int(issue.error.split(" ", 1)[0])
-            for issue in reconciliation_issues
-        )
         operation_counts["warnings"] = len([
             issue for issue in issues if issue.severity == ValidationSeverity.WARNING
         ])
@@ -2846,6 +2708,7 @@ def onboarding_overview(
     machines = (
         db.query(Machine)
         .filter(Machine.factory_id == factory_id)
+        .filter(Machine.is_active.is_(True))
         .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc().nullslast(), Machine.id.asc())
         .all()
     )
@@ -3166,6 +3029,7 @@ def list_onboarding_customers(
     return (
         db.query(Customer)
         .filter(Customer.factory_id == str(current_user.factory_id))
+        .filter(Customer.is_active.is_(True))
         .order_by(Customer.name.asc())
         .all()
     )

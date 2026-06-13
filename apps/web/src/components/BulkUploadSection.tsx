@@ -115,7 +115,7 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
     event.target.value = "";
     if (!file) return;
     if (!window.confirm(
-      "This will update existing master data for this factory. Existing matching customers, workers, machines, materials, and products will be replaced with this sheet's values."
+      "This will replace current onboarding master data with this Excel sheet. Items not present in the sheet will be removed or archived from active dashboard views."
     )) return;
 
     setIsBusy(true);
@@ -173,10 +173,10 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
       {summary ? (
         <div className="mt-4 grid gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 sm:grid-cols-3 lg:grid-cols-7">
           <Metric label="Processed" value={summary.rows} />
-          <Metric label="Inserted" value={summary.inserted} />
-          <Metric label="Updated" value={summary.updated} />
+          <Metric label="Created" value={summary.inserted} />
+          <Metric label="Updated / Replaced" value={summary.updated} />
           <Metric label="Unchanged" value={summary.unchanged} />
-          <Metric label="Skipped" value={summary.skipped} />
+          <Metric label="Archived / Removed" value={summary.skipped} />
           <Metric label="Warnings" value={summary.warnings} />
           <Metric label="Failed" value={summary.failed} />
         </div>
