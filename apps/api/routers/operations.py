@@ -28,6 +28,8 @@ from models import (
     ActivityLog,
     AppUsageLog,
     MaterialYield,
+    ProductionBatch,
+    ProductionBatchWorkerLine,
 )
 from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
@@ -280,13 +282,13 @@ def mark_worker_present_for_production(
     return attendance_log
 
 
-@router.post("/production/daily", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
-@router.post("/production/entry", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
-def create_daily_production(
+def _create_daily_production(
     payload: DailyProductionCreate,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
     db: Session = Depends(get_db),
+    *,
+    commit: bool = True,
 ):
     factory_id = str(current_user.factory_id)
     if payload.factory_id and str(payload.factory_id) != factory_id:
@@ -683,8 +685,9 @@ def create_daily_production(
         except Exception as log_error:
             logger.exception("Suppressed activity log failure for production entry: %s", log_error)
 
-        db.commit()
-        db.refresh(production)
+        if commit:
+            db.commit()
+            db.refresh(production)
         background_tasks.add_task(
             log_activity,
             db,
@@ -749,6 +752,238 @@ def create_daily_production(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Production entry failed and was rolled back",
         ) from exc
+
+
+@router.post("/production/daily", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/production/entry", response_model=DailyProductionResponse, status_code=status.HTTP_201_CREATED)
+def create_daily_production(
+    payload: DailyProductionCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return _create_daily_production(payload, background_tasks, current_user, db)
+
+
+class ProductionBatchWorkerLineCreate(BaseModel):
+    worker_id: int = Field(..., gt=0)
+    boxes_made: int = Field(default=0, ge=0)
+    loose_packets_made: int = Field(default=0, ge=0)
+    blank_used_bora: Decimal = Field(default=Decimal("0.000"), ge=0)
+    bottom_used_roll: int = Field(default=0, ge=0)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ProductionBatchCreate(BaseModel):
+    date: date_cls
+    shift: str = Field(..., min_length=1, max_length=50)
+    machine_id: int = Field(..., gt=0)
+    finished_good_id: int = Field(..., gt=0)
+    product_size_ml: int = Field(..., gt=0)
+    variety_design: str = Field(..., min_length=1, max_length=100)
+    packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    carton_type: str = Field(..., min_length=1, max_length=100)
+    pcs_per_packet: int = Field(..., gt=0)
+    packets_per_box: int = Field(..., gt=0)
+    worker_rows: List[ProductionBatchWorkerLineCreate] = Field(..., min_length=1)
+    shift_wastage_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
+    wastage_note: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post("/production/daily-batch", status_code=status.HTTP_201_CREATED)
+def create_daily_production_batch(
+    payload: ProductionBatchCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    factory_id = str(current_user.factory_id)
+    machine = db.query(Machine).filter(
+        Machine.id == payload.machine_id,
+        Machine.factory_id == factory_id,
+    ).first()
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    sku = db.query(FinalProductStock).filter(
+        FinalProductStock.id == payload.finished_good_id,
+        FinalProductStock.factory_id == factory_id,
+    ).with_for_update().first()
+    if sku is None:
+        raise HTTPException(status_code=404, detail="Finished good SKU not found")
+    if (
+        sku.product_size_ml != payload.product_size_ml
+        or sku.variety.strip().casefold() != payload.variety_design.strip().casefold()
+        or sku.packaging_size_name.strip().casefold() != payload.packaging_size_name.strip().casefold()
+        or (sku.carton_type or "").strip().casefold() != payload.carton_type.strip().casefold()
+    ):
+        raise HTTPException(status_code=400, detail="Selected finished good SKU does not match the batch header.")
+    machine_size = machine.mould_size_ml or machine.cup_size_ml
+    if machine_size and int(machine_size) != payload.product_size_ml:
+        raise HTTPException(status_code=400, detail="Product size does not match selected machine mould size.")
+
+    duplicate_workers = len({row.worker_id for row in payload.worker_rows}) != len(payload.worker_rows)
+    if duplicate_workers:
+        raise HTTPException(status_code=400, detail="Each worker can appear only once in a production batch.")
+    if not any(row.boxes_made or row.loose_packets_made for row in payload.worker_rows):
+        raise HTTPException(status_code=400, detail="At least one worker row must contain production.")
+
+    loose_before = int(sku.loose_packets or 0)
+    total_boxes = sum(row.boxes_made for row in payload.worker_rows)
+    total_loose = sum(row.loose_packets_made for row in payload.worker_rows)
+    converted_boxes = (loose_before + total_loose) // payload.packets_per_box - (loose_before // payload.packets_per_box)
+    remaining_loose = (loose_before + total_loose) % payload.packets_per_box
+    total_blank = sum((row.blank_used_bora for row in payload.worker_rows), Decimal("0.000"))
+    total_bottom = sum(row.bottom_used_roll for row in payload.worker_rows)
+    carton_stock = db.query(BoxStock).filter(
+        BoxStock.factory_id == factory_id,
+        sql_func.lower(sql_func.trim(BoxStock.box_type)) == normalize_carton_type(sku.carton_type),
+    ).with_for_update().first()
+    required_cartons = total_boxes + converted_boxes
+    if carton_stock is None or int(carton_stock.total_boxes or 0) < required_cartons:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Insufficient Box Stock. Available: {int(carton_stock.total_boxes or 0) if carton_stock else 0} boxes, "
+                f"Required: {required_cartons} boxes."
+            ),
+        )
+
+    batch = ProductionBatch(
+        factory_id=factory_id,
+        date=payload.date,
+        shift=payload.shift.strip(),
+        machine_id=machine.id,
+        finished_good_id=sku.id,
+        carton_type=sku.carton_type,
+        total_boxes=total_boxes,
+        total_loose_packets=total_loose,
+        converted_boxes_from_loose=converted_boxes,
+        remaining_loose_packets=remaining_loose,
+        total_blank_bora=total_blank,
+        total_bottom_roll=total_bottom,
+        shift_wastage_kg=payload.shift_wastage_kg,
+        wastage_note=payload.wastage_note,
+        created_by=current_user.id,
+    )
+    db.add(batch)
+    db.flush()
+
+    responses: list[DailyProductionResponse] = []
+    try:
+        for index, worker_row in enumerate(payload.worker_rows):
+            response = _create_daily_production(
+                DailyProductionCreate(
+                    date=payload.date,
+                    worker_id=worker_row.worker_id,
+                    machine_id=payload.machine_id,
+                    product_id=payload.finished_good_id,
+                    product_size_ml=payload.product_size_ml,
+                    variety=payload.variety_design,
+                    packaging_size_name=payload.packaging_size_name,
+                    pieces_per_packet=payload.pcs_per_packet,
+                    packets_per_box_limit=payload.packets_per_box,
+                    shift="Night" if payload.shift.strip().casefold() == "night" else "Day",
+                    total_boxes_made=worker_row.boxes_made,
+                    loose_packets_made=worker_row.loose_packets_made,
+                    blank_used_bori=worker_row.blank_used_bora,
+                    bottom_used_rolls=worker_row.bottom_used_roll,
+                    wastage_kg=payload.shift_wastage_kg if index == 0 else Decimal("0.000"),
+                    remarks=worker_row.note,
+                ),
+                background_tasks,
+                current_user,
+                db,
+                commit=False,
+            )
+            responses.append(response)
+            db.add(ProductionBatchWorkerLine(
+                factory_id=factory_id,
+                batch_id=batch.id,
+                worker_id=worker_row.worker_id,
+                daily_production_id=response.production_id,
+                boxes_made=worker_row.boxes_made,
+                loose_packets_made=worker_row.loose_packets_made,
+                blank_used_bora=worker_row.blank_used_bora,
+                bottom_used_roll=worker_row.bottom_used_roll,
+                note=worker_row.note,
+            ))
+        line_converted_boxes = sum(response.boxes_from_loose for response in responses)
+        missing_carton_deduction = converted_boxes - line_converted_boxes
+        if missing_carton_deduction > 0:
+            carton_stock.total_boxes -= missing_carton_deduction
+            carton_stock.quantity = carton_stock.total_boxes
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "batch_id": batch.id,
+        "worker_line_count": len(payload.worker_rows),
+        "daily_production_ids": [response.production_id for response in responses],
+        "total_boxes_made": total_boxes,
+        "total_loose_packets_made": total_loose,
+        "converted_boxes_from_loose": converted_boxes,
+        "remaining_loose_packets": remaining_loose,
+        "finished_boxes_added": total_boxes + converted_boxes,
+        "blank_bora_deducted": float(total_blank),
+        "bottom_rolls_deducted": total_bottom,
+        "cartons_deducted": total_boxes + converted_boxes,
+        "shift_wastage_kg": float(payload.shift_wastage_kg),
+    }
+
+
+@router.get("/production/daily-batches")
+def list_daily_production_batches(
+    production_date: Optional[date_cls] = Query(default=None, alias="date"),
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    query = db.query(ProductionBatch).filter(
+        ProductionBatch.factory_id == str(current_user.factory_id)
+    )
+    if production_date is not None:
+        query = query.filter(ProductionBatch.date == production_date)
+    batches = query.order_by(ProductionBatch.date.desc(), ProductionBatch.created_at.desc()).limit(200).all()
+    worker_ids = {
+        line.worker_id
+        for batch in batches
+        for line in batch.worker_lines
+        if line.worker_id is not None
+    }
+    worker_names = {
+        worker.id: worker.name
+        for worker in db.query(Worker).filter(
+            Worker.factory_id == str(current_user.factory_id),
+            Worker.id.in_(worker_ids),
+        ).all()
+    } if worker_ids else {}
+    return [{
+        "id": batch.id,
+        "date": batch.date.isoformat(),
+        "shift": batch.shift,
+        "machine_id": batch.machine_id,
+        "finished_good_id": batch.finished_good_id,
+        "carton_type": batch.carton_type,
+        "total_boxes": batch.total_boxes,
+        "total_loose_packets": batch.total_loose_packets,
+        "converted_boxes_from_loose": batch.converted_boxes_from_loose,
+        "remaining_loose_packets": batch.remaining_loose_packets,
+        "total_blank_bora": float(batch.total_blank_bora or 0),
+        "total_bottom_roll": batch.total_bottom_roll,
+        "shift_wastage_kg": float(batch.shift_wastage_kg or 0),
+        "wastage_note": batch.wastage_note,
+        "worker_lines": [{
+            "id": line.id,
+            "worker_id": line.worker_id,
+            "worker_name": worker_names.get(line.worker_id, "Unknown worker"),
+            "boxes_made": line.boxes_made,
+            "loose_packets_made": line.loose_packets_made,
+            "blank_used_bora": float(line.blank_used_bora or 0),
+            "bottom_used_roll": line.bottom_used_roll,
+            "note": line.note,
+        } for line in batch.worker_lines],
+    } for batch in batches]
 
 
 class ProductionRejectRequest(BaseModel):

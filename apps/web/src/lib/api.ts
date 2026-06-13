@@ -259,7 +259,7 @@ export type DailyProductionCreate = {
   packaging_size_name: string;
   pieces_per_packet: number;
   packets_per_box_limit: number;
-  shift: "Day" | "Night";
+  shift: "Day" | "Night" | "Custom";
   total_boxes_made: number;
   loose_packets_made: number;
   blank_used_bori: number;
@@ -280,6 +280,29 @@ export type ProductionAlertsResponse = {
     total_raw_material_kg: number;
     production_cost: number;
   }>;
+};
+
+export type ProductionBatchCreate = {
+  date: string;
+  shift: string;
+  machine_id: number;
+  finished_good_id: number;
+  product_size_ml: number;
+  variety_design: string;
+  packaging_size_name: string;
+  carton_type: string;
+  pcs_per_packet: number;
+  packets_per_box: number;
+  worker_rows: Array<{
+    worker_id: number;
+    boxes_made: number;
+    loose_packets_made: number;
+    blank_used_bora: number;
+    bottom_used_roll: number;
+    note?: string | null;
+  }>;
+  shift_wastage_kg: number;
+  wastage_note?: string | null;
 };
 
 export type ProductionHistoryEntry = {
@@ -1109,6 +1132,10 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
     responseType: "blob", 
     params: inline ? { inline: true } : undefined 
   });
+}
+
+export function createDailyProductionBatch(payload: ProductionBatchCreate) {
+  return api.post("/production/daily-batch", payload);
 }
 
 export function deleteInvoice(invoiceId: number, confirmation: string, action?: string) {

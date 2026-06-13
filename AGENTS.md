@@ -341,6 +341,7 @@ Follow this sequence unless a P0 incident overrides it.
 - Finished-goods stock calculations must include only `ACTIVE` production rows.
 - Production history and worker summaries read `daily_productions` directly and remain factory scoped.
 - Owner rejection requires a reason, records actor/timestamp, writes an ActivityLog, and reverses finished-goods impact through deterministic stock recalculation.
+- Shift production batches are persisted in `production_batches` with worker detail in `production_batch_worker_lines`; each worker line also creates a compatibility `DailyProduction` row so existing worker summaries, briefing, costing, and historical reports remain intact.
 
 ## 19. Profit Intelligence
 

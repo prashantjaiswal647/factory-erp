@@ -3,7 +3,7 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  createDailyProduction,
+  createDailyProductionBatch,
   createFinishedGoodVariant,
   getDashboardMachines,
   getDashboardWorkers,
@@ -14,6 +14,7 @@ import {
 } from "../lib/api";
 import type {
   DailyProductionCreate,
+  ProductionBatchCreate,
   DashboardMachine,
   DashboardWorker,
   FinalStockOption,
@@ -93,6 +94,16 @@ export default function ProductionPage() {
   const [expandedWorker, setExpandedWorker] = useState<number | null>(null);
   const [rejecting, setRejecting] = useState<ProductionHistoryEntry | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [workerRows, setWorkerRows] = useState([{
+    worker_id: 0,
+    boxes_made: 0,
+    loose_packets_made: 0,
+    blank_used_bora: 0,
+    bottom_used_roll: 0,
+    note: "",
+  }]);
+  const [shiftWastageKg, setShiftWastageKg] = useState(0);
+  const [wastageNote, setWastageNote] = useState("");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -187,45 +198,51 @@ export default function ProductionPage() {
   }
 
   async function submit() {
-    if (!form.machine_id || !form.product_id || finalStockOptions.length === 0) {
+    if (!form.machine_id || !form.product_id || !selectedProduct) {
       setError("Inventory mapping incomplete for this SKU.");
+      return;
+    }
+    if (!workerRows.length || workerRows.some((row) => !row.worker_id)) {
+      setError("Select a worker for every production row.");
       return;
     }
     setIsSaving(true);
     setError("");
     try {
       const normalizedDate = dateOnly(form.date);
-      const workerId = numberOrDefault(form.worker_id);
       const machineId = numberOrDefault(form.machine_id);
-      const payload: DailyProductionCreate = {
-        factory_id: String(localStorage.getItem("factory_id") || ""),
+      const payload: ProductionBatchCreate = {
         date: normalizedDate,
-        operator_id: workerId > 0 ? workerId : null,
-        worker_id: workerId,
+        shift: String(form.shift || "Day"),
         machine_id: machineId,
-        product_id: numberOrDefault(form.product_id) > 0 ? numberOrDefault(form.product_id) : null,
-        product_size_ml: numberOrDefault(form.product_size_ml) > 0 ? numberOrDefault(form.product_size_ml) : null,
-        variety: String(form.variety || "Standard/White").trim(),
-        packaging_size: form.packaging_size ? String(form.packaging_size).trim() : null,
+        finished_good_id: numberOrDefault(form.product_id),
+        product_size_ml: numberOrDefault(form.product_size_ml),
+        variety_design: String(form.variety || "Standard/White").trim(),
         packaging_size_name: String(form.packaging_size_name || form.packaging_size || "").trim(),
-        pieces_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
-        packets_per_box_limit: numberOrDefault(form.packets_per_box_limit, 1) || 1,
-        shift: form.shift === "Night" ? "Night" : "Day",
-        total_boxes_made: numberOrDefault(form.total_boxes_made),
-        loose_packets_made: numberOrDefault(form.loose_packets_made),
-        blank_used_bori: numberOrDefault(form.blank_used_bori),
-        bottom_used_rolls: numberOrDefault(form.bottom_used_rolls),
-        wastage_kg: numberOrDefault(form.wastage_kg),
-        remarks: null
+        carton_type: String(selectedProduct.carton_type || ""),
+        pcs_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
+        packets_per_box: numberOrDefault(form.packets_per_box_limit, 1) || 1,
+        worker_rows: workerRows.map((row) => ({
+          worker_id: row.worker_id,
+          boxes_made: numberOrDefault(row.boxes_made),
+          loose_packets_made: numberOrDefault(row.loose_packets_made),
+          blank_used_bora: numberOrDefault(row.blank_used_bora),
+          bottom_used_roll: numberOrDefault(row.bottom_used_roll),
+          note: row.note.trim() || null,
+        })),
+        shift_wastage_kg: numberOrDefault(shiftWastageKg),
+        wastage_note: wastageNote.trim() || null,
       };
-      console.log("daily production payload", payload);
-      const response = await createDailyProduction(payload);
-      setToast("Daily Production Saved Successfully! Attendance automatically marked as 'Present' for the worker.");
+      const response = await createDailyProductionBatch(payload);
+      setToast("Shift production batch saved successfully.");
       window.dispatchEvent(new CustomEvent("production:daily-saved", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("attendance:updated", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("inventory:updated", { detail: response.data }));
       void loadOptions();
       void loadProductionVisibility();
+      setWorkerRows([{ worker_id: workers[0]?.id || 0, boxes_made: 0, loose_packets_made: 0, blank_used_bora: 0, bottom_used_roll: 0, note: "" }]);
+      setShiftWastageKg(0);
+      setWastageNote("");
       setForm({
         ...initialForm,
         worker_id: workers[0]?.id || 0,
@@ -450,15 +467,10 @@ export default function ProductionPage() {
           <h2 className="text-lg font-semibold text-zinc-950">Daily Production</h2>
         </div>
 
+        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Shift Header</h3>
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Date" type="date" value={form.date} onChange={(date) => setForm({ ...form, date })} />
-          <SelectField label="Worker" value={form.worker_id} onChange={(worker_id) => setForm({ ...form, worker_id })}>
-            {workers.map((worker) => (
-              <option key={worker.id} value={worker.id}>
-                {worker.id} - {worker.name}
-              </option>
-            ))}
-          </SelectField>
+          <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" | "Custom" })} options={["Day", "Night", "Custom"]} />
           <SelectField
             label="Machine"
             value={form.machine_id}
@@ -542,23 +554,32 @@ export default function ProductionPage() {
           <div className="self-end rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
             Carton: <strong>{selectedProduct?.carton_type || "Not configured"}</strong>
           </div>
-          <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" })} options={["Day", "Night"]} />
           <NumberField label="Pieces per Packet" value={form.pieces_per_packet} onChange={(pieces_per_packet) => setForm({ ...form, pieces_per_packet })} />
           <NumberField label="Packets per Box" value={form.packets_per_box_limit} onChange={(packets_per_box_limit) => setForm({ ...form, packets_per_box_limit })} />
-          <NumberField label="Total Boxes Made" value={form.total_boxes_made} onChange={(total_boxes_made) => setForm({ ...form, total_boxes_made })} />
-          <NumberField label="Loose Packets Made" value={form.loose_packets_made} onChange={(loose_packets_made) => setForm({ ...form, loose_packets_made })} />
         </div>
-        {selectedProduct?.carton_type ? (
-          <p className="mt-3 text-sm font-medium text-zinc-700">
-            {numberOrDefault(form.total_boxes_made) + Math.floor(numberOrDefault(form.loose_packets_made) / Math.max(numberOrDefault(form.packets_per_box_limit, 1), 1))} {selectedProduct.carton_type} cartons will be deducted.
-          </p>
-        ) : null}
 
         <div className="mt-6 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Raw Material Consumption</h3>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <NumberField label="Blank Used (Bora)" value={form.blank_used_bori} onChange={(blank_used_bori) => setForm({ ...form, blank_used_bori })} />
-            <NumberField label="Bottom Used (Roll)" value={form.bottom_used_rolls} onChange={(bottom_used_rolls) => setForm({ ...form, bottom_used_rolls })} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Worker Production Rows</h3>
+            <button className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" type="button" onClick={() => setWorkerRows((rows) => [...rows, { worker_id: 0, boxes_made: 0, loose_packets_made: 0, blank_used_bora: 0, bottom_used_roll: 0, note: "" }])}>Add Worker Row</button>
+          </div>
+          <div className="mt-3 space-y-3">
+            {workerRows.map((row, index) => (
+              <div className="grid gap-3 rounded-md border bg-white p-3 md:grid-cols-6" key={index}>
+                <SelectField label="Worker" value={row.worker_id} onChange={(worker_id) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, worker_id } : item))}>
+                  <option value={0}>Select Worker</option>
+                  {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+                </SelectField>
+                <NumberField label="Boxes Made" value={row.boxes_made} onChange={(boxes_made) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, boxes_made } : item))} />
+                <NumberField label="Loose Packets" value={row.loose_packets_made} onChange={(loose_packets_made) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, loose_packets_made } : item))} />
+                <NumberField label="Blank Used (Bora)" value={row.blank_used_bora} onChange={(blank_used_bora) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, blank_used_bora } : item))} />
+                <NumberField label="Bottom Used (Roll)" value={row.bottom_used_roll} onChange={(bottom_used_roll) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, bottom_used_roll } : item))} />
+                <div className="flex items-end gap-2">
+                  <input className="h-10 min-w-0 flex-1 rounded-md border px-2 text-sm" placeholder="Optional note" value={row.note} onChange={(event) => setWorkerRows((rows) => rows.map((item, rowIndex) => rowIndex === index ? { ...item, note: event.target.value } : item))} />
+                  <button className="h-10 rounded-md border px-3 text-red-700 disabled:text-zinc-300" disabled={workerRows.length === 1} type="button" onClick={() => setWorkerRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}>Remove</button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -568,12 +589,12 @@ export default function ProductionPage() {
             <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-800">Daily Wastage</h3>
           </div>
           <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <NumberField label="Wastage Amount (KG)" value={form.wastage_kg} onChange={(wastage_kg) => setForm({ ...form, wastage_kg })} />
-            <div className="rounded-md border border-amber-200 bg-white px-4 py-3 text-sm text-amber-900">
-              Wastage 2% se zyada hua to Munshi Alert dashboard par red reminder dikhayega.
-            </div>
+            <NumberField label="Total Shift Wastage (KG)" value={shiftWastageKg} onChange={setShiftWastageKg} />
+            <label className="text-sm font-medium text-zinc-700">Wastage Note / Reason<input className="mt-1 h-10 w-full rounded-md border bg-white px-3" value={wastageNote} onChange={(event) => setWastageNote(event.target.value)} /></label>
           </div>
         </div>
+
+        <BatchPreview workerRows={workerRows} packetsPerBox={numberOrDefault(form.packets_per_box_limit, 1)} previousLoose={numberOrDefault(selectedProduct?.loose_packets)} cartonType={selectedProduct?.carton_type || "Carton"} wastageKg={shiftWastageKg} />
 
         {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
@@ -812,6 +833,43 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
     <button className="fixed right-5 top-20 z-50 rounded-md bg-[#16A34A] px-4 py-3 text-sm font-semibold text-white shadow-lg" type="button" onClick={onClose}>
       {message}
     </button>
+  );
+}
+
+function BatchPreview({
+  workerRows,
+  packetsPerBox,
+  previousLoose,
+  cartonType,
+  wastageKg,
+}: {
+  workerRows: Array<{ boxes_made: number; loose_packets_made: number; blank_used_bora: number; bottom_used_roll: number }>;
+  packetsPerBox: number;
+  previousLoose: number;
+  cartonType: string;
+  wastageKg: number;
+}) {
+  const boxes = workerRows.reduce((total, row) => total + numberOrDefault(row.boxes_made), 0);
+  const loose = workerRows.reduce((total, row) => total + numberOrDefault(row.loose_packets_made), 0);
+  const converted = Math.floor((previousLoose + loose) / Math.max(packetsPerBox, 1)) - Math.floor(previousLoose / Math.max(packetsPerBox, 1));
+  const remaining = (previousLoose + loose) % Math.max(packetsPerBox, 1);
+  const blank = workerRows.reduce((total, row) => total + numberOrDefault(row.blank_used_bora), 0);
+  const bottom = workerRows.reduce((total, row) => total + numberOrDefault(row.bottom_used_roll), 0);
+  return (
+    <div className="mt-6 rounded-lg border border-brand-200 bg-brand-50 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-brand-800">Preview Before Save</h3>
+      <div className="mt-3 grid gap-2 text-sm md:grid-cols-3">
+        <p>Total boxes made: <strong>{boxes}</strong></p>
+        <p>Total loose packets: <strong>{loose}</strong></p>
+        <p>Converted loose boxes: <strong>{converted}</strong></p>
+        <p>Remaining loose packets: <strong>{remaining}</strong></p>
+        <p>Finished goods to add: <strong>{boxes + converted} boxes</strong></p>
+        <p>{cartonType} stock to deduct: <strong>{boxes + converted}</strong></p>
+        <p>Blank to deduct: <strong>{blank} bora</strong></p>
+        <p>Bottom to deduct: <strong>{bottom} rolls</strong></p>
+        <p>Shift wastage: <strong>{wastageKg} kg</strong></p>
+      </div>
+    </div>
   );
 }
 

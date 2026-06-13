@@ -17,6 +17,8 @@ from models import (
     Factory,
     FinalProductStock,
     Machine,
+    ProductionBatch,
+    ProductionBatchWorkerLine,
     User,
     Worker,
 )
@@ -44,6 +46,8 @@ def mapped_production_client():
         Factory(id=1, name="Mapping Factory", subscription_status="active", active_plan="growth"),
         User(id=1, factory_id=1, username="owner@test", email="owner@test", role="Owner", password_hash="x", is_verified=True),
         Worker(id=1, factory_id=1, name="Raju", is_active=True),
+        Worker(id=2, factory_id=1, name="Mohan", is_active=True),
+        Worker(id=3, factory_id=1, name="Sohan", is_active=True),
         Machine(id=1, factory_id=1, name="Machine 210", machine_number="1", mould_size_ml=210, cup_size_ml=210, bottom_size_mm=47, is_active=True),
         Machine(id=2, factory_id=1, name="Machine 55", machine_number="2", mould_size_ml=55, cup_size_ml=55, bottom_size_mm=35, is_active=True),
         BlankStock(factory_id=1, blank_size_ml=210, variety="White", linked_bottom_size_mm=47, weight_per_bora_kg=Decimal("40"), total_boras=Decimal("10"), total_qty_kg=Decimal("400")),
@@ -90,4 +94,84 @@ def test_machine_scoped_options_and_exact_inventory_impact(mapped_production_cli
     assert db.get(FinalProductStock, 2101).current_quantity == 3
     assert db.query(BlankStock).filter_by(blank_size_ml=210, variety="White").one().total_boras == Decimal("9")
     assert db.query(BottomStock).filter_by(bottom_size_mm=47, variety="White").one().total_rolls == 9
+    db.close()
+
+
+def test_shift_batch_saves_worker_lines_and_stock_atomically(mapped_production_client):
+    client, session_factory = mapped_production_client
+    db = session_factory()
+    sku = db.get(FinalProductStock, 2101)
+    sku.loose_packets = 5
+    db.commit()
+    db.close()
+
+    payload = {
+        "date": "2026-06-04",
+        "shift": "Night",
+        "machine_id": 1,
+        "finished_good_id": 2101,
+        "product_size_ml": 210,
+        "variety_design": "White",
+        "packaging_size_name": "210-48",
+        "carton_type": "Big Box",
+        "pcs_per_packet": 48,
+        "packets_per_box": 10,
+        "worker_rows": [
+            {"worker_id": 1, "boxes_made": 2, "loose_packets_made": 2, "blank_used_bora": 1, "bottom_used_roll": 1},
+            {"worker_id": 2, "boxes_made": 3, "loose_packets_made": 2, "blank_used_bora": 1, "bottom_used_roll": 1},
+            {"worker_id": 3, "boxes_made": 1, "loose_packets_made": 2, "blank_used_bora": 1, "bottom_used_roll": 1},
+        ],
+        "shift_wastage_kg": 1.25,
+        "wastage_note": "Shift setup loss",
+    }
+    response = client.post("/api/production/daily-batch", json=payload)
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["worker_line_count"] == 3
+    assert body["converted_boxes_from_loose"] == 1
+    assert body["remaining_loose_packets"] == 1
+    assert body["finished_boxes_added"] == 7
+    assert body["cartons_deducted"] == 7
+
+    db = session_factory()
+    batch = db.query(ProductionBatch).one()
+    assert batch.shift_wastage_kg == Decimal("1.250")
+    assert db.query(ProductionBatchWorkerLine).count() == 3
+    assert db.get(FinalProductStock, 2101).current_quantity == 9
+    assert db.query(BoxStock).filter_by(box_type="Big Box").one().total_boxes == 13
+    assert db.query(BlankStock).filter_by(blank_size_ml=210).one().total_boras == Decimal("7")
+    assert db.query(BottomStock).filter_by(bottom_size_mm=47).one().total_rolls == 7
+    db.close()
+
+
+def test_shift_batch_inventory_failure_rolls_back_everything(mapped_production_client):
+    client, session_factory = mapped_production_client
+    db = session_factory()
+    db.query(BoxStock).filter_by(box_type="Big Box").one().total_boxes = 1
+    db.commit()
+    db.close()
+
+    response = client.post("/api/production/daily-batch", json={
+        "date": "2026-06-04",
+        "shift": "Day",
+        "machine_id": 1,
+        "finished_good_id": 2101,
+        "product_size_ml": 210,
+        "variety_design": "White",
+        "packaging_size_name": "210-48",
+        "carton_type": "Big Box",
+        "pcs_per_packet": 48,
+        "packets_per_box": 10,
+        "worker_rows": [
+            {"worker_id": 1, "boxes_made": 2, "loose_packets_made": 0, "blank_used_bora": 1, "bottom_used_roll": 1},
+            {"worker_id": 2, "boxes_made": 2, "loose_packets_made": 0, "blank_used_bora": 1, "bottom_used_roll": 1},
+        ],
+        "shift_wastage_kg": 0,
+    })
+    assert response.status_code == 400
+    db = session_factory()
+    assert db.query(ProductionBatch).count() == 0
+    assert db.query(ProductionBatchWorkerLine).count() == 0
+    assert db.query(BoxStock).filter_by(box_type="Big Box").one().total_boxes == 1
+    assert db.query(BlankStock).filter_by(blank_size_ml=210).one().total_boras == Decimal("10")
     db.close()

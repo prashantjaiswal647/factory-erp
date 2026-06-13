@@ -1381,6 +1381,45 @@ class DailyProduction(TenantMixin, Base):
     )
 
 
+class ProductionBatch(TenantMixin, Base):
+    __tablename__ = "production_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    shift = Column(String(50), nullable=False, index=True)
+    machine_id = Column(Integer, ForeignKey("machines.id"), nullable=False, index=True)
+    finished_good_id = Column(Integer, ForeignKey("final_product_stock.id"), nullable=False, index=True)
+    carton_type = Column(String(100), nullable=False)
+    total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
+    total_loose_packets = Column(Integer, nullable=False, default=0, server_default="0")
+    converted_boxes_from_loose = Column(Integer, nullable=False, default=0, server_default="0")
+    remaining_loose_packets = Column(Integer, nullable=False, default=0, server_default="0")
+    total_blank_bora = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    total_bottom_roll = Column(Integer, nullable=False, default=0, server_default="0")
+    shift_wastage_kg = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    wastage_note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    worker_lines = relationship("ProductionBatchWorkerLine", back_populates="batch", cascade="all, delete-orphan")
+
+
+class ProductionBatchWorkerLine(TenantMixin, Base):
+    __tablename__ = "production_batch_worker_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("production_batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    worker_id = Column(Integer, ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
+    daily_production_id = Column(Integer, ForeignKey("daily_productions.id", ondelete="SET NULL"), nullable=True, index=True)
+    boxes_made = Column(Integer, nullable=False, default=0, server_default="0")
+    loose_packets_made = Column(Integer, nullable=False, default=0, server_default="0")
+    blank_used_bora = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    bottom_used_roll = Column(Integer, nullable=False, default=0, server_default="0")
+    note = Column(Text, nullable=True)
+
+    batch = relationship("ProductionBatch", back_populates="worker_lines")
+
+
 class DailySale(TenantMixin, Base):
     __tablename__ = "daily_sales"
 
