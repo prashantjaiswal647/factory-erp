@@ -197,8 +197,8 @@ def _build_minimal_workbook() -> bytes:
     raw.append(["ACTUAL", 55, 20, 80])
     # Section C — Box Packaging
     raw.append(["SECTION C: BOX PACKAGING STOCK"])
-    raw.append(["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"])
-    raw.append(["ACTUAL", "5-ply", 2000, 18])
+    raw.append(["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs", "size_for_finished_product"])
+    raw.append(["ACTUAL", "5-ply", 2000, 18, "100"])
     # Section D — PP Plastic
     raw.append(["SECTION D: PP PLASTIC PACKAGING STOCK"])
     raw.append(["row_type", "plastic_size_type", "used_for_cup_size_ml",
@@ -208,9 +208,9 @@ def _build_minimal_workbook() -> bytes:
     fg = wb.create_sheet("Finished Goods")
     fg.append(["INSTRUCTION: row_type=ACTUAL rows are imported; row_type=SAMPLE rows are skipped."])
     fg.append(["row_type", "product_size_ml", "variety_design", "packaging_size_name",
-               "pcs_per_packet", "packets_per_box", "initial_stock_boxes"])
-    fg.append(["SAMPLE", 100, "Standard/White", "Box-1", 100, 10, 0])
-    fg.append(["ACTUAL", 100, "Standard/White", "100ML - Standard/White", 100, 10, 200])
+               "carton_type", "pcs_per_packet", "packets_per_box", "initial_stock_boxes"])
+    fg.append(["SAMPLE", 100, "Standard/White", "Box-1", "5-ply", 100, 10, 0])
+    fg.append(["ACTUAL", 100, "Standard/White", "100ML - Standard/White", "5-ply", 100, 10, 200])
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -407,23 +407,28 @@ def test_pilot_zero_touch_acceptance_walks_all_thirteen_steps(pilot_app):
         packaging_size_name = product.packaging_size_name
         pieces_per_packet = product.pieces_per_packet or 100
         packets_per_box_limit = product.packets_per_box_limit or 10
+        product.carton_type = product.carton_type or "Big Box"
         box_stock = (
             db.query(BoxStock)
             .filter(
                 BoxStock.factory_id == factory_id,
-                BoxStock.packaging_size_name == product.packaging_size_name,
+                BoxStock.box_type == product.carton_type,
             )
             .first()
         )
         if box_stock is None:
             box_stock = BoxStock(
                 factory_id=factory_id,
-                packaging_size_name=product.packaging_size_name,
+                packaging_size_name=product.carton_type,
+                box_type=product.carton_type,
+                size_for_finished_product=str(product.product_size_ml),
                 total_boxes=10,
                 quantity=10,
             )
             db.add(box_stock)
         else:
+            box_stock.box_type = product.carton_type
+            box_stock.size_for_finished_product = str(product.product_size_ml)
             box_stock.total_boxes = max(int(box_stock.total_boxes or 0), 10)
             box_stock.quantity = max(int(box_stock.quantity or 0), 10)
         db.commit()

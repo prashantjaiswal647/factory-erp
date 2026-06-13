@@ -690,6 +690,7 @@ def test_finished_goods_bulk_upload_creates_final_product_stock():
                     "product_size_ml": 250,
                     "variety_design": "Spiderman Design",
                     "packaging_size_name": "250ML Spiderman Carton",
+                    "carton_type": "Big Box",
                     "pcs_per_packet": 100,
                     "packets_per_box": 10,
                     "initial_stock_boxes": 5,
@@ -725,8 +726,8 @@ def test_finished_goods_real_workbook_headers_are_parsed_and_reupload_is_idempot
     frames = pd.read_excel(BytesIO(workbook.getvalue()), sheet_name=None, header=None)
     finished_goods = frames["Finished Goods"]
     real_rows = [
-        ["ACTUAL", "SKU-LOVELY-48", 210, "Lovely day", "210- lovely day - 48*62", 48, 62, 20, 0],
-        ["ACTUAL", "SKU-LOVELY-45", 210, "Lovely day", "210- lovely day - 45*67", 45, 65, 26, 0],
+        ["ACTUAL", "SKU-LOVELY-48", 210, "Lovely day", "210- lovely day - 48*62", "Big Box", 48, 62, 20, 0],
+        ["ACTUAL", "SKU-LOVELY-45", 210, "Lovely day", "210- lovely day - 45*67", "Big Box", 45, 65, 26, 0],
     ]
     frames["Finished Goods"] = pd.concat(
         [finished_goods, pd.DataFrame(real_rows, columns=finished_goods.columns)],
@@ -749,6 +750,7 @@ def test_finished_goods_real_workbook_headers_are_parsed_and_reupload_is_idempot
         "product_size_ml",
         "variety_design",
         "packaging_size_name",
+        "carton_type",
         "pcs_per_packet",
         "packets_per_box",
         "initial_stock_boxes",

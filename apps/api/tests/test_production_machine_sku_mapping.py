@@ -48,10 +48,10 @@ def mapped_production_client():
         Machine(id=2, factory_id=1, name="Machine 55", machine_number="2", mould_size_ml=55, cup_size_ml=55, bottom_size_mm=35, is_active=True),
         BlankStock(factory_id=1, blank_size_ml=210, variety="White", linked_bottom_size_mm=47, weight_per_bora_kg=Decimal("40"), total_boras=Decimal("10"), total_qty_kg=Decimal("400")),
         BottomStock(factory_id=1, bottom_size_mm=47, variety="White", total_rolls=10, total_weight_kg=Decimal("100"), total_qty_kg=Decimal("100")),
-        BoxStock(factory_id=1, packaging_size_name="210-48", total_boxes=20, quantity=20),
-        FinalProductStock(id=2101, factory_id=1, product_size_ml=210, variety="White", packaging_size_name="210-48", pieces_per_packet=48, packets_per_box_limit=10, current_quantity=2, total_boxes=2, loose_packets=0),
-        FinalProductStock(id=2102, factory_id=1, product_size_ml=210, variety="Lovely Day", packaging_size_name="210-45", pieces_per_packet=45, packets_per_box_limit=10, current_quantity=0, total_boxes=0, loose_packets=0),
-        FinalProductStock(id=5501, factory_id=1, product_size_ml=55, variety="Plain White", packaging_size_name="55-40", pieces_per_packet=40, packets_per_box_limit=10, current_quantity=0, total_boxes=0, loose_packets=0),
+        BoxStock(factory_id=1, packaging_size_name="Big Box", box_type="Big Box", size_for_finished_product="210,250,300", total_boxes=20, quantity=20),
+        FinalProductStock(id=2101, factory_id=1, product_size_ml=210, variety="White", packaging_size_name="210-48", carton_type="Big Box", pieces_per_packet=48, packets_per_box_limit=10, current_quantity=2, total_boxes=2, loose_packets=0),
+        FinalProductStock(id=2102, factory_id=1, product_size_ml=210, variety="Lovely Day", packaging_size_name="210-45", carton_type="Big Box", pieces_per_packet=45, packets_per_box_limit=10, current_quantity=0, total_boxes=0, loose_packets=0),
+        FinalProductStock(id=5501, factory_id=1, product_size_ml=55, variety="Plain White", packaging_size_name="55-40", carton_type="Small Box", pieces_per_packet=40, packets_per_box_limit=10, current_quantity=0, total_boxes=0, loose_packets=0),
     ])
     db.commit()
     db.close()

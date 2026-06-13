@@ -55,16 +55,16 @@ def owner_workbook() -> bytes:
             [68, "White", 20, 100],
         ),
         "Box_Stock": (
-            ["Carton Type", "Carton Quantity", "Price Per Box Rs"],
-            ["210 White Carton", 50, 20],
+            ["Carton Type", "Carton Quantity", "Price Per Box Rs", "Size For Finished Product"],
+            ["Big Box", 50, 20, "210,250,300"],
         ),
         "Plastic_Stock": (
             ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
             ["210 Sleeve", 210, 5, 20, 120],
         ),
         "Finished_Goods": (
-            ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes"],
-            [210, "White", "210 White Carton", 48, 10, 5],
+            ["Cup Size ML", "Design", "Packaging Size Name", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes"],
+            [210, "White", "210 White Carton", "Big Box", 48, 10, 5],
         ),
         "Costing_Optional": (["Paper Price Per KG"], [100]),
     }
@@ -191,14 +191,14 @@ def test_owner_validation_auto_normalizes_mapping_and_plastic_units():
             ["Bottom Size MM", "Design", "Total Individual Rolls", "Total Weight KG"],
             [[68, "White", 10, 20]],
         ),
-        "Box_Stock": (["Carton Type", "Carton Quantity"], [["210-White", 5]]),
+        "Box_Stock": (["Carton Type", "Carton Quantity", "Size For Finished Product"], [["Big Box", 5, "210"]]),
         "Plastic_Stock": (
             ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
             [["Sleeve", "210 ml", 2, 20, 100], [None, None, None, None, None]],
         ),
         "Finished_Goods": (
-            ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes"],
-            [[210, "", " 210-White ", 48, 10, 1]],
+            ["Cup Size ML", "Design", "Packaging Size Name", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes"],
+            [[210, "", "210-White", "Big Box", 48, 10, 1]],
         ),
         "Costing_Optional": (["Paper Price Per KG"], []),
     }
@@ -290,8 +290,8 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
             ],
         ),
         "Box_Stock": (
-            ["Carton Type", "Carton Quantity"],
-            [["65 White", 5], ["65 Black", 5], ["65 Hot", 5]],
+            ["Carton Type", "Carton Quantity", "Size For Finished Product"],
+            [["Small Box", 15, "55,65,85,100,150,200"]],
         ),
         "Plastic_Stock": (
             ["Plastic Type", "Used For Cup Sizes ML", "Total Boras Sacks"],
@@ -303,11 +303,11 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
             ],
         ),
         "Finished_Goods": (
-            ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton"],
+            ["Cup Size ML", "Design", "Packaging Size Name", "Carton Type", "Pieces Per Packet", "Packets Per Carton"],
             [
-                [65, "White", "65 White", 50, 20],
-                [65, "black", "65 Black", 50, 20],
-                [65, "hot", "65 Hot", 50, 20],
+                [65, "White", "65 White", "Small Box", 50, 20],
+                [65, "black", "65 Black", "Small Box", 50, 20],
+                [65, "hot", "65 Hot", "Small Box", 50, 20],
             ],
         ),
         "Costing_Optional": (["Paper Price Per KG"], []),
@@ -474,6 +474,35 @@ def test_metrics_do_not_create_visible_plain_white_stock():
         db.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_finished_goods_carton_mapping_uses_carton_type_and_allowed_sizes():
+    valid = {
+        "box_stock": [
+            {"box_type": "Small Box", "size_for_finished_product": "55,65,85,100,150,200"},
+            {"box_type": "Big Box", "size_for_finished_product": "210,250,300"},
+        ],
+        "blank_stock": [{"size_ml": 210, "variety_design": "lovely day", "linked_bottom_size_mm": 68}],
+        "bottom_reel": [{"bottom_size_mm": 68}],
+        "finished_goods": [{
+            "_row_number": 2,
+            "product_size_ml": 210,
+            "variety_design": "lovely day",
+            "packaging_size_name": "210- lovely day - 48*62",
+            "carton_type": "Big Box",
+        }],
+    }
+    assert validate_bulk_cross_sheet(valid, strict_validation=True) == []
+
+    valid["finished_goods"][0]["carton_type"] = "Small Box"
+    issues = validate_bulk_cross_sheet(valid, strict_validation=True)
+    assert any(
+        issue.error == (
+            "This carton type is not configured for product size 210ml. "
+            "Add 210 to Size For Finished Product for Small Box."
+        )
+        for issue in issues
+    )
 
 
 def _single_sheet_bytes(workbook: Workbook) -> bytes:

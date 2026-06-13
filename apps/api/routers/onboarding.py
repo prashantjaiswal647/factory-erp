@@ -68,6 +68,7 @@ from schemas import (
 )
 from routers.operations import log_factory_operation
 from services.activity_logger import log_activity
+from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes, serialize_finished_product_sizes
 from services.n8n_sync import sync_data_to_n8n_bg
 from services.bulk_validation import (
     BulkValidationReport,
@@ -90,9 +91,9 @@ BULK_TEMPLATE_COLUMNS = {
     "machine": ["row_type", "machine_restore_key", "machine_number", "machine_name", "machine_type", "default_operating_speed", "target_output_per_shift", "mould_size_ml", "bottom_size_mm"],
     "blank_stock": ["row_type", "material_restore_key", "material_name", "variety_design", "size_ml", "linked_bottom_size_mm", "weight_per_bora_kg", "total_boras_sacks"],
     "bottom_reel": ["row_type", "material_restore_key", "bottom_size_mm", "variety_design", "total_individual_rolls", "total_weight_kg", "bottom_price_per_kg"],
-    "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs"],
+    "box_stock": ["row_type", "box_type", "box_quantity_pieces", "price_per_box_rs", "size_for_finished_product"],
     "plastic_stock": ["row_type", "plastic_size_type", "used_for_cup_size_ml", "total_boras_sacks", "weight_per_bora_kg", "price_per_kg_rs"],
-    "finished_goods": ["row_type", "product_restore_key", "product_size_ml", "variety_design", "packaging_size_name", "pcs_per_packet", "packets_per_box", "initial_stock_boxes", "initial_loose_packets"],
+    "finished_goods": ["row_type", "product_restore_key", "product_size_ml", "variety_design", "packaging_size_name", "carton_type", "pcs_per_packet", "packets_per_box", "initial_stock_boxes", "initial_loose_packets"],
 }
 
 BULK_MASTER_SHEETS = {
@@ -140,6 +141,7 @@ OWNER_HEADER_ALIASES = {
         "carton_type": "box_type",
         "packaging_size_name": "box_type",
         "quantity": "box_quantity_pieces",
+        "size_for_finished_product": "size_for_finished_product",
     },
     "plastic_stock": {
         "cup_size_ml": "used_for_cup_size_ml",
@@ -149,8 +151,7 @@ OWNER_HEADER_ALIASES = {
     },
     "finished_goods": {
         "cup_size_ml": "product_size_ml",
-        "carton_type": "packaging_size_name",
-        "box_type": "packaging_size_name",
+        "box_type": "carton_type",
     },
 }
 
@@ -170,9 +171,9 @@ OWNER_TEMPLATE_COLUMNS = {
     "Machines": ["Machine Number", "Machine Name", "Machine Type", "Machine Size ML", "Bottom Size MM"],
     "Cup_Blank": ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG", "Total Boras Sacks"],
     "Bottom_Reel": ["Bottom Size MM", "Opening Rolls", "Total Weight KG"],
-    "Box_Stock": ["Carton Type", "Carton Quantity", "Price Per Box Rs"],
+    "Box_Stock": ["Carton Type", "Carton Quantity", "Price Per Box Rs", "Size For Finished Product"],
     "Plastic_Stock": ["Plastic Type", "Used For Cup Sizes ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
-    "Finished_Goods": ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes", "Opening Loose Packets"],
+    "Finished_Goods": ["Cup Size ML", "Design", "Packaging Size Name", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes", "Opening Loose Packets"],
     "Costing_Optional": ["Paper Price Per KG", "Bottom Price Per KG", "Plastic Price Per KG", "Carton Price"],
 }
 TEXT_BULK_COLUMNS = {
@@ -202,6 +203,8 @@ TEXT_BULK_COLUMNS = {
     "plastic_size_type",
     "variety_design",
     "packaging_size_name",
+    "carton_type",
+    "size_for_finished_product",
     "email",
     "opening_outstanding_note",
     "advance_balance_note",
@@ -235,8 +238,7 @@ HEADER_ALIASES = {
     "variety": "variety_design",
     "packing_name": "packaging_size_name",
     "packaging_name": "packaging_size_name",
-    "carton_type": "packaging_size_name",
-    "carton_name": "packaging_size_name",
+    "carton_name": "carton_type",
     "pieces_per_packet": "pcs_per_packet",
     "packets_per_carton": "packets_per_box",
     "carton_quantity": "box_quantity_pieces",
@@ -315,9 +317,9 @@ SAMPLE_BULK_ROWS = {
     "machine": ["SAMPLE", "MAC-001", "M-01", "Hi-Speed Cup Machine X", "Paper Cup", 120, 55000, 210, 68],
     "blank_stock": ["SAMPLE", "MAT-BL-210", "Cup Blank Paper", "Standard/White", 210, 68, 20, 25],
     "bottom_reel": ["SAMPLE", "MAT-BT-68", 68, "Standard/White", 1200, 180, 110],
-    "box_stock": ["SAMPLE", "210ml Box", 500, 18],
+    "box_stock": ["SAMPLE", "Big Box", 500, 18, "210,250,300"],
     "plastic_stock": ["SAMPLE", "PP 210ml Sleeve", 210, 25, 20, 145],
-    "finished_goods": ["SAMPLE", "SKU-210-WHITE", 210, "Standard/White", "210ml Box", 100, 10, 50, 0],
+    "finished_goods": ["SAMPLE", "SKU-210-WHITE", 210, "Standard/White", "210- lovely day - 48*62", "Big Box", 100, 10, 50, 0],
 }
 
 
@@ -430,6 +432,12 @@ class BoxStockBulkRow(BaseModel):
     box_type: str = Field(..., min_length=1, max_length=100)
     box_quantity_pieces: int = Field(default=0, ge=0)
     price_per_box_rs: float = Field(default=0, ge=0)
+    size_for_finished_product: str = Field(..., min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_finished_product_sizes(self):
+        parse_finished_product_sizes(self.size_for_finished_product)
+        return self
 
 
 class PlasticStockBulkRow(BaseModel):
@@ -447,6 +455,7 @@ class FinishedGoodsBulkRow(BaseModel):
     product_size_ml: int = Field(..., gt=0)
     variety_design: str = Field(default="Standard/White", max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
+    carton_type: str = Field(default="", max_length=100)
     pcs_per_packet: int = Field(default=1, gt=0)
     packets_per_box: int = Field(default=1, gt=0)
     initial_stock_boxes: int = Field(default=0, ge=0)
@@ -941,7 +950,10 @@ def validate_bulk_cross_sheet(
     issues: list[ValidationIssue] = []
     severity = ValidationSeverity.FATAL if strict_validation else ValidationSeverity.WARNING
     action_type = "error" if strict_validation else "unchanged"
-    boxes = {normalized_identity(row.get("box_type")) for row in valid_by_type.get("box_stock", [])}
+    boxes = {
+        normalize_carton_type(row.get("box_type")): row
+        for row in valid_by_type.get("box_stock", [])
+    }
     bottom_sizes = {
         int(row["bottom_size_mm"])
         for row in valid_by_type.get("bottom_reel", [])
@@ -951,19 +963,45 @@ def validate_bulk_cross_sheet(
         for row in valid_by_type.get("blank_stock", [])
     }
     for row in valid_by_type.get("finished_goods", []):
-        packaging = normalized_identity(row.get("packaging_size_name"))
+        carton_type = (row.get("carton_type") or "").strip()
         product_size = int(row["product_size_ml"])
         product_variety = normalized_identity(row.get("variety_design"))
         sku = (product_size, product_variety)
-        if packaging not in boxes:
+        if not carton_type:
             issues.append(ValidationIssue(
-                row=row.get("_row_number"), field="packaging_size_name",
-                error="This product's carton name is missing from Box Stock. / इस product का carton Box Stock में नहीं मिला।",
+                row=row.get("_row_number"), field="carton_type",
+                error="Select carton_type: Small Box or Big Box.",
                 severity=severity,
-                suggested_correction=f"Add carton name '{row.get('packaging_size_name')}' in Box Stock.",
+                suggested_correction="Select the Box Stock carton type used by this finished product.",
                 sheet="Finished Goods", section="Finished Goods",
-                raw_value=row.get("packaging_size_name"), action_type=action_type,
+                raw_value={"carton_type": carton_type, "product_size_ml": product_size}, action_type=action_type,
             ))
+        else:
+            matched_box = boxes.get(normalize_carton_type(carton_type))
+            allowed_sizes = parse_finished_product_sizes(
+                matched_box.get("size_for_finished_product")
+            ) if matched_box else []
+            if matched_box is None or product_size not in allowed_sizes:
+                issues.append(ValidationIssue(
+                    row=row.get("_row_number"), field="product_size_ml",
+                    error=(
+                        f"This carton type is not configured for product size {product_size}ml. "
+                        f"Add {product_size} to Size For Finished Product for {carton_type}."
+                    ),
+                    severity=severity,
+                    suggested_correction=(
+                        f"Matched Box Stock carton: {matched_box.get('box_type') if matched_box else 'none'}; "
+                        f"allowed sizes: {allowed_sizes or 'none'}."
+                    ),
+                    sheet="Finished Goods", section="Finished Goods",
+                    raw_value={
+                        "carton_type": carton_type,
+                        "product_size_ml": product_size,
+                        "matched_box_stock_carton_type": matched_box.get("box_type") if matched_box else None,
+                        "allowed_sizes": allowed_sizes,
+                    },
+                    action_type=action_type,
+                ))
         if sku not in blanks:
             available_varieties = sorted({
                 variety
@@ -1576,6 +1614,7 @@ def sync_finished_goods_to_final_product_stock(
             product_size_ml=stock.cup_size_ml,
             variety=variety,
             packaging_size_name=packaging_size_name,
+            carton_type=profile.box_size_name,
             pieces_per_packet=profile.cups_per_poly or 1,
             packets_per_box_limit=profile.polys_per_box or 1,
             current_quantity=stock.boxes_available or 0,
@@ -1588,6 +1627,7 @@ def sync_finished_goods_to_final_product_stock(
             fg_debug_info["created_final_product_stock_ids"].append(final_stock.id)
     else:
         final_stock.pieces_per_packet = profile.cups_per_poly or 1
+        final_stock.carton_type = profile.box_size_name
         final_stock.packets_per_box_limit = profile.polys_per_box or 1
         final_stock.current_quantity = stock.boxes_available or 0
         final_stock.total_boxes = stock.boxes_available or 0
@@ -1961,6 +2001,9 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             stock.quantity = row["box_quantity_pieces"]
             stock.total_boxes = row["box_quantity_pieces"]
             stock.price_per_box = row["price_per_box_rs"]
+            stock.size_for_finished_product = serialize_finished_product_sizes(
+                row["size_for_finished_product"]
+            )
             saved_count += 1
         db.flush()
         return saved_count
@@ -2002,6 +2045,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             restore_key = (row.get("product_restore_key") or "").strip() or None
             variety = (row.get("variety_design") or "Standard/White").strip() or "Standard/White"
             packaging_size_name = (row.get("packaging_size_name") or "").strip()
+            carton_type = (row.get("carton_type") or "").strip()
             if not packaging_size_name:
                 packaging_size_name = f"{product_size_ml}ML - {variety}"
             pieces_per_packet = max(int(row["pcs_per_packet"]), 1)
@@ -2030,7 +2074,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                     print_design_name=variety,
                     polybag_capacity=pieces_per_packet,
                     box_capacity=pieces_per_packet * packets_per_box,
-                    box_size_name=packaging_size_name,
+                    box_size_name=carton_type,
                     cups_per_poly=pieces_per_packet,
                     cups_per_polybag=pieces_per_packet,
                     polys_per_box=packets_per_box,
@@ -2050,6 +2094,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 profile.cups_per_polybag = pieces_per_packet
                 profile.polys_per_box = packets_per_box
                 profile.polybags_per_box = packets_per_box
+                profile.box_size_name = carton_type
                 profile.box_inventory_id = box_inventory.id
                 profile.poly_inventory_id = poly_inventory.id
                 db.flush()
@@ -2095,6 +2140,7 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 restore_key=restore_key, target_id=final_stock.id,
             )
             final_stock.product_restore_key = restore_key
+            final_stock.carton_type = carton_type
             final_stock.loose_packets = initial_loose_packets
             final_stock.current_quantity = initial_stock_boxes
 

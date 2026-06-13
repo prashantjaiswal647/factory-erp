@@ -106,7 +106,7 @@ def test_production_mapping_guard_rejects_incomplete_and_accepts_complete_sku():
     try:
         product = FinalProductStock(
             factory_id=1, product_size_ml=210, variety="Blue Print",
-            packaging_size_name="210 Blue Box", pieces_per_packet=100,
+            packaging_size_name="210 Blue Box", carton_type="Big Box", pieces_per_packet=100,
             packets_per_box_limit=10, total_boxes=0, loose_packets=0, current_quantity=0,
         )
         db.add(product)
@@ -125,7 +125,8 @@ def test_production_mapping_guard_rejects_incomplete_and_accepts_complete_sku():
             ),
             BoxStock(
                 factory_id=1, packaging_size_name="210 Blue Box",
-                box_type="210 Blue Box", total_boxes=10, quantity=10,
+                box_type="Big Box", size_for_finished_product="210,250,300",
+                total_boxes=10, quantity=10,
             ),
         ])
         db.commit()
@@ -139,7 +140,8 @@ def test_cross_sheet_validation_requires_matching_blank_bottom_box_and_machine_b
     issues = validate_bulk_cross_sheet({
         "finished_goods": [{
             "_row_number": 3, "product_size_ml": 210,
-            "variety_design": "Blue", "packaging_size_name": "Missing Box",
+            "variety_design": "Blue", "packaging_size_name": "SKU variation",
+            "carton_type": "Missing Box",
         }],
         "blank_stock": [{
             "_row_number": 3, "size_ml": 210,
@@ -153,7 +155,7 @@ def test_cross_sheet_validation_requires_matching_blank_bottom_box_and_machine_b
     })
 
     assert {issue.field for issue in issues} == {
-        "packaging_size_name",
+        "product_size_ml",
         "linked_bottom_size_mm",
         "bottom_size_mm",
     }

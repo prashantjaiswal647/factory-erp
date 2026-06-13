@@ -539,12 +539,20 @@ export default function ProductionPage() {
               });
             }}
           />
+          <div className="self-end rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+            Carton: <strong>{selectedProduct?.carton_type || "Not configured"}</strong>
+          </div>
           <StringSelectField label="Shift" value={form.shift} onChange={(shift) => setForm({ ...form, shift: shift as "Day" | "Night" })} options={["Day", "Night"]} />
           <NumberField label="Pieces per Packet" value={form.pieces_per_packet} onChange={(pieces_per_packet) => setForm({ ...form, pieces_per_packet })} />
           <NumberField label="Packets per Box" value={form.packets_per_box_limit} onChange={(packets_per_box_limit) => setForm({ ...form, packets_per_box_limit })} />
           <NumberField label="Total Boxes Made" value={form.total_boxes_made} onChange={(total_boxes_made) => setForm({ ...form, total_boxes_made })} />
           <NumberField label="Loose Packets Made" value={form.loose_packets_made} onChange={(loose_packets_made) => setForm({ ...form, loose_packets_made })} />
         </div>
+        {selectedProduct?.carton_type ? (
+          <p className="mt-3 text-sm font-medium text-zinc-700">
+            {numberOrDefault(form.total_boxes_made) + Math.floor(numberOrDefault(form.loose_packets_made) / Math.max(numberOrDefault(form.packets_per_box_limit, 1), 1))} {selectedProduct.carton_type} cartons will be deducted.
+          </p>
+        ) : null}
 
         <div className="mt-6 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Raw Material Consumption</h3>

@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.activity_logger import log_activity
+from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes
 from services.n8n_sync import sync_data_to_n8n_bg
 from services.telegram_action_alerts import (
     notify_production_created,
@@ -376,6 +377,16 @@ def create_daily_production(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Selected packaging does not belong to the selected product size and variety.",
                 )
+        carton_type = (
+            selected_final_stock.carton_type.strip()
+            if selected_final_stock is not None and selected_final_stock.carton_type
+            else ""
+        )
+        if not carton_type:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inventory mapping incomplete: finished product carton_type is missing.",
+            )
 
         blank_stock = (
             db.query(BlankStock)
@@ -558,20 +569,23 @@ def create_daily_production(
         box_stock = (
             db.query(BoxStock)
             .filter(BoxStock.factory_id == factory_id)
-            .filter(sql_func.lower(BoxStock.packaging_size_name) == to_lower(packaging_size_name))
+            .filter(sql_func.lower(sql_func.trim(BoxStock.box_type)) == normalize_carton_type(carton_type))
             .with_for_update()
             .first()
         )
+        allowed_sizes = parse_finished_product_sizes(
+            box_stock.size_for_finished_product if box_stock is not None else ""
+        )
+        if box_stock is None or int(product_size_ml) not in allowed_sizes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"This carton type is not configured for product size {product_size_ml}ml. "
+                    f"Add {product_size_ml} to Size For Finished Product for {carton_type}."
+                ),
+            )
         box_stock_available = box_stock.total_boxes if box_stock is not None else 0
         require_available_stock("Box", box_stock_available, boxes_packed_this_entry, "boxes")
-        if box_stock is None:
-            box_stock = BoxStock(
-                factory_id=factory_id,
-                packaging_size_name=packaging_size_name.strip(),
-                total_boxes=0,
-                quantity=0,
-            )
-            db.add(box_stock)
         box_stock_after = box_stock_available - boxes_packed_this_entry
         total_raw_material_kg = to_qty(blank_used_kg + bottom_used_kg)
         wastage_kg = to_qty(payload.wastage_kg)
@@ -600,9 +614,11 @@ def create_daily_production(
         # Preserve original onboarding inputs, updating only dynamic descriptors
         final_stock.variety = variety
         final_stock.packaging_size_name = packaging_size_name.strip()
+        final_stock.carton_type = carton_type
         final_stock.pieces_per_packet = payload.pieces_per_packet
         final_stock.packets_per_box_limit = payload.packets_per_box_limit
         box_stock.total_boxes = box_stock_after
+        box_stock.quantity = box_stock_after
 
         production = DailyProduction(
             factory_id=factory_id,
@@ -1010,22 +1026,6 @@ def create_daily_sale(
             )
             if stock is None:
                 packets_per_box_limit = 1
-                box_stock = (
-                    db.query(BoxStock)
-                    .filter(BoxStock.factory_id == factory_id)
-                    .filter(sql_func.lower(BoxStock.packaging_size_name) == item.packaging_size_name.lower())
-                    .with_for_update()
-                    .first()
-                )
-                if box_stock is None:
-                    box_stock = BoxStock(
-                        factory_id=factory_id,
-                        packaging_size_name=item.packaging_size_name.strip(),
-                        total_boxes=0,
-                    )
-                    db.add(box_stock)
-                    db.flush()
-
                 stock = FinalProductStock(
                     factory_id=factory_id,
                     product_size_ml=item.product_size_ml,

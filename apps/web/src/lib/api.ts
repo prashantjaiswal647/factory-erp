@@ -584,6 +584,7 @@ export type FinalStockOption = {
   pieces_per_packet?: number | null;
   packets_per_box?: number | null;
   packaging_size_name: string;
+  carton_type?: string | null;
   current_quantity: number;
   total_boxes: number;
   loose_packets: number;

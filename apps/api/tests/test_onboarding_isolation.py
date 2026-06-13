@@ -397,6 +397,7 @@ def test_cross_factory_isolation_box_stock(db):
             "box_type": "Standard Box",
             "box_quantity_pieces": 100,
             "price_per_box_rs": Decimal("15"),
+            "size_for_finished_product": "55,65,85,100,150,200",
         }
     ]
     
@@ -406,6 +407,7 @@ def test_cross_factory_isolation_box_stock(db):
             "box_type": "Standard Box",
             "box_quantity_pieces": 200,
             "price_per_box_rs": Decimal("18"),
+            "size_for_finished_product": "55,65,85,100,150,200",
         }
     ]
     
@@ -478,6 +480,7 @@ def test_cross_factory_finished_goods(db):
             "product_size_ml": 150,
             "variety_design": "Theme A",
             "packaging_size_name": "Pack A",
+            "carton_type": "Small Box",
             "pcs_per_packet": 50,
             "packets_per_box": 20,
             "initial_stock_boxes": 10,
@@ -492,6 +495,7 @@ def test_cross_factory_finished_goods(db):
             "product_size_ml": 150,
             "variety_design": "Theme A",
             "packaging_size_name": "Pack A",
+            "carton_type": "Small Box",
             "pcs_per_packet": 60,
             "packets_per_box": 25,
             "initial_stock_boxes": 15,
@@ -663,6 +667,7 @@ def test_same_file_reupload_idempotency_all_types(db):
         "box_type": "Idempotent Box",
         "box_quantity_pieces": 50,
         "price_per_box_rs": Decimal("8"),
+        "size_for_finished_product": "55,65,80,85,100,150,200",
     }]
     # Run 1
     stats = {"inserted": 0, "updated": 0, "skipped": 0}
@@ -720,6 +725,7 @@ def test_same_file_reupload_idempotency_all_types(db):
         "product_size_ml": 80,
         "variety_design": "Design FG",
         "packaging_size_name": "Box FG",
+        "carton_type": "Idempotent Box",
         "pcs_per_packet": 50,
         "packets_per_box": 10,
         "initial_stock_boxes": 5,

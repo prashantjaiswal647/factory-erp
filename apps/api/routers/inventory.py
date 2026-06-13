@@ -16,6 +16,7 @@ import logging
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
 from services.activity_logger import log_activity
+from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes
 from models import (
     BlankStock,
     BottomStock,
@@ -213,6 +214,7 @@ class FinalStockRow(BaseModel):
     variety: Optional[str] = None
     packaging_size: Optional[str] = None
     packaging_size_name: Optional[str] = None
+    carton_type: Optional[str] = None
     pieces_per_packet: Optional[int] = None
     packets_per_box: Optional[int] = None
     packets_per_box_limit: Optional[int] = None
@@ -270,15 +272,19 @@ def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductSt
             bottom = bottom_matches[0]
     if bottom is None:
         return "Inventory mapping incomplete for this SKU."
+    if not stock.carton_type:
+        return "Inventory mapping incomplete for this SKU."
     box = (
         db.query(BoxStock)
         .filter(
             BoxStock.factory_id == factory_id,
-            func.lower(func.trim(BoxStock.packaging_size_name)) == stock.packaging_size_name.strip().lower(),
+            func.lower(func.trim(BoxStock.box_type)) == normalize_carton_type(stock.carton_type),
         )
         .first()
     )
-    return None if box is not None else "Inventory mapping incomplete for this SKU."
+    if box is None or stock.product_size_ml not in parse_finished_product_sizes(box.size_for_finished_product):
+        return "Inventory mapping incomplete for this SKU."
+    return None
 
 
 class FinalStockCreate(BaseModel):
@@ -1288,6 +1294,7 @@ def list_final_stock(
                     variety=row.variety or "Standard/White",
                     packaging_size=row.packaging_size_name,
                     packaging_size_name=row.packaging_size_name,
+                    carton_type=row.carton_type,
                     pieces_per_packet=row.pieces_per_packet,
                     packets_per_box=row.packets_per_box_limit,
                     current_quantity=int(live_boxes),

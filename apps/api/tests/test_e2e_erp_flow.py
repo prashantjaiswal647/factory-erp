@@ -166,6 +166,8 @@ def setup_db_and_overrides():
         box_stock = BoxStock(
             factory_id=1,
             packaging_size_name="Box-1",
+            box_type="Big Box",
+            size_for_finished_product="210,250,300",
             total_boxes=100,
             quantity=100,
             price_per_box=2.5,
@@ -176,6 +178,7 @@ def setup_db_and_overrides():
             product_size_ml=250,
             variety="Standard/White",
             packaging_size_name="Box-1",
+            carton_type="Big Box",
             pieces_per_packet=100,
             current_quantity=5,
             total_boxes=5,

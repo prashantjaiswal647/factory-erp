@@ -195,6 +195,7 @@ Security hardening status:
 - `row_type=SAMPLE` rows are never imported; only `row_type=ACTUAL` rows are processed.
 - Raw Materials vertical sections must remain marker-driven, not fixed-position only.
 - Finished Goods blank `packaging_size_name` must keep the fallback format: `{product_size_ml}ML - {variety_design}`.
+- Finished Goods carton mapping uses explicit `carton_type` matched to Box Stock `carton_type`; `packaging_size_name` is only the SKU variation label. Box Stock `size_for_finished_product` is the comma-separated allowlist for product sizes, and production deducts cartons only from that matched Box Stock row.
 
 ## 10. UI/RBAC Route Alignment Rules
 

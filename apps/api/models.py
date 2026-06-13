@@ -1256,6 +1256,7 @@ class BoxStock(TenantMixin, Base):
     box_type = Column(String(100), nullable=True, index=True)
     quantity = Column(Integer, nullable=False, default=0, server_default="0")
     price_per_box = Column(Float, nullable=False, default=0.0, server_default="0")
+    size_for_finished_product = Column(String(500), nullable=False, default="", server_default="")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -1307,6 +1308,7 @@ class FinalProductStock(TenantMixin, Base):
     product_size_ml = Column(Integer, nullable=False, index=True)
     variety = Column(String(100), nullable=False, default="Standard/White", server_default="Standard/White", index=True)
     packaging_size_name = Column(String(100), nullable=False, index=True)
+    carton_type = Column(String(100), nullable=True, index=True)
     pieces_per_packet = Column(Integer, nullable=False, default=1, server_default="1")
     current_quantity = Column(Integer, nullable=False, default=0, server_default="0")
     total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
