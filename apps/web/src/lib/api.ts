@@ -1228,11 +1228,18 @@ export function getInventory() {
   return api.get<LiveStockRow[]>("/api/inventory/");
 }
 
-export function getFinalStockOptions(search?: string, productionReadyOnly = false) {
+export function getFinalStockOptions(
+  search?: string,
+  productionReadyOnly = false,
+  filters?: { machineId?: number; productSizeMl?: number; variety?: string },
+) {
   return api.get<FinalStockOption[]>("/api/inventory/final-stock", {
     params: {
       ...(search && search.trim() ? { search: search.trim() } : {}),
       ...(productionReadyOnly ? { production_ready_only: true } : {}),
+      ...(filters?.machineId ? { machine_id: filters.machineId } : {}),
+      ...(filters?.productSizeMl ? { product_size_ml: filters.productSizeMl } : {}),
+      ...(filters?.variety?.trim() ? { variety: filters.variety.trim() } : {}),
     },
   });
 }

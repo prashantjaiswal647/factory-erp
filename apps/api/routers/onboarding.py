@@ -2451,10 +2451,11 @@ def list_onboarding_machines(
     machines = (
         db.query(Machine)
         .filter(Machine.factory_id == str(current_user.factory_id))
+        .filter(Machine.is_active.is_(True))
         .order_by(Machine.machine_number.asc().nullslast(), Machine.name.asc().nullslast(), Machine.id.asc())
         .all()
     )
-    return [_machine_summary(machine) for machine in machines]
+    return [_machine_summary(machine) for machine in {machine.id: machine for machine in machines}.values()]
 
 
 @router.get("/machines/limits", response_model=MachineLimitResponse)

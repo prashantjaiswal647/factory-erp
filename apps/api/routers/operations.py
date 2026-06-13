@@ -344,6 +344,15 @@ def create_daily_production(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Machine does not have a product mould size configured",
             )
+        machine_size_ml = machine.mould_size_ml or machine.cup_size_ml
+        if machine_size_ml and int(product_size_ml) != int(machine_size_ml):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This product cannot be produced on selected machine. "
+                    f"Machine size: {machine_size_ml}ml, Product size: {product_size_ml}ml."
+                ),
+            )
         packaging_size_name = (
             payload.packaging_size
             or payload.packaging_size_name
@@ -355,6 +364,18 @@ def create_daily_production(
                 detail="Packaging size variation is required",
             )
         variety = (payload.variety or (selected_final_stock.variety if selected_final_stock is not None else "") or "Standard/White").strip()
+        if selected_final_stock is not None:
+            selected_packaging = selected_final_stock.packaging_size_name.strip()
+            selected_variety = (selected_final_stock.variety or "Standard/White").strip()
+            if (
+                int(selected_final_stock.product_size_ml) != int(product_size_ml)
+                or selected_variety.casefold() != variety.casefold()
+                or selected_packaging.casefold() != packaging_size_name.strip().casefold()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected packaging does not belong to the selected product size and variety.",
+                )
 
         blank_stock = (
             db.query(BlankStock)

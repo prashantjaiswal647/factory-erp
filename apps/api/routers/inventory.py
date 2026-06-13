@@ -1172,6 +1172,9 @@ def save_final_stock(
 def list_final_stock(
     search: Optional[str] = None,
     production_ready_only: bool = False,
+    machine_id: Optional[int] = None,
+    product_size_ml: Optional[int] = None,
+    variety: Optional[str] = None,
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -1188,6 +1191,26 @@ def list_final_stock(
         query = db.query(FinalProductStock).filter(
             FinalProductStock.factory_id == str(current_user.factory_id)
         )
+        machine = None
+        if machine_id is not None:
+            machine = (
+                db.query(Machine)
+                .filter(
+                    Machine.id == machine_id,
+                    Machine.factory_id == str(current_user.factory_id),
+                    Machine.is_active.is_(True),
+                )
+                .first()
+            )
+            if machine is None:
+                raise HTTPException(status_code=404, detail="Machine not found")
+            if not machine.mould_size_ml:
+                return []
+            query = query.filter(FinalProductStock.product_size_ml == machine.mould_size_ml)
+        if product_size_ml is not None:
+            query = query.filter(FinalProductStock.product_size_ml == product_size_ml)
+        if variety and variety.strip():
+            query = query.filter(func.lower(func.trim(FinalProductStock.variety)) == variety.strip().lower())
         if search:
             term = search.strip().lower()
             if term:
@@ -1209,6 +1232,19 @@ def list_final_stock(
         processed_rows = []
         for row in rows:
             mapping_issue = production_mapping_issue(db, str(current_user.factory_id), row)
+            if machine is not None and machine.bottom_size_mm:
+                blank = (
+                    db.query(BlankStock)
+                    .filter(
+                        BlankStock.factory_id == str(current_user.factory_id),
+                        BlankStock.blank_size_ml == row.product_size_ml,
+                        func.lower(func.trim(BlankStock.variety)) == row.variety.strip().lower(),
+                        BlankStock.linked_bottom_size_mm == machine.bottom_size_mm,
+                    )
+                    .first()
+                )
+                if blank is None:
+                    mapping_issue = "Inventory mapping incomplete for this SKU."
             if production_ready_only and mapping_issue:
                 continue
             live_boxes, live_loose = calculate_live_sku_stock(

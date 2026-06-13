@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Factory, Loader2, Activity, Plus, X } from "lucide-react";
 import axios from "axios";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   createDailyProduction,
@@ -58,8 +58,8 @@ const initialForm: DailyProductionCreate = {
   product_id: null,
   product_size_ml: null,
   variety: "Plain White",
-  packaging_size: "210ml Standard Box",
-  packaging_size_name: "210ml Standard Box",
+  packaging_size: "",
+  packaging_size_name: "",
   pieces_per_packet: 100,
   packets_per_box_limit: 10,
   shift: "Day",
@@ -106,6 +106,21 @@ export default function ProductionPage() {
     void loadProductionVisibility();
   }, []);
 
+  const selectedProduct = useMemo(
+    () => finalStockOptions.find((item) => item.id === form.product_id),
+    [finalStockOptions, form.product_id],
+  );
+  const packagingOptions = useMemo(
+    () => selectedProduct
+      ? finalStockOptions.filter(
+          (item) =>
+            item.product_size_ml === selectedProduct.product_size_ml
+            && item.variety.trim().toLowerCase() === selectedProduct.variety.trim().toLowerCase(),
+        )
+      : [],
+    [finalStockOptions, selectedProduct],
+  );
+
   async function loadProductionVisibility() {
     const [summaryResponse, historyResponse] = await Promise.all([
       getProductionWorkerSummary(todayDate()),
@@ -118,7 +133,6 @@ export default function ProductionPage() {
   async function loadOptions() {
     let cleanWorkers: DashboardWorker[] = [];
     let cleanMachines: DashboardMachine[] = [];
-    let variations: FinalStockOption[] = [];
 
     try {
       const workerRes = await getDashboardWorkers();
@@ -134,35 +148,46 @@ export default function ProductionPage() {
       console.error("Failed to load dashboard machines:", err);
     }
 
-    try {
-      const finalStockRes = await getFinalStockOptions(undefined, true);
-      variations = Array.isArray(finalStockRes.data) ? finalStockRes.data : [];
-      setMappingMessage(variations.length === 0 ? "Inventory mapping incomplete for this SKU." : "");
-    } catch (err) {
-      console.error("Failed to load final stock options:", err);
-      setMappingMessage("Inventory mapping incomplete for this SKU.");
-    }
-
-    const firstVariation = variations[0];
     setWorkers(cleanWorkers);
-    setMachines(cleanMachines);
-    setFinalStockOptions(variations);
+    setMachines(Array.from(new Map(cleanMachines.map((machine) => [machine.id, machine])).values()));
+    setFinalStockOptions([]);
     setForm((current) => ({
       ...current,
       worker_id: current.worker_id || cleanWorkers[0]?.id || 0,
-      machine_id: current.machine_id || cleanMachines[0]?.id || 0,
-      product_id: current.product_id || firstVariation?.id || null,
-      product_size_ml: current.product_size_ml || firstVariation?.product_size_ml || cleanMachines[0]?.mould_size_ml || null,
-      variety: current.variety || firstVariation?.variety || "Plain White",
-      packaging_size: current.packaging_size || firstVariation?.packaging_size || firstVariation?.packaging_size_name || current.packaging_size_name,
-      packaging_size_name: firstVariation?.packaging_size_name || (cleanMachines[0]?.mould_size_ml ? `${cleanMachines[0].mould_size_ml}ml Standard Box` : current.packaging_size_name),
-      pieces_per_packet: firstVariation?.pieces_per_packet || current.pieces_per_packet,
-      packets_per_box_limit: firstVariation?.packets_per_box || firstVariation?.packets_per_box_limit || current.packets_per_box_limit
+      machine_id: 0,
+      product_id: null,
+      product_size_ml: null,
+      packaging_size: "",
+      packaging_size_name: "",
     }));
   }
 
+  async function selectMachine(machineId: number) {
+    const machine = machines.find((item) => item.id === machineId);
+    setForm((current) => ({
+      ...current,
+      machine_id: machineId,
+      product_id: null,
+      product_size_ml: machine?.mould_size_ml || null,
+      variety: "Plain White",
+      packaging_size: "",
+      packaging_size_name: "",
+    }));
+    setFinalStockOptions([]);
+    if (!machineId) return;
+    try {
+      const response = await getFinalStockOptions(undefined, true, { machineId });
+      const options = Array.isArray(response.data) ? response.data : [];
+      setFinalStockOptions(options);
+      setMappingMessage(options.length ? "" : "Inventory mapping incomplete for this SKU.");
+    } catch (err) {
+      console.error("Failed to load compatible products:", err);
+      setMappingMessage("Inventory mapping incomplete for this SKU.");
+    }
+  }
+
   async function submit() {
-    if (finalStockOptions.length === 0) {
+    if (!form.machine_id || !form.product_id || finalStockOptions.length === 0) {
       setError("Inventory mapping incomplete for this SKU.");
       return;
     }
@@ -260,6 +285,11 @@ export default function ProductionPage() {
       setVariantError("Product size (ml) is required and must be > 0.");
       return;
     }
+    const selectedMachine = machines.find((machine) => machine.id === form.machine_id);
+    if (selectedMachine?.mould_size_ml && size_ml !== selectedMachine.mould_size_ml) {
+      setVariantError(`Product size must match selected machine size (${selectedMachine.mould_size_ml}ml).`);
+      return;
+    }
     if (!newVariantForm.packaging_size_name.trim()) {
       setVariantError("Packaging size name is required.");
       return;
@@ -284,8 +314,7 @@ export default function ProductionPage() {
       };
       const res = await createFinishedGoodVariant(payload);
       setToast(`New variant created: ${res.data.product_size_ml}ml ${res.data.variety} ${res.data.packaging_size_name}`);
-      // refresh variant dropdown and auto-select the new one
-      await loadOptions();
+      // Keep the selected machine and make the new SKU immediately reusable.
       setFinalStockOptions((current) => {
         const exists = current.some((item) => item.id === res.data.id);
         return exists ? current : [...current, {
@@ -433,18 +462,12 @@ export default function ProductionPage() {
           <SelectField
             label="Machine"
             value={form.machine_id}
-            onChange={(machine_id) => {
-              const machine = machines.find((item) => item.id === machine_id);
-              setForm({
-                ...form,
-                machine_id,
-                packaging_size_name: machine?.mould_size_ml ? `${machine.mould_size_ml}ml Standard Box` : form.packaging_size_name
-              });
-            }}
+            onChange={(machine_id) => void selectMachine(machine_id)}
           >
+            <option value={0}>Select Machine</option>
             {machines.map((machine) => (
               <option key={machine.id} value={machine.id}>
-                {machine.machine_number || machine.id} - {machine.machine_type} {machine.mould_size_ml || ""}ml
+                {machine.machine_number || machine.id} - {machine.machine_name || machine.machine_type} - {machine.mould_size_ml || "No mould"}{machine.mould_size_ml ? " ml" : ""}
               </option>
             ))}
           </SelectField>
@@ -452,25 +475,33 @@ export default function ProductionPage() {
             label="Product"
             value={form.product_id || 0}
             options={finalStockOptions}
+            disabled={!form.machine_id}
             onChange={(product_id) => {
               const selected = finalStockOptions.find((item) => item.id === product_id);
+              const firstPackaging = finalStockOptions.find(
+                (item) =>
+                  item.product_size_ml === selected?.product_size_ml
+                  && item.variety.trim().toLowerCase() === selected?.variety.trim().toLowerCase(),
+              );
               setForm({
                 ...form,
-                product_id,
+                product_id: firstPackaging?.id || product_id,
                 product_size_ml: selected?.product_size_ml || form.product_size_ml,
                 variety: selected?.variety || form.variety,
-                packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
-                packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
-                pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
-                packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
+                packaging_size: firstPackaging?.packaging_size || firstPackaging?.packaging_size_name || "",
+                packaging_size_name: firstPackaging?.packaging_size_name || "",
+                pieces_per_packet: firstPackaging?.pieces_per_packet || form.pieces_per_packet,
+                packets_per_box_limit: firstPackaging?.packets_per_box || firstPackaging?.packets_per_box_limit || form.packets_per_box_limit
               });
             }}
           />
+          <p className="self-end pb-2 text-xs text-zinc-500">Only products compatible with selected machine are shown.</p>
           <div className="flex flex-col justify-end">
             <span className="text-sm font-medium text-zinc-700">Need a new variant?</span>
             <button
               className="mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-100"
               type="button"
+              disabled={!form.machine_id}
               onClick={() => {
                 setNewVariantForm({
                   ...emptyNewVariant,
@@ -492,7 +523,8 @@ export default function ProductionPage() {
           <VariationSelectField
             label="Packaging Size Variation"
             value={form.product_id || 0}
-            options={finalStockOptions}
+            options={packagingOptions}
+            disabled={!selectedProduct}
             onChange={(product_id) => {
               const selected = finalStockOptions.find((item) => item.id === product_id);
               setForm({
@@ -732,13 +764,13 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   );
 }
 
-function ProductSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
+function ProductSelectField({ label, value, options, disabled, onChange }: { label: string; value: number; options: FinalStockOption[]; disabled?: boolean; onChange: (value: number) => void }) {
   const cleanOptions = Array.isArray(options) ? options : [];
   const uniqueProducts = Array.from(new Map(cleanOptions.map((item) => [`${item.product_size_ml}-${item.variety}`, item])).values());
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
-      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
+      <select disabled={disabled} className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
         <option value={0}>Select Product</option>
         {uniqueProducts.map((option) => (
           <option key={option.id} value={option.id}>
@@ -750,12 +782,12 @@ function ProductSelectField({ label, value, options, onChange }: { label: string
   );
 }
 
-function VariationSelectField({ label, value, options, onChange }: { label: string; value: number; options: FinalStockOption[]; onChange: (value: number) => void }) {
+function VariationSelectField({ label, value, options, disabled, onChange }: { label: string; value: number; options: FinalStockOption[]; disabled?: boolean; onChange: (value: number) => void }) {
   const cleanOptions = Array.isArray(options) ? options : [];
   return (
     <label className="block text-sm">
       <span className="font-medium text-zinc-700">{label}</span>
-      <select className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
+      <select disabled={disabled} className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-zinc-100" value={value} onChange={(event) => onChange(Number(event.target.value))}>
         <option value={0}>Select Variation</option>
         {cleanOptions.map((option) => (
           <option key={option.id} value={option.id}>
