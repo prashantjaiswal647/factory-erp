@@ -245,6 +245,72 @@ def test_partial_plastic_row_has_simple_error_and_duplicates_are_grouped():
     assert any("पूरा नंबर" in issue.error or "whole number" in issue.error for issue in issues)
 
 
+def test_owner_template_plastic_bottom_and_missing_blank_validation():
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    data = {
+        "Factory_Profile": (["Factory Name"], [["Factory"]]),
+        "Customers": (["Customer Name", "Phone"], []),
+        "Workers": (["Worker Name"], []),
+        "Machines": (
+            ["Machine Number", "Machine Name", "Machine Size ML", "Bottom Size MM"],
+            [["1", "M1", 65, 45]],
+        ),
+        "Cup_Blank": (
+            ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG"],
+            [["Blank", 65, "White", 45, 40]],
+        ),
+        "Bottom_Reel": (
+            ["Bottom Size MM", "Opening Rolls", "Total Weight KG"],
+            [[45, 10, 20]],
+        ),
+        "Box_Stock": (["Carton Type", "Carton Quantity"], [["65 White", 5]]),
+        "Plastic_Stock": (
+            ["Plastic Type", "Used For Cup Sizes ML", "Total Boras Sacks"],
+            [
+                ["Sleeve A", 210, 1],
+                ["Sleeve B", "210 ml", 1],
+                ["Sleeve C", "210,250,300", 1],
+                ["Sleeve D", "55,65", 1],
+            ],
+        ),
+        "Finished_Goods": (
+            ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton"],
+            [
+                [65, "White", "65 White", 50, 20],
+                [65, "black", "65 Black", 50, 20],
+                [65, "hot", "65 Hot", 50, 20],
+            ],
+        ),
+        "Costing_Optional": (["Paper Price Per KG"], []),
+    }
+    for name, (headers, rows) in data.items():
+        sheet = workbook.create_sheet(name)
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+    output = BytesIO()
+    workbook.save(output)
+
+    valid, failed = read_master_bulk_excel(output.getvalue())
+    assert [row["used_for_cup_size_ml"] for row in valid["plastic_stock"]] == [
+        210, 210, 210, 250, 300, 55, 65,
+    ]
+    assert valid["bottom_reel"][0]["variety_design"] == "Plain White"
+    assert not [row for row in failed if row.get("entity_type") in {"plastic_stock", "bottom_reel"}]
+
+    fatal = [
+        issue
+        for issue in validate_bulk_cross_sheet(valid, strict_validation=True)
+        if issue.severity.value == "fatal"
+    ]
+    assert len(fatal) == 2
+    assert {issue.suggested_correction for issue in fatal} == {
+        "Add Cup_Blank row for 65 ml black.",
+        "Add Cup_Blank row for 65 ml hot.",
+    }
+
+
 def _single_sheet_bytes(workbook: Workbook) -> bytes:
     output = BytesIO()
     workbook.save(output)

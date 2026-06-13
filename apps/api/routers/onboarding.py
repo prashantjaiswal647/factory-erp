@@ -131,7 +131,11 @@ OWNER_HEADER_ALIASES = {
         "product_size_ml": "size_ml",
         "carton_type": "material_name",
     },
-    "bottom_reel": {"linked_bottom_size_mm": "bottom_size_mm"},
+    "bottom_reel": {
+        "linked_bottom_size_mm": "bottom_size_mm",
+        "opening_rolls": "total_individual_rolls",
+        "total_weight": "total_weight_kg",
+    },
     "box_stock": {
         "carton_type": "box_type",
         "packaging_size_name": "box_type",
@@ -140,6 +144,8 @@ OWNER_HEADER_ALIASES = {
     "plastic_stock": {
         "cup_size_ml": "used_for_cup_size_ml",
         "product_size_ml": "used_for_cup_size_ml",
+        "plastic_type": "plastic_size_type",
+        "used_for_cup_sizes_ml": "used_for_cup_size_ml",
     },
     "finished_goods": {
         "cup_size_ml": "product_size_ml",
@@ -163,9 +169,9 @@ OWNER_TEMPLATE_COLUMNS = {
     "Workers": ["Worker Name", "Mobile", "Daily Wages", "Duty Hours", "Shift Timing", "Shift Type"],
     "Machines": ["Machine Number", "Machine Name", "Machine Type", "Machine Size ML", "Bottom Size MM"],
     "Cup_Blank": ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG", "Total Boras Sacks"],
-    "Bottom_Reel": ["Bottom Size MM", "Design", "Total Individual Rolls", "Total Weight KG", "Bottom Price Per KG"],
+    "Bottom_Reel": ["Bottom Size MM", "Opening Rolls", "Total Weight KG"],
     "Box_Stock": ["Carton Type", "Carton Quantity", "Price Per Box Rs"],
-    "Plastic_Stock": ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
+    "Plastic_Stock": ["Plastic Type", "Used For Cup Sizes ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
     "Finished_Goods": ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes", "Opening Loose Packets"],
     "Costing_Optional": ["Paper Price Per KG", "Bottom Price Per KG", "Plastic Price Per KG", "Carton Price"],
 }
@@ -847,6 +853,17 @@ def auto_normalize_owner_mappings(
     for row in valid_by_type.get("blank_stock", []):
         blanks_by_size.setdefault(int(row["size_ml"]), []).append(row)
     for row in valid_by_type.get("bottom_reel", []):
+        if not normalized_identity(row.get("variety_design")):
+            row["variety_design"] = "Plain White"
+            fixes.append(ValidationIssue(
+                row=row.get("_row_number"),
+                field="variety_design",
+                error="Bottom Reel design was set to Plain White. / Bottom Reel डिज़ाइन Plain White रखा गया।",
+                severity=ValidationSeverity.INFO,
+                suggested_correction="No action needed / कोई बदलाव ज़रूरी नहीं।",
+                sheet="Bottom_Reel",
+                action_type="updated",
+            ))
         bottoms_by_size.setdefault(int(row["bottom_size_mm"]), []).append(row)
 
     for row in valid_by_type.get("finished_goods", []):
@@ -975,7 +992,10 @@ def validate_bulk_cross_sheet(
                 row=row.get("_row_number"), field="variety_design",
                 error="Matching Cup Blank was not found for this product size and design. / इस size और design का Cup Blank नहीं मिला।",
                 severity=severity,
-                suggested_correction=f"Add Cup Blank: {row.get('product_size_ml')} ml, {row.get('variety_design') or 'design'}",
+                suggested_correction=(
+                    f"Add Cup_Blank row for {row.get('product_size_ml')} ml "
+                    f"{bulk_str(row.get('variety_design')).lower() or 'design'}."
+                ),
                 sheet="Finished Goods", section="Finished Goods",
                 raw_value=row.get("variety_design"), action_type=action_type,
             ))
@@ -993,13 +1013,12 @@ def validate_bulk_cross_sheet(
             ))
             continue
         linked_size = int(linked_value)
-        variety = normalized_identity(row.get("variety_design"))
-        if (linked_size, variety) not in bottoms:
+        if linked_size not in bottom_sizes:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="linked_bottom_size_mm",
                 error="Matching Bottom Reel was not found for this Cup Blank. / इस Cup Blank का Bottom Reel नहीं मिला।",
                 severity=severity,
-                suggested_correction=f"Add Bottom Reel: {linked_size} mm, {row.get('variety_design') or 'Plain White'}",
+                suggested_correction=f"Add Bottom_Reel row for {linked_size} mm.",
                 sheet="Raw Materials", section="Cup Blank",
                 raw_value=row.get("linked_bottom_size_mm"), action_type=action_type,
             ))
