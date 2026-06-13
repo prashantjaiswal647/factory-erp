@@ -330,7 +330,11 @@ export default function ProductionPage() {
         opening_stock_boxes: opening,
       };
       const res = await createFinishedGoodVariant(payload);
-      setToast(`New variant created: ${res.data.product_size_ml}ml ${res.data.variety} ${res.data.packaging_size_name}`);
+      if (res.data.created_existing || res.data.status === "exists") {
+        setToast("This packing variant already exists and has been selected.");
+      } else {
+        setToast(`New variant created: ${res.data.product_size_ml}ml ${res.data.variety} ${res.data.packaging_size_name}`);
+      }
       // Keep the selected machine and make the new SKU immediately reusable.
       setFinalStockOptions((current) => {
         const exists = current.some((item) => item.id === res.data.id);

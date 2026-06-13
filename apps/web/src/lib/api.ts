@@ -653,6 +653,9 @@ export type FinishedGoodVariantResponse = {
   total_boxes: number;
   loose_packets: number;
   created_existing: boolean;
+  status?: string;
+  message?: string;
+  variant_id?: number;
 };
 
 export type FinishedGoodVariantDuplicateError = {

@@ -44,6 +44,7 @@ from models import (
     Machine,
     SalesInvoice,
     User,
+    BoxStock,
 )
 from auth import get_current_user
 
@@ -393,6 +394,7 @@ def test_sales_decreases_finished_goods_stock(app_factory):
 # ────────────────────── Test 5: duplicate variant prevention ──────────────────────
 
 def test_duplicate_variant_returns_409_with_existing_id(app_factory):
+    # This test is updated to match the new behavior where duplicate creation returns 200 instead of 409.
     client, db = app_factory(factory_id=1)
     seed_factory(db, 1)
 
@@ -409,19 +411,19 @@ def test_duplicate_variant_returns_409_with_existing_id(app_factory):
     assert r1.status_code == 200
     first_id = r1.json()["id"]
 
-    # Second create with same spec -> 409 with existing_product_id
+    # Second create with same spec -> 200 with status exists
     r2 = client.post("/api/inventory/finished-goods/variants", json=payload)
-    assert r2.status_code == 409, r2.text
-    detail = r2.json()["detail"]
-    assert detail["existing_product_id"] == first_id
-    assert detail["existing"]["product_size_ml"] == 100
-    assert detail["existing"]["variety"] == "Printed"
-    assert detail["existing"]["packaging_size_name"] == "100ML - Printed"
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    assert data["created_existing"] is True
+    assert data["status"] == "exists"
+    assert data["message"] == "Variant already exists."
+    assert data["variant_id"] == first_id
 
-    # Case-insensitive matching also 409
+    # Case-insensitive matching also 200
     payload_upper = dict(payload, variety="PRINTED", packaging_size_name="100ML - PRINTED")
     r3 = client.post("/api/inventory/finished-goods/variants", json=payload_upper)
-    assert r3.status_code == 409, r3.text
+    assert r3.status_code == 200, r3.text
 
 
 def test_different_variety_same_size_is_not_duplicate(app_factory):
@@ -715,3 +717,73 @@ def test_list_final_stock_with_search(app_factory):
     rows = r_packaging.json()
     assert len(rows) == 1
     assert "100ML" in rows[0]["packaging_size_name"]
+
+
+def test_finished_goods_variant_generation_and_duplication_workflow(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+
+    # Seed a BoxStock mapping for 250ml
+    box = BoxStock(
+        factory_id=1,
+        packaging_size_name="Big Box",
+        box_type="Big Box",
+        size_for_finished_product="210,250,300",
+        total_boxes=100,
+        quantity=100,
+        price_per_box=12.0
+    )
+    db.add(box)
+    db.commit()
+
+    # 1. Create new variant
+    response = client.post(
+        "/api/inventory/finished-goods/variants",
+        json={
+            "product_size_ml": 250,
+            "variety": "Lovely day",
+            "packaging_size_name": "250- lovely day - 45*67",
+            "pieces_per_packet": 45,
+            "packets_per_box_limit": 67,
+            "opening_stock_boxes": 5
+        }
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["product_size_ml"] == 250
+    assert data["variety"] == "Lovely day"
+    assert data["created_existing"] is False
+
+    # Check generated carton_type and product_restore_key
+    db.expire_all()
+    variant = db.get(FinalProductStock, data["id"])
+    assert variant.carton_type == "Big Box"
+    assert variant.product_restore_key == "SKU-1-250-LOVELY-DAY-250--LOVELY-DAY---45*67"
+
+    # 2. Create duplicate variant -> expect status exists, HTTP 200, no 500 error
+    response_dup = client.post(
+        "/api/inventory/finished-goods/variants",
+        json={
+            "product_size_ml": 250,
+            "variety": "Lovely day",
+            "packaging_size_name": "250- lovely day - 45*67",
+            "pieces_per_packet": 45,
+            "packets_per_box_limit": 67,
+            "opening_stock_boxes": 5
+        }
+    )
+    assert response_dup.status_code == 200, response_dup.text
+    dup_data = response_dup.json()
+    assert dup_data["created_existing"] is True
+    assert dup_data["status"] == "exists"
+    assert dup_data["message"] == "Variant already exists."
+    assert dup_data["variant_id"] == data["id"]
+
+    # Verify no duplicate row was created in DB
+    count = db.query(FinalProductStock).filter_by(
+        factory_id="1",
+        product_size_ml=250,
+        variety="Lovely day",
+        packaging_size_name="250- lovely day - 45*67"
+    ).count()
+    assert count == 1

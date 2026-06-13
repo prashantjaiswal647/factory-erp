@@ -721,6 +721,9 @@ class FinishedGoodVariantResponse(BaseModel):
     total_boxes: int
     loose_packets: int
     created_existing: bool = False
+    status: Optional[str] = None
+    message: Optional[str] = None
+    variant_id: Optional[int] = None
 
 
 def _build_final_stock_row_response(
@@ -763,51 +766,76 @@ def create_finished_good_variant(
     current_user: User = Depends(check_permissions(INVENTORY_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """Create a new finished-good variant (canonical model: FinalProductStock).
-    Duplicate prevention: a variant is uniquely identified by
-    (factory_id, product_size_ml, variety, packaging_size_name,
-     pieces_per_packet, packets_per_box_limit). If a duplicate exists,
-    return 409 with the existing product_id so the frontend can offer
-    "select existing" instead of creating a duplicate.
-    """
+    """Create a new finished-good variant (canonical model: FinalProductStock) or handle duplicate variants safely."""
     try:
+        from services.carton_mapping import parse_allowed_sizes
+        
         factory_id = str(current_user.factory_id)
         variety = (payload.variety or "Standard/White").strip() or "Standard/White"
         packaging_size_name = payload.packaging_size_name.strip()
 
+        # Database unique constraint is on (factory_id, product_size_ml, variety, packaging_size_name).
+        # We must check duplicate status based EXACTLY on these unique fields.
         existing = (
             db.query(FinalProductStock)
             .filter(FinalProductStock.factory_id == factory_id)
             .filter(FinalProductStock.product_size_ml == payload.product_size_ml)
             .filter(sql_func.lower(FinalProductStock.variety) == variety.lower())
             .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
-            .filter(FinalProductStock.pieces_per_packet == payload.pieces_per_packet)
-            .filter(FinalProductStock.packets_per_box_limit == payload.packets_per_box_limit)
             .first()
         )
         if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "message": "A finished good variant with these specifications already exists.",
-                    "existing_product_id": existing.id,
-                    "existing": {
-                        "id": existing.id,
-                        "product_size_ml": existing.product_size_ml,
-                        "variety": existing.variety,
-                        "packaging_size_name": existing.packaging_size_name,
-                        "pieces_per_packet": existing.pieces_per_packet,
-                        "packets_per_box_limit": existing.packets_per_box_limit,
-                        "current_quantity": existing.current_quantity or 0,
-                    },
-                },
+            # Update pieces/packets per box limit if different
+            existing.pieces_per_packet = payload.pieces_per_packet
+            existing.packets_per_box_limit = payload.packets_per_box_limit
+            db.commit()
+            db.refresh(existing)
+            return FinishedGoodVariantResponse(
+                id=existing.id,
+                factory_id=int(existing.factory_id),
+                product_size_ml=existing.product_size_ml,
+                variety=existing.variety,
+                packaging_size_name=existing.packaging_size_name,
+                pieces_per_packet=existing.pieces_per_packet,
+                packets_per_box_limit=existing.packets_per_box_limit,
+                current_quantity=existing.current_quantity or 0,
+                total_boxes=existing.total_boxes or 0,
+                loose_packets=existing.loose_packets or 0,
+                created_existing=True,
+                status="exists",
+                message="Variant already exists.",
+                variant_id=existing.id,
             )
+
+        # carton_type = selected carton from Box Stock mapping
+        carton_type = None
+        box_stocks = db.query(BoxStock).filter(BoxStock.factory_id == factory_id).all()
+        for box in box_stocks:
+            try:
+                allowed = parse_allowed_sizes(box.size_for_finished_product)
+                if payload.product_size_ml in allowed:
+                    carton_type = box.box_type or box.packaging_size_name
+                    break
+            except Exception:
+                continue
+        
+        if not carton_type:
+            if box_stocks:
+                carton_type = box_stocks[0].box_type or box_stocks[0].packaging_size_name
+            else:
+                carton_type = "Big Box"
+
+        # product_restore_key = factory_id + size + variety + packaging
+        prod_restore_key = f"SKU-{factory_id}-{payload.product_size_ml}-{variety.upper()}-{packaging_size_name.upper()}".replace(" ", "-")
+        prod_restore_key = prod_restore_key[:100]
 
         stock = FinalProductStock(
             factory_id=factory_id,
+            product_restore_key=prod_restore_key,
             product_size_ml=payload.product_size_ml,
             variety=variety,
             packaging_size_name=packaging_size_name,
+            carton_type=carton_type,
             pieces_per_packet=payload.pieces_per_packet,
             packets_per_box_limit=payload.packets_per_box_limit,
             total_boxes=payload.opening_stock_boxes,
