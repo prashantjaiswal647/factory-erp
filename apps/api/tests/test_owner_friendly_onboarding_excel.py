@@ -257,15 +257,33 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
         "Workers": (["Worker Name"], []),
         "Machines": (
             ["Machine Number", "Machine Name", "Machine Size ML", "Bottom Size MM"],
-            [["1", "M1", 65, 45]],
+            [
+                ["1", "M1", 65, 65],
+                ["2", "M2", 52, 52],
+                ["3", "M3", 48, 48],
+                ["4", "M4", 75, 75],
+                ["5", "M5", 57, 57],
+            ],
         ),
         "Cup_Blank": (
             ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG"],
-            [["Blank", 65, "White", 45, 40]],
+            [
+                ["Blank 65", 65, "White", 65, 40],
+                ["Blank 52", 52, "White", 52, 40],
+                ["Blank 48", 48, "White", 48, 40],
+                ["Blank 75", 75, "White", 75, 40],
+                ["Blank 57", 57, "White", 57, 40],
+            ],
         ),
         "Bottom_Reel": (
             ["Bottom Size MM", "Opening Rolls", "Total Weight KG"],
-            [[45, 10, 20]],
+            [
+                [65, 10, 20],
+                [52, 10, 20],
+                [48, 10, 20],
+                [75, 10, 20],
+                [57, 10, 20],
+            ],
         ),
         "Box_Stock": (["Carton Type", "Carton Quantity"], [["65 White", 5]]),
         "Plastic_Stock": (
@@ -301,11 +319,12 @@ def test_owner_template_plastic_bottom_and_missing_blank_validation():
     ]
     assert valid["bottom_reel"][0]["variety_design"] == "Plain White"
     assert not [row for row in failed if row.get("entity_type") in {"plastic_stock", "bottom_reel"}]
-    assert any(
-        row.get("sheet") == "Bottom_Reel"
-        and "auto-defaulted" in row.get("error", "")
+    assert len([
+        row
         for row in failed
-    )
+        if row.get("sheet") == "Bottom_Reel"
+        and "auto-defaulted" in row.get("error", "")
+    ]) == 5
 
     fatal = [
         issue

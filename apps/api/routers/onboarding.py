@@ -981,16 +981,14 @@ def validate_bulk_cross_sheet(
     severity = ValidationSeverity.FATAL if strict_validation else ValidationSeverity.WARNING
     action_type = "error" if strict_validation else "unchanged"
     boxes = {normalized_identity(row.get("box_type")) for row in valid_by_type.get("box_stock", [])}
-    bottoms = {
-        (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
+    bottom_sizes = {
+        int(row["bottom_size_mm"])
         for row in valid_by_type.get("bottom_reel", [])
     }
     blanks = {
         (int(row["size_ml"]), normalized_identity(row.get("variety_design")))
         for row in valid_by_type.get("blank_stock", [])
     }
-    bottom_sizes = {size for size, _ in bottoms}
-
     for row in valid_by_type.get("finished_goods", []):
         packaging = normalized_identity(row.get("packaging_size_name"))
         product_size = int(row["product_size_ml"])
