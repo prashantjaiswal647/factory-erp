@@ -107,7 +107,7 @@ export default function InvoicesPage() {
   const [deleteTarget, setDeleteTarget] = useState<InvoiceDocumentSummary | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteAction, setDeleteAction] = useState<"reverse" | "archive" | "hard_delete">("reverse");
+  const [deleteAction, setDeleteAction] = useState<"reverse" | "archive" | "cancel" | "hard_delete">("reverse");
   const [showAllocations, setShowAllocations] = useState(false);
   const [showBulkDownload, setShowBulkDownload] = useState(false);
   const [hardDeleteReason, setHardDeleteReason] = useState("");
@@ -297,7 +297,7 @@ export default function InvoicesPage() {
     setIsDeleting(true);
     try {
       await deleteInvoice(deleteTarget.id, deleteConfirmation, deleteAction);
-      setMessage(`Invoice ${deleteTarget.invoice_number} ${deleteAction === "archive" ? "archived" : "deleted"}.`);
+      setMessage(`Invoice ${deleteTarget.invoice_number} ${deleteAction === "archive" ? "archived" : deleteAction === "cancel" ? "cancelled" : "deleted"}.`);
       setDeleteTarget(null);
       setDeleteConfirmation("");
       await loadInvoices();
@@ -799,7 +799,7 @@ export default function InvoicesPage() {
             {/* Stock Impact info */}
             <div className="rounded-lg bg-blue-50/50 border border-blue-100 p-3 text-xs text-blue-900 flex justify-between">
               <span className="font-medium">Stock Impact:</span>
-              <span className="font-semibold">{deleteAction === "reverse" ? "🔄 Items will be returned to Stock" : "🚫 No Stock changes will be made"}</span>
+              <span className="font-semibold">{deleteAction === "reverse" || deleteAction === "cancel" ? "Items will be returned to Stock" : "No Stock changes will be made"}</span>
             </div>
 
             {/* Choice selection */}
@@ -811,7 +811,7 @@ export default function InvoicesPage() {
             ) : (
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-zinc-500 uppercase">Select Action</label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <button
                     type="button"
                     onClick={() => { setDeleteAction("reverse"); setDeleteConfirmation(""); }}
@@ -821,6 +821,16 @@ export default function InvoicesPage() {
                   >
                     <span className="text-sm font-bold text-zinc-950">Reverse Invoice</span>
                     <span className="text-[10px] text-zinc-500 mt-1">Return stock, reverse outstanding balance. Only if unpaid.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setDeleteAction("cancel"); setDeleteConfirmation(""); }}
+                    className={`flex flex-col text-left p-3 rounded-xl border transition ${
+                      deleteAction === "cancel" ? "border-amber-600 bg-amber-50/30" : "border-zinc-200 bg-white hover:bg-zinc-50"
+                    }`}
+                  >
+                    <span className="text-sm font-bold text-zinc-950">Cancel Invoice Number</span>
+                    <span className="text-[10px] text-zinc-500 mt-1">Keep the number in history as cancelled and return unpaid stock.</span>
                   </button>
                   <button
                     type="button"

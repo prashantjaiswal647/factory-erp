@@ -8,8 +8,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import Customer, Factory, FinalProductStock, InvoiceDocument, OutstandingBill, User
-from routers.sales import add_sale_invoice
+from models import Customer, Factory, FactorySettings, FinalProductStock, InvoiceDocument, OutstandingBill, User
+from routers.sales import add_sale_invoice, list_invoice_documents
 from schemas import DailySaleCreate
 from services.accounting import create_outstanding_bill
 
@@ -109,12 +109,40 @@ def test_sales_invoice_creation_updates_stock_and_source_ledger(
     db.refresh(customer)
     invoice = db.query(InvoiceDocument).filter_by(id=response.invoice_document_id).one()
     invoice_bill = db.query(OutstandingBill).filter_by(invoice_document_id=invoice.id).one()
+    settings = db.query(FactorySettings).filter_by(factory_id=user.factory_id).one()
     assert stock.current_quantity == 8
     assert invoice_bill.source_type == "invoice"
     assert invoice_bill.bill_amount == Decimal("1000.00")
     assert invoice_bill.balance_amount == expected_invoice_due
     assert customer.total_due == expected_customer_due
     assert Decimal(invoice.payload_json["invoice"]["previous_due"]) == Decimal(opening_due)
+    assert factory_next_number(db, user.factory_id) == 2
+    assert settings.bill_of_supply_start_seq == 2
+
+
+def factory_next_number(db, factory_id: int) -> int:
+    return db.query(Factory).filter_by(id=factory_id).one().next_bill_of_supply_number
+
+
+def test_invoice_listing_handles_empty_optional_accounting_metadata():
+    db = _session()
+    user, customer, stock = _seed(db)
+    response = add_sale_invoice(
+        _payload(customer.id, stock.id),
+        BackgroundTasks(),
+        current_user=user,
+        db=db,
+    )
+    invoice = db.query(InvoiceDocument).filter_by(id=response.invoice_document_id).one()
+    assert invoice.accounting_locked is False
+    assert invoice.exported_at is None
+    assert invoice.shared_at is None
+    assert invoice.emailed_at is None
+    assert invoice.printed_at is None
+
+    dashboard = list_invoice_documents(current_user=user, db=db)
+    assert dashboard.total_invoices == 1
+    assert dashboard.invoices[0].invoice_number == invoice.invoice_number
 
 
 def test_sales_invoice_insufficient_stock_returns_validation_error_without_500():

@@ -1144,7 +1144,11 @@ export function createDailyProductionBatch(payload: ProductionBatchCreate) {
   return api.post("/api/production/daily-batch", payload);
 }
 
-export function deleteInvoice(invoiceId: number, confirmation: string, action?: string) {
+export function deleteInvoice(
+  invoiceId: number,
+  confirmation: string,
+  action?: "reverse" | "archive" | "cancel",
+) {
   return api.delete<{ status: string; invoice_id: number; invoice_number: string }>(
     `/api/sales/invoices/${invoiceId}`,
     { data: { confirmation, action } },

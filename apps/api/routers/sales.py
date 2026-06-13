@@ -552,7 +552,7 @@ class InvoiceEmailDeliveryRequest(BaseModel):
 
 class InvoiceDeleteRequest(BaseModel):
     confirmation: str
-    action: str | None = "reverse"  # "reverse" or "archive"
+    action: str | None = "reverse"  # "reverse", "archive", or "cancel"
 
 
 class InvoiceHardDeleteRequest(BaseModel):
@@ -2572,6 +2572,45 @@ def delete_invoice_document(
             status_code=409,
             detail="Invoice has payment entries. Delete payment first or use cancel invoice.",
         )
+
+    if action == "cancel":
+        invoice.status = "cancelled"
+        if bill is not None:
+            bill.status = "cancelled"
+            bill.balance_amount = Decimal("0.00")
+        if sale_ids:
+            db.query(DailySale).filter(
+                factory_id_filter(DailySale.factory_id, current_user.factory_id),
+                DailySale.id.in_(sale_ids),
+            ).delete(synchronize_session=False)
+            db.flush()
+        from routers.inventory import recalculate_and_sync_sku_stock
+        seen_skus = set()
+        for item in item_rows:
+            sku = (
+                item.get("product_size_ml"),
+                (item.get("variety") or "").strip(),
+                (item.get("packaging_size_name") or "").strip(),
+            )
+            if not all(sku) or sku in seen_skus:
+                continue
+            seen_skus.add(sku)
+            recalculate_and_sync_sku_stock(
+                db=db,
+                factory_id=str(current_user.factory_id),
+                product_size_ml=sku[0],
+                variety=sku[1],
+                packaging_size_name=sku[2],
+            )
+        if invoice.customer_id is not None:
+            customer = db.query(Customer).filter(
+                factory_id_filter(Customer.factory_id, current_user.factory_id),
+                Customer.id == invoice.customer_id,
+            ).first()
+            if customer is not None:
+                sync_customer_balance_from_bills(db, current_user.factory_id, customer)
+        db.commit()
+        return {"status": "cancelled", "invoice_id": invoice_document_id, "invoice_number": invoice.invoice_number}
 
     invoice_number = invoice.invoice_number
     customer_name = invoice.customer_name

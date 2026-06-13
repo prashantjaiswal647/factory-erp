@@ -173,6 +173,31 @@ def test_paid_invoice_delete_is_rejected_safely():
     assert unsafe.value.detail == "Invoice has payment entries. Delete payment first or use cancel invoice."
 
 
+def test_cancel_invoice_number_preserves_invoice_and_ledger():
+    db = _session()
+    factory = Factory(name="Cancel Factory", invoice_prefix="INV-")
+    db.add(factory)
+    db.flush()
+    customer = Customer(factory_id=factory.id, name="Buyer", phone="9000000000")
+    db.add(customer)
+    db.flush()
+    invoice = _invoice(db, factory, customer, "INV-1", "bill_of_supply")
+
+    response = delete_invoice_document(
+        invoice.id,
+        InvoiceDeleteRequest(confirmation="DELETE INVOICE", action="cancel"),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+
+    db.refresh(invoice)
+    bill = db.query(OutstandingBill).filter_by(invoice_document_id=invoice.id).one()
+    assert response["status"] == "cancelled"
+    assert invoice.status == "cancelled"
+    assert bill.status == "cancelled"
+    assert bill.balance_amount == Decimal("0.00")
+
+
 def test_hard_delete_invoice_reverses_stock_and_outstanding():
     from models import DailySale, FinalProductStock
     db = _session()
@@ -734,4 +759,3 @@ def test_invoice_hard_delete_flows():
             db=db,
         )
     assert err.value.status_code == 403
-
