@@ -421,13 +421,15 @@ def list_live_stock(
             )
             for item in blank_items:
                 try:
-                    qty = float(item.total_qty_kg or 0)
+                    total_boras = float(getattr(item, "total_boras", 0) or 0)
+                    weight_per_bora = float(getattr(item, "weight_per_bora_kg", 0) or 0)
+                    qty = total_boras * weight_per_bora if (total_boras > 0 and weight_per_bora > 0) else float(item.total_qty_kg or 0)
                     quantity_source = (
                         "not_recorded"
                         if (
                             qty == 0
-                            and float(getattr(item, "weight_per_bora_kg", 0) or 0) > 0
-                            and float(getattr(item, "total_boras", 0) or 0) == 0
+                            and weight_per_bora > 0
+                            and total_boras == 0
                         )
                         else "excel_upload"
                     )
@@ -445,7 +447,14 @@ def list_live_stock(
                             "packaging_size": "Standard",
                             "category": "Blank",
                             "size_ml": getattr(item, "blank_size_ml", None),
-                            "kg_per_sack": float(getattr(item, "weight_per_bora_kg", 0) or 0),
+                            "kg_per_sack": weight_per_bora,
+                            "weight_per_bora_kg": weight_per_bora,
+                            "total_boras": total_boras,
+                            "total_boras_sacks": total_boras,
+                            "total_qty_kg": qty,
+                            "total_weight_kg": qty,
+                            "total_kg": qty,
+                            "stock_kg": qty,
                             "bucket": "cup_blanks",
                             "quantity_source": quantity_source,
                         }

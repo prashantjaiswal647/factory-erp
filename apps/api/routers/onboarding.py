@@ -124,6 +124,7 @@ OWNER_HEADER_ALIASES = {
         "mobile_number": "phone_number",
         "customer_firm_name": "firm_name",
         "opening_outstanding": "previous_due",
+        "opening_outstanding_amount": "previous_due",
     },
     "worker": {"worker_phone": "mobile_number", "phone_number": "mobile_number"},
     "machine": {"size_ml": "mould_size_ml", "machine_speed": "default_operating_speed"},
@@ -131,16 +132,32 @@ OWNER_HEADER_ALIASES = {
         "cup_size_ml": "size_ml",
         "product_size_ml": "size_ml",
         "carton_type": "material_name",
+        "blank_description": "material_name",
+        "material_name": "material_name",
+        "design_/_variety_name": "variety_design",
+        "cup_design": "variety_design",
+        "design": "variety_design",
+        "variety": "variety_design",
+        "opening_boras": "total_boras_sacks",
+        "total_bora": "total_boras_sacks",
+        "opening_bora_quantity": "total_boras_sacks",
+        "total_boras": "total_boras_sacks",
+        "weight_per_bora_kg": "weight_per_bora_kg",
+        "linked_bottom_size_mm": "linked_bottom_size_mm",
     },
     "bottom_reel": {
         "linked_bottom_size_mm": "bottom_size_mm",
         "opening_rolls": "total_individual_rolls",
         "total_weight": "total_weight_kg",
+        "design_/_variety_name": "variety_design",
+        "design": "variety_design",
     },
     "box_stock": {
         "carton_type": "box_type",
         "packaging_size_name": "box_type",
         "quantity": "box_quantity_pieces",
+        "opening_box_quantity": "box_quantity_pieces",
+        "price_per_box": "price_per_box_rs",
         "size_for_finished_product": "size_for_finished_product",
     },
     "plastic_stock": {
@@ -148,10 +165,15 @@ OWNER_HEADER_ALIASES = {
         "product_size_ml": "used_for_cup_size_ml",
         "plastic_type": "plastic_size_type",
         "used_for_cup_sizes_ml": "used_for_cup_size_ml",
+        "opening_boras": "total_boras_sacks",
+        "price_per_kg": "price_per_kg_rs",
     },
     "finished_goods": {
         "cup_size_ml": "product_size_ml",
         "box_type": "carton_type",
+        "design_/_variety_name": "variety_design",
+        "design": "variety_design",
+        "packing_name": "packaging_size_name",
     },
 }
 
@@ -250,6 +272,17 @@ HEADER_ALIASES = {
     "stock_rolls": "total_individual_rolls",
     "opening_boxes": "initial_stock_boxes",
     "opening_loose_packets": "initial_loose_packets",
+    "design_/_variety_name": "variety_design",
+    "cup_design": "variety_design",
+    "opening_boras": "total_boras_sacks",
+    "total_bora": "total_boras_sacks",
+    "opening_bora_quantity": "total_boras_sacks",
+    "total_boras": "total_boras_sacks",
+    "blank_description": "material_name",
+    "price_per_box": "price_per_box_rs",
+    "price_per_kg": "price_per_kg_rs",
+    "opening_outstanding_amount": "previous_due",
+    "opening_box_quantity": "box_quantity_pieces",
 }
 
 OPTIONAL_BULK_HEADERS = {
@@ -688,6 +721,18 @@ def validate_bulk_frame(
             "bottom_reel": {"variety_design"},
             "finished_goods": {"initial_loose_packets"},
         }.get(sub_tab_type, set()))
+
+    if sub_tab_type == "blank_stock" and "total_boras_sacks" not in headers:
+        unmapped_headers = [h for h in headers if h not in expected]
+        for h in unmapped_headers:
+            if any(x in h for x in ["bora", "sack", "opening"]):
+                return [], [{
+                    "sheet": sheet_name or sub_tab_type,
+                    "row": row_offset,
+                    "error": "Opening Bora Quantity could not be mapped. Expected column: total_boras_sacks / Opening Bora Quantity.",
+                    "entity_type": sub_tab_type,
+                }]
+
     missing_headers = [column for column in expected if column not in headers and column not in optional_headers]
     if missing_headers:
         return [], [{
@@ -1939,14 +1984,17 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
                 if row.get("linked_bottom_size_mm") is not None
                 else None
             )
-            stock.weight_per_bora_kg = row["weight_per_bora_kg"]
-            if "total_boras_sacks" in row:
-                total_boras = row.get("total_boras_sacks") or Decimal("0")
-                stock.total_boras = total_boras
-                stock.total_qty_kg = total_boras * row["weight_per_bora_kg"]
-            else:
-                stock.total_boras = stock.total_boras or 0
-                stock.total_qty_kg = stock.total_qty_kg or 0
+            stock.weight_per_bora_kg = row.get("weight_per_bora_kg") or Decimal("0")
+            total_boras = Decimal("0")
+            if "total_boras_sacks" in row and row.get("total_boras_sacks") is not None:
+                total_boras = Decimal(str(row["total_boras_sacks"]))
+            elif "total_boras" in row and row.get("total_boras") is not None:
+                total_boras = Decimal(str(row["total_boras"]))
+            elif getattr(stock, "total_boras", None) is not None:
+                total_boras = Decimal(str(stock.total_boras))
+
+            stock.total_boras = total_boras
+            stock.total_qty_kg = total_boras * stock.weight_per_bora_kg
             saved_count += 1
         db.flush()
         return saved_count
@@ -2237,19 +2285,6 @@ async def validate_master_onboarding(
     # Count total ACTUAL rows across all sheets
     total_attempted = sum(len(rows) for rows in valid_by_type.values())
     successful_rows = total_attempted  # in dry-run all valid rows are "would succeed"
-
-    issues = enrich_failed_rows(failed_rows) + duplicate_warnings + cross_sheet_issues
-    report = make_report(issues, successful_rows=successful_rows, total_rows_attempted=total_attempted + len(failed_rows))
-
-    return {
-        "dry_run": True,
-        "message": "Validation complete. No data was imported.",
-        "overall_status": "failed" if report.has_fatal else ("partial" if report.warning_issues else "ok"),
-        "validation_report": report.to_dict(),
-        "would_import_counts": {k: len(v) for k, v in valid_by_type.items() if v},
-    }
-
-
 @v1_router.post("/bulk-upload/master")
 async def bulk_upload_master_onboarding(
     background_tasks: BackgroundTasks,
@@ -2328,20 +2363,32 @@ async def bulk_upload_master_onboarding(
         "failed": 0,
         "warnings": len([issue for issue in issues if issue.severity == ValidationSeverity.WARNING]),
     }
+    sheet_stats = {}
     try:
         operation_counts["skipped"] = reset_active_onboarding_master_data(
             db,
             factory_id=int(current_user.factory_id),
         )
         for sub_tab_type in BULK_TEMPLATE_COLUMNS:
+            sub_stats = {
+                "inserted": 0,
+                "updated": 0,
+                "unchanged": 0,
+                "skipped": 0,
+                "failed": 0,
+            }
             inserted_counts[sub_tab_type] = apply_bulk_rows(
                 db,
                 current_user,
                 sub_tab_type,
                 valid_by_type.get(sub_tab_type, []),
-                operation_counts,
+                sub_stats,
                 fg_debug_info=fg_debug_info if sub_tab_type == "finished_goods" else None
             )
+            for k in ["inserted", "updated", "unchanged", "skipped", "failed"]:
+                operation_counts[k] += sub_stats[k]
+            sheet_stats[sub_tab_type] = sub_stats
+
         operation_counts["warnings"] = len([
             issue for issue in issues if issue.severity == ValidationSeverity.WARNING
         ])
@@ -2387,6 +2434,20 @@ async def bulk_upload_master_onboarding(
             }
         }
 
+        blank_stock_valid_rows = valid_by_type.get("blank_stock", [])
+        total_boras_imported = sum(float(row.get("total_boras_sacks") or 0) for row in blank_stock_valid_rows)
+        total_kg_imported = sum(float(row.get("total_boras_sacks") or 0) * float(row.get("weight_per_bora_kg") or 0) for row in blank_stock_valid_rows)
+
+        debug_import_summary = {
+            "Cup Blank": {
+                "created_count": sheet_stats.get("blank_stock", {}).get("inserted", 0),
+                "updated_count": sheet_stats.get("blank_stock", {}).get("updated", 0),
+                "unchanged_count": sheet_stats.get("blank_stock", {}).get("unchanged", 0),
+                "total_boras_imported": total_boras_imported,
+                "total_kg_imported": total_kg_imported,
+            }
+        }
+
         return {
             "message": "Master data replaced / updated successfully",
             "overall_status": overall_status,
@@ -2401,6 +2462,7 @@ async def bulk_upload_master_onboarding(
             "summary": summary_payload,
             "fg_debug_info": fg_debug_info,
             "errors": [err for err in failed_rows],
+            "debug_import_summary": debug_import_summary,
             # kept for backward compatibility
             "failed_rows": [],
         }

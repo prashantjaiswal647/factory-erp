@@ -413,7 +413,13 @@ function InventoryTable(props: Parameters<typeof InventoryGroupSection>[0]) {
             <td className={`border-l-[3px] px-3 py-2 font-semibold text-zinc-950 ${statusBar(row.status)}`}>{row.item}</td>
             <td className="whitespace-nowrap px-3 py-2 text-zinc-600">{groupLabel(row.source)}</td>
             <td className="whitespace-nowrap px-3 py-2 text-zinc-700">{row.size}</td>
-            <td className="whitespace-nowrap px-3 py-2 font-semibold text-zinc-950">{formatNumber(row.quantity)} {row.unit}</td>
+            <td className="whitespace-nowrap px-3 py-2 font-semibold text-zinc-950">
+              {bucketFor(row.source) === "cup_blanks" && row.source.total_boras ? (
+                `${row.source.total_boras} ${row.source.total_boras === 1 ? 'bora' : 'boras'} / ${formatNumber(row.quantity)} ${row.unit}`
+              ) : (
+                `${formatNumber(row.quantity)} ${row.unit}`
+              )}
+            </td>
             <td className={`whitespace-nowrap px-3 py-2 font-bold ${reorderTone(row.status)}`} title="Estimated from the current low-stock threshold.">
               {row.status === "In Stock" ? "-" : formatNumber(computeReorder(row.quantity, row.source.stock_type))}
             </td>
@@ -478,7 +484,11 @@ function MobileInventoryRow(props: {
             {isFinishedGoods ? <span className="block text-xs font-bold uppercase tracking-wide text-brand-700">{props.row.size || "-"}</span> : null}
             <span className="block truncate text-sm font-semibold text-zinc-950">{props.row.item || "-"}</span>
             <span className="mt-1 block text-xs text-zinc-500">
-              {formatNumber(props.row.quantity)} {props.row.unit}
+              {bucketFor(props.row.source) === "cup_blanks" && props.row.source.total_boras ? (
+                `${props.row.source.total_boras} ${props.row.source.total_boras === 1 ? 'bora' : 'boras'} / ${formatNumber(props.row.quantity)} ${props.row.unit}`
+              ) : (
+                `${formatNumber(props.row.quantity)} ${props.row.unit}`
+              )}
               {props.row.status === "In Stock" ? "" : ` · suggested reorder ${computeReorder(props.row.quantity, props.row.source.stock_type)}`}
             </span>
           </span>
@@ -491,7 +501,7 @@ function MobileInventoryRow(props: {
             <Detail label="Size" value={props.row.size} />
             <Detail label="Item" value={props.row.item || "-"} />
             <Detail label="Details" value={isFinishedGoods ? finishedGoodsDetails(props.row) : detailSummary(props.row)} />
-            <Detail label="Stock" value={isFinishedGoods ? finishedGoodsStock(props.row) : `${formatNumber(props.row.quantity)} ${props.row.unit}`} />
+            <Detail label="Stock" value={isFinishedGoods ? finishedGoodsStock(props.row) : bucketFor(props.row.source) === "cup_blanks" && props.row.source.total_boras ? `${props.row.source.total_boras} ${props.row.source.total_boras === 1 ? 'bora' : 'boras'} / ${formatNumber(props.row.quantity)} ${props.row.unit}` : `${formatNumber(props.row.quantity)} ${props.row.unit}`} />
           </dl>
           <div className="mt-3 flex gap-2">
             <Link className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700" to="/onboarding">
@@ -736,7 +746,14 @@ function detailSummary(row: InventoryDisplayRow) {
   const source = row.source;
   const bucket = bucketFor(source);
   if (bucket === "finished_goods") return `${source.pieces_per_packet || "-"} pcs/pkt · ${source.packets_per_box_limit || source.packets_per_box || "-"} pkt/box`;
-  if (bucket === "cup_blanks") return source.kg_per_sack ? `${source.kg_per_sack} kg/sack` : "-";
+  if (bucket === "cup_blanks") {
+    const totalBoras = source.total_boras || 0;
+    const kgPerSack = source.kg_per_sack || source.weight_per_bora_kg || 0;
+    if (totalBoras > 0) {
+      return `${totalBoras} ${totalBoras === 1 ? 'bora' : 'boras'} · ${kgPerSack} kg/sack`;
+    }
+    return kgPerSack ? `${kgPerSack} kg/sack` : "-";
+  }
   if (bucket === "bottom_reels") return `${source.total_rolls || 0} rolls · ${source.total_weight_kg || row.quantity} kg`;
   if (bucket === "boxes") return source.price_per_box || source.price_per_unit ? `Rs ${source.price_per_box || source.price_per_unit}/box` : "-";
   if (bucket === "polybags_packing") return `${source.total_boras || 0} boras · ${source.weight_per_bora_kg || 0} kg/bora`;

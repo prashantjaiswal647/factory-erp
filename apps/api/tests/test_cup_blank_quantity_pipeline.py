@@ -192,3 +192,115 @@ def test_blank_stock_bulk_quantity_is_calculated_and_visible_in_inventory():
         db.close()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+def test_owner_friendly_cup_blank_import_pipeline():
+    import pandas as pd
+    # 1. owner-friendly Cup_Blank import with 10 bora, 40 kg/bora shows 400 kg in inventory
+    frame = pd.DataFrame(
+        [
+            {
+                "row_type": "ACTUAL",
+                "Blank Description": "Paper Blanks",
+                "Cup Size ML": 150,
+                "Design / Variety Name": "White Cup",
+                "Weight per Bora KG": 40,
+                "Opening Boras": 10,
+            }
+        ]
+    )
+    # We must mock OWNER_HEADER_ALIASES mapping
+    from routers.onboarding import OWNER_HEADER_ALIASES, canonical_bulk_header
+    mapped_cols = []
+    for col in frame.columns:
+        canonical = canonical_bulk_header(col)
+        mapped = OWNER_HEADER_ALIASES["blank_stock"].get(canonical, canonical)
+        mapped_cols.append(mapped)
+    frame.columns = mapped_cols
+
+    valid_rows, failed_rows = validate_bulk_frame(frame, "blank_stock")
+    assert failed_rows == []
+    assert len(valid_rows) == 1
+    assert valid_rows[0]["total_boras_sacks"] == Decimal("10")
+    assert valid_rows[0]["weight_per_bora_kg"] == Decimal("40")
+
+    engine, db = make_session()
+    try:
+        factory = Factory(name="Owner Friendly Test Factory")
+        db.add(factory)
+        db.flush()
+
+        # Apply
+        apply_bulk_rows(db, SimpleNamespace(factory_id=factory.id), "blank_stock", valid_rows)
+        db.commit()
+
+        stock = db.query(BlankStock).filter(BlankStock.factory_id == factory.id).one()
+        assert stock.total_boras == Decimal("10")
+        assert stock.total_qty_kg == Decimal("400")
+
+        # Check inventory API
+        rows = list_live_stock(current_user=SimpleNamespace(factory_id=factory.id), db=db)
+        blank_rows = [row for row in rows if row["bucket"] == "cup_blanks"]
+        assert len(blank_rows) == 1
+        assert blank_rows[0]["quantity"] == 400
+        assert blank_rows[0]["total_boras"] == 10
+        assert blank_rows[0]["weight_per_bora_kg"] == 40
+
+        # 2. re-upload same sheet does not reset stock to 0
+        apply_bulk_rows(db, SimpleNamespace(factory_id=factory.id), "blank_stock", valid_rows)
+        db.commit()
+        stock = db.query(BlankStock).filter(BlankStock.factory_id == factory.id).one()
+        assert stock.total_boras == Decimal("10")
+        assert stock.total_qty_kg == Decimal("400")
+
+        # 3. old template kg_per_sack alias still works
+        old_frame = pd.DataFrame(
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "material_name": "Plain White",
+                    "size_ml": 150,
+                    "kg_per_sack": 35,
+                    "quantity_of_total_bora": 5,
+                }
+            ]
+        )
+        mapped_old = []
+        for col in old_frame.columns:
+            canonical = canonical_bulk_header(col)
+            mapped = OWNER_HEADER_ALIASES["blank_stock"].get(canonical, canonical)
+            mapped_old.append(mapped)
+        old_frame.columns = mapped_old
+
+        v_rows, f_rows = validate_bulk_frame(old_frame, "blank_stock")
+        assert f_rows == []
+        assert v_rows[0]["weight_per_bora_kg"] == Decimal("35")
+        assert v_rows[0]["total_boras_sacks"] == Decimal("5")
+
+        # 4. missing bora quantity gives validation error
+        bad_frame = pd.DataFrame(
+            [
+                {
+                    "row_type": "ACTUAL",
+                    "material_name": "Plain White",
+                    "size_ml": 150,
+                    "weight_per_bora_kg": 40,
+                    "Opening Bora Quantity (typo)": 10,
+                }
+            ]
+        )
+        mapped_bad = []
+        for col in bad_frame.columns:
+            canonical = canonical_bulk_header(col)
+            mapped = OWNER_HEADER_ALIASES["blank_stock"].get(canonical, canonical)
+            mapped_bad.append(mapped)
+        bad_frame.columns = mapped_bad
+
+        v_bad, f_bad = validate_bulk_frame(bad_frame, "blank_stock")
+        assert len(f_bad) == 1
+        assert "Opening Bora Quantity could not be mapped" in f_bad[0]["error"]
+
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
