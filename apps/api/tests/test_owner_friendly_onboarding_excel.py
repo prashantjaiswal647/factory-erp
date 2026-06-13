@@ -19,6 +19,7 @@ from routers.onboarding import (
     read_master_bulk_excel,
     validate_bulk_cross_sheet,
 )
+from services.bulk_validation import enrich_failed_rows
 
 
 def owner_workbook() -> bytes:
@@ -168,3 +169,83 @@ def test_bulk_upload_decimal_validation_error_returns_422_not_500():
     assert response.status_code == 422
     assert response.json()["detail"]["overall_status"] == "failed"
     assert "40.5" in response.text or "2.25" in response.text
+
+
+def test_owner_validation_auto_normalizes_mapping_and_plastic_units():
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    data = {
+        "Factory_Profile": (["Factory Name"], [["Factory"]]),
+        "Customers": (["Customer Name", "Phone"], []),
+        "Workers": (["Worker Name"], []),
+        "Machines": (["Machine Number", "Machine Name", "Machine Size ML", "Bottom Size MM"], [["1", "M1", 210, 68]]),
+        "Cup_Blank": (
+            ["Material Name", "Cup Size ML", "Design", "Linked Bottom Size MM", "Weight Per Bora KG", "Total Boras Sacks"],
+            [["Blank", 210, "", 68, 40, 2]],
+        ),
+        "Bottom_Reel": (
+            ["Bottom Size MM", "Design", "Total Individual Rolls", "Total Weight KG"],
+            [[68, "White", 10, 20]],
+        ),
+        "Box_Stock": (["Carton Type", "Carton Quantity"], [["210 - White", 5]]),
+        "Plastic_Stock": (
+            ["Plastic Size Type", "Cup Size ML", "Total Boras Sacks", "Weight Per Bora KG", "Price Per KG Rs"],
+            [["Sleeve", "210 ml", 2, 20, 100], [None, None, None, None, None]],
+        ),
+        "Finished_Goods": (
+            ["Cup Size ML", "Design", "Carton Type", "Pieces Per Packet", "Packets Per Carton", "Opening Boxes"],
+            [[210, "", " 210-White ", 48, 10, 1]],
+        ),
+        "Costing_Optional": (["Paper Price Per KG"], []),
+    }
+    for name, (headers, rows) in data.items():
+        sheet = workbook.create_sheet(name)
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+    output = BytesIO()
+    workbook.save(output)
+
+    valid, failed = read_master_bulk_excel(output.getvalue())
+    issues = enrich_failed_rows(failed)
+    assert valid["plastic_stock"][0]["used_for_cup_size_ml"] == 210
+    assert len(valid["plastic_stock"]) == 1
+    assert valid["blank_stock"][0]["variety_design"] == "White"
+    assert valid["finished_goods"][0]["variety_design"] == "White"
+    assert not [issue for issue in validate_bulk_cross_sheet(valid, strict_validation=True) if issue.severity.value == "fatal"]
+    assert all("BulkRow" not in issue.error for issue in issues)
+
+
+def test_partial_plastic_row_has_simple_error_and_duplicates_are_grouped():
+    workbook_bytes = owner_workbook()
+    valid, _ = read_master_bulk_excel(workbook_bytes)
+    valid["customer"].append({**valid["customer"][0], "_row_number": 9})
+    _, duplicate_warnings = dedupe_valid_bulk_rows(valid)
+    customer_warnings = [issue for issue in duplicate_warnings if issue.sheet == "Customers"]
+    assert len(customer_warnings) == 1
+    assert "duplicate rows were combined" in customer_warnings[0].error
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Plastic_Stock"
+    sheet.append(["Plastic Size Type", "Cup Size ML", "Total Boras Sacks"])
+    sheet.append(["Sleeve", "not a size", 2])
+    from routers.onboarding import read_owner_friendly_sheet
+
+    warnings: list[dict] = []
+    _, errors = read_owner_friendly_sheet(
+        __import__("pandas").read_excel(BytesIO(_single_sheet_bytes(workbook)), header=None),
+        "plastic_stock",
+        "Plastic_Stock",
+        warnings,
+    )
+    issues = enrich_failed_rows(errors)
+    assert issues
+    assert all("PlasticStockBulkRow" not in issue.error for issue in issues)
+    assert any("पूरा नंबर" in issue.error or "whole number" in issue.error for issue in issues)
+
+
+def _single_sheet_bytes(workbook: Workbook) -> bytes:
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()

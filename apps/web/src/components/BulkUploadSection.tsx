@@ -1,7 +1,7 @@
 import axios from "axios";
-import { CloudUpload, Download, Loader2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, CloudUpload, Download, Loader2, TriangleAlert, X } from "lucide-react";
 import { useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, ReactNode } from "react";
 
 import {
   downloadMasterOnboardingTemplate,
@@ -195,41 +195,10 @@ export default function BulkUploadSection({ onUploaded, onToast }: BulkUploadSec
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="max-h-[420px] overflow-auto p-5">
-              <table className="min-w-full divide-y divide-zinc-200 text-left text-xs">
-                <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-zinc-500">
-                  <tr>
-                    <th className="px-3 py-2">Severity</th>
-                    <th className="px-3 py-2">Sheet</th>
-                    <th className="px-3 py-2">Section</th>
-                    <th className="px-3 py-2">Row</th>
-                    <th className="px-3 py-2">Field</th>
-                    <th className="px-3 py-2">Current value</th>
-                    <th className="px-3 py-2">Action</th>
-                    <th className="px-3 py-2">Issue</th>
-                    <th className="px-3 py-2">Suggested correction</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100">
-                  {issues.map((issue, index) => (
-                    <tr key={`${issue.sheet || "sheet"}-${issue.row || "row"}-${issue.field}-${index}`}>
-                      <td className="px-3 py-2">
-                        <span className={`rounded-full px-2 py-1 font-bold capitalize ${severityClass(issue.severity)}`}>
-                          {issue.severity}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 font-semibold text-zinc-800">{issue.sheet || "Workbook"}</td>
-                      <td className="px-3 py-2 text-zinc-600">{issue.section || "-"}</td>
-                      <td className="px-3 py-2 text-zinc-600">{issue.row ?? "-"}</td>
-                      <td className="px-3 py-2 text-zinc-700">{issue.field || "-"}</td>
-                      <td className="max-w-40 truncate px-3 py-2 text-zinc-600">{issue.raw_value == null ? "-" : String(issue.raw_value)}</td>
-                      <td className="px-3 py-2 font-semibold capitalize text-zinc-700">{issue.action_type || (issue.severity === "fatal" ? "error" : "-")}</td>
-                      <td className="px-3 py-2 text-zinc-700">{issue.error}</td>
-                      <td className="px-3 py-2 text-zinc-600">{issue.suggested_correction || "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto p-5">
+              <IssueGroup title="Fatal Errors / जरूरी सुधार" severity="fatal" issues={issues} icon={<AlertCircle className="h-4 w-4" />} />
+              <IssueGroup title="Warnings / चेतावनी" severity="warning" issues={issues} icon={<TriangleAlert className="h-4 w-4" />} />
+              <IssueGroup title="Auto-fixed / अपने आप ठीक किया" severity="info" issues={issues} icon={<CheckCircle2 className="h-4 w-4" />} />
             </div>
           </div>
         </div>
@@ -247,8 +216,36 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function severityClass(severity: BulkValidationIssue["severity"]) {
-  if (severity === "fatal") return "bg-red-100 text-red-700";
-  if (severity === "warning") return "bg-amber-100 text-amber-700";
-  return "bg-blue-100 text-blue-700";
+function IssueGroup({ title, severity, issues, icon }: {
+  title: string;
+  severity: BulkValidationIssue["severity"];
+  issues: BulkValidationIssue[];
+  icon: ReactNode;
+}) {
+  const matching = issues.filter((issue) => issue.severity === severity);
+  if (!matching.length) return null;
+  const colors = severity === "fatal"
+    ? "border-red-200 bg-red-50 text-red-800"
+    : severity === "warning"
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-emerald-200 bg-emerald-50 text-emerald-800";
+  return (
+    <details open={severity === "fatal"} className={`rounded-lg border ${colors}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-bold">
+        {icon}
+        {title} ({matching.length})
+      </summary>
+      <div className="space-y-2 border-t border-current/10 p-3">
+        {matching.map((issue, index) => (
+          <div key={`${issue.sheet}-${issue.row}-${index}`} className="rounded-md bg-white/80 p-3 text-sm text-zinc-800">
+            <p className="font-semibold">{issue.sheet || "Workbook"}{issue.row ? `, Row ${issue.row}` : ""}</p>
+            <p className="mt-1">{issue.error}</p>
+            {issue.suggested_correction ? (
+              <p className="mt-2 text-xs font-medium text-zinc-600">Correction: {issue.suggested_correction}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
 }

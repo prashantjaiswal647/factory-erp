@@ -242,6 +242,12 @@ def classify_pydantic_error(
         # Third pattern: indented error message
         if line.startswith(" ") or line.lower().startswith("value"):
             error_text = line.strip().split(" [type=")[0].strip()
+            if "valid integer" in error_text.lower() or "unable to parse" in error_text.lower():
+                error_text = "Enter a whole number, for example 210 or 210 ml. / पूरा नंबर लिखें, जैसे 210 या 210 ml।"
+            elif "field required" in error_text.lower():
+                error_text = "This value is required. / यह जानकारी भरना जरूरी है।"
+            elif "greater than" in error_text.lower():
+                error_text = "Enter a value greater than zero. / शून्य से बड़ा नंबर लिखें।"
             raw_val = row_values.get(current_field) if row_values else None
             suggestion = _find_suggestion(current_field, error_text)
             issues.append(ValidationIssue(
@@ -260,7 +266,10 @@ def classify_pydantic_error(
         issues.append(ValidationIssue(
             row=row,
             field="unknown",
-            error=pydantic_error_str[:300],
+            error=(
+                "Some values have an invalid type or are incomplete. / "
+                "इस पंक्ति की कुछ जानकारी गलत प्रकार की या अधूरी है।"
+            ),
             severity=ValidationSeverity.FATAL,
             suggested_correction="Check the row values match the template column types",
             sheet=sheet,
@@ -284,6 +293,17 @@ def classify_row_error(
     error_text = str(raw_error.get("error", "Unknown error"))
     row_values = raw_error.get("values") or {}
     missing_headers = raw_error.get("missing_headers")
+    explicit_severity = raw_error.get("severity")
+    if explicit_severity in {severity.value for severity in ValidationSeverity}:
+        return [ValidationIssue(
+            row=row,
+            field=str(raw_error.get("field") or "row"),
+            error=error_text,
+            severity=ValidationSeverity(explicit_severity),
+            suggested_correction=raw_error.get("suggested_correction"),
+            sheet=sheet,
+            action_type=raw_error.get("action_type"),
+        )]
 
     # ── header / file-level errors ──────────────────────────────────────────
     if missing_headers:

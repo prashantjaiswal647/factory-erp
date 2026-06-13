@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any, List, Optional
 
@@ -402,7 +402,7 @@ class BlankStockBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
     material_restore_key: Optional[str] = Field(default=None, max_length=100)
     material_name: str = Field(..., min_length=1, max_length=255)
-    variety_design: str = Field(..., min_length=1, max_length=100)
+    variety_design: str = Field(default="", max_length=100)
     size_ml: int = Field(..., gt=0)
     linked_bottom_size_mm: Optional[int] = Field(default=None, gt=0)
     weight_per_bora_kg: Decimal = Field(default=Decimal("0"), ge=0)
@@ -413,7 +413,7 @@ class BottomReelBulkRow(BaseModel):
     row_type: str = Field(..., max_length=20)
     material_restore_key: Optional[str] = Field(default=None, max_length=100)
     bottom_size_mm: int = Field(..., gt=0)
-    variety_design: str = Field(..., min_length=1, max_length=100)
+    variety_design: str = Field(default="", max_length=100)
     total_individual_rolls: int = Field(default=0, ge=0)
     total_weight_kg: Decimal = Field(default=Decimal("0"), ge=0)
     bottom_price_per_kg: Decimal = Field(default=Decimal("0"), ge=0)
@@ -494,7 +494,9 @@ def bulk_str(value) -> str:
 
 
 def normalized_identity(value) -> str:
-    return " ".join(bulk_str(value).casefold().split())
+    text = bulk_str(value).casefold()
+    text = re.sub(r"\s*[-–—]\s*", "-", text)
+    return " ".join(text.split())
 
 
 def normalized_phone(value) -> str:
@@ -577,10 +579,16 @@ def coerce_excel_int_token(value) -> int:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    text = bulk_str(value)
+    text = re.sub(r"(?i)\s*ml\s*$", "", bulk_str(value)).strip()
     if not text:
         raise ValueError("empty integer value")
-    decimal_value = Decimal(text)
+    try:
+        decimal_value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        raise ValueError(
+            "Enter a whole number, for example 210 or 210 ml. / "
+            "पूरा नंबर लिखें, जैसे 210 या 210 ml।"
+        ) from None
     if decimal_value != decimal_value.to_integral_value():
         raise ValueError(f"{text} is not a whole number")
     return int(decimal_value)
@@ -638,6 +646,13 @@ def actual_rows_only(frame):
     return frame[mask]
 
 
+def row_has_owner_data(raw_row, expected: list[str]) -> bool:
+    return any(
+        key != "row_type" and not is_blank_bulk_value(raw_row.get(key))
+        for key in expected
+    )
+
+
 def validate_bulk_frame(
     frame,
     sub_tab_type: str,
@@ -646,6 +661,7 @@ def validate_bulk_frame(
     *,
     strict_validation: bool = False,
     compatibility_warnings: list[dict] | None = None,
+    owner_friendly: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     expected = BULK_TEMPLATE_COLUMNS[sub_tab_type]
     frame = canonicalize_bulk_frame(frame)
@@ -676,11 +692,13 @@ def validate_bulk_frame(
         frame.loc[frame["previous_attendance_details"].astype(str).str.strip() == "", "previous_attendance_details"] = 0
     actual_frame = actual_rows_only(frame)
     for index, raw_row in actual_frame.iterrows():
+        if not row_has_owner_data(raw_row, expected):
+            continue
         row = apply_bulk_numeric_defaults(
             sub_tab_type,
             {key: normalize_bulk_cell(key, raw_row.get(key)) for key in expected},
         )
-        if not strict_validation and sub_tab_type == "blank_stock":
+        if not strict_validation and not owner_friendly and sub_tab_type == "blank_stock":
             if is_blank_bulk_value(row.get("variety_design")):
                 row["variety_design"] = bulk_str(row.get("material_name"))
                 if compatibility_warnings is not None:
@@ -690,7 +708,7 @@ def validate_bulk_frame(
                         "error": "Blank variety missing; defaulted to material_name.",
                         "values": {"variety_design": row["variety_design"]},
                     })
-        if not strict_validation and sub_tab_type == "bottom_reel":
+        if not strict_validation and not owner_friendly and sub_tab_type == "bottom_reel":
             if is_blank_bulk_value(row.get("variety_design")):
                 row["variety_design"] = "Plain White"
                 if compatibility_warnings is not None:
@@ -712,7 +730,13 @@ def validate_bulk_frame(
                 validated_row["_row_number"] = int(index) + 1
                 valid_rows.append(validated_row)
         except Exception as exc:
-            failed_rows.append({"sheet": sheet_name or sub_tab_type, "row": int(index) + 1, "error": str(exc), "values": row})
+            failed_rows.append({
+                "sheet": sheet_name or sub_tab_type,
+                "row": int(index) + 1,
+                "error": str(exc),
+                "values": row,
+                "entity_type": sub_tab_type,
+            })
     return valid_rows, failed_rows
 
 
@@ -788,24 +812,131 @@ def dedupe_valid_bulk_rows(valid_by_type: dict[str, list[dict]]) -> tuple[dict[s
 
     for sub_tab_type, rows in valid_by_type.items():
         by_key: dict[tuple, dict] = {}
+        duplicate_rows: list[int] = []
         for row in rows:
             key = bulk_unique_key(sub_tab_type, row)
             if key in by_key:
                 previous_row = by_key[key]
-                warnings.append(
-                    ValidationIssue(
-                        row=row.get("_row_number"),
-                        field="row_type",
-                        error="Duplicate row in uploaded workbook; the last matching ACTUAL row was used.",
-                        severity=ValidationSeverity.WARNING,
-                        suggested_correction="Keep only one ACTUAL row per unique item if you do not intend to override values.",
-                        sheet=sheet_names.get(sub_tab_type, sub_tab_type),
-                        raw_value=f"previous row {previous_row.get('_row_number')}",
-                    )
-                )
+                duplicate_rows.extend([
+                    int(previous_row.get("_row_number") or 0),
+                    int(row.get("_row_number") or 0),
+                ])
             by_key[key] = row
+        if duplicate_rows:
+            unique_rows = sorted({row for row in duplicate_rows if row > 0})
+            warnings.append(ValidationIssue(
+                row=max(unique_rows),
+                field="duplicate_rows",
+                error=f"{len(unique_rows)} duplicate rows were combined; the last value was used.",
+                severity=ValidationSeverity.WARNING,
+                suggested_correction=f"Check rows: {', '.join(map(str, unique_rows[:12]))}.",
+                sheet=sheet_names.get(sub_tab_type, sub_tab_type),
+                raw_value=", ".join(map(str, unique_rows[:12])),
+                action_type="updated",
+            ))
         deduped[sub_tab_type] = list(by_key.values())
     return deduped, warnings
+
+
+def auto_normalize_owner_mappings(
+    valid_by_type: dict[str, list[dict]],
+) -> list[ValidationIssue]:
+    fixes: list[ValidationIssue] = []
+    blanks_by_size: dict[int, list[dict]] = {}
+    bottoms_by_size: dict[int, list[dict]] = {}
+    for row in valid_by_type.get("blank_stock", []):
+        blanks_by_size.setdefault(int(row["size_ml"]), []).append(row)
+    for row in valid_by_type.get("bottom_reel", []):
+        bottoms_by_size.setdefault(int(row["bottom_size_mm"]), []).append(row)
+
+    for row in valid_by_type.get("finished_goods", []):
+        if not normalized_identity(row.get("variety_design")):
+            candidates = blanks_by_size.get(int(row["product_size_ml"]), [])
+            varieties = {bulk_str(item.get("variety_design")) for item in candidates if bulk_str(item.get("variety_design"))}
+            if len(varieties) == 1:
+                row["variety_design"] = next(iter(varieties))
+                fixes.append(ValidationIssue(
+                    row=row.get("_row_number"), field="variety_design",
+                    error="Product design was filled from the only matching Cup Blank.",
+                    severity=ValidationSeverity.INFO,
+                    suggested_correction="No action needed / कोई बदलाव जरूरी नहीं।",
+                    sheet="Finished Goods", action_type="updated",
+                ))
+
+    explicit_bottom_varieties = {
+        int(row["bottom_size_mm"]): bulk_str(row.get("variety_design"))
+        for row in valid_by_type.get("bottom_reel", [])
+        if bulk_str(row.get("variety_design"))
+    }
+    for row in valid_by_type.get("blank_stock", []):
+        if normalized_identity(row.get("variety_design")):
+            continue
+        linked = row.get("linked_bottom_size_mm")
+        if linked and int(linked) in explicit_bottom_varieties:
+            row["variety_design"] = explicit_bottom_varieties[int(linked)]
+        elif linked and len(bottoms_by_size.get(int(linked), [])) == 1:
+            row["variety_design"] = "Plain White"
+        else:
+            continue
+        fixes.append(ValidationIssue(
+            row=row.get("_row_number"), field="variety_design",
+            error="Cup Blank design was filled from the matching Bottom Reel.",
+            severity=ValidationSeverity.INFO,
+            suggested_correction="No action needed / कोई बदलाव जरूरी नहीं।",
+            sheet="Cup_Blank", action_type="updated",
+        ))
+
+    # Re-check products after blank designs have been safely inferred.
+    for row in valid_by_type.get("finished_goods", []):
+        if normalized_identity(row.get("variety_design")):
+            continue
+        candidates = blanks_by_size.get(int(row["product_size_ml"]), [])
+        varieties = {
+            bulk_str(item.get("variety_design"))
+            for item in candidates
+            if bulk_str(item.get("variety_design"))
+        }
+        if len(varieties) == 1:
+            row["variety_design"] = next(iter(varieties))
+            fixes.append(ValidationIssue(
+                row=row.get("_row_number"),
+                field="variety_design",
+                error="Product design was filled from the only matching Cup Blank.",
+                severity=ValidationSeverity.INFO,
+                suggested_correction="No action needed / कोई बदलाव ज़रूरी नहीं।",
+                sheet="Finished Goods",
+                action_type="updated",
+            ))
+
+    existing_boxes = {
+        normalized_identity(row.get("box_type"))
+        for row in valid_by_type.get("box_stock", [])
+    }
+    missing_boxes: dict[str, str] = {}
+    for row in valid_by_type.get("finished_goods", []):
+        packaging = bulk_str(row.get("packaging_size_name"))
+        normalized = normalized_identity(packaging)
+        if normalized and normalized not in existing_boxes:
+            missing_boxes[normalized] = packaging
+    for normalized, packaging in missing_boxes.items():
+        valid_by_type.setdefault("box_stock", []).append({
+            "row_type": "ACTUAL",
+            "box_type": packaging,
+            "box_quantity_pieces": 0,
+            "price_per_box_rs": 0,
+            "_row_number": None,
+        })
+        existing_boxes.add(normalized)
+    if missing_boxes:
+        names = ", ".join(sorted(missing_boxes.values()))
+        fixes.append(ValidationIssue(
+            row=None, field="packaging_size_name",
+            error=f"Carton mapping was created automatically for: {names}.",
+            severity=ValidationSeverity.WARNING,
+            suggested_correction="Add opening carton stock before production / उत्पादन से पहले carton stock भरें।",
+            sheet="Box_Stock", action_type="created",
+        ))
+    return fixes
 
 
 def validate_bulk_cross_sheet(
@@ -833,18 +964,18 @@ def validate_bulk_cross_sheet(
         if packaging not in boxes:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="packaging_size_name",
-                error="Finished Goods packaging does not match any Box Packaging box_type.",
+                error="This product's carton name is missing from Box Stock. / इस product का carton Box Stock में नहीं मिला।",
                 severity=severity,
-                suggested_correction="Add the same packaging name in Raw Materials / Box Packaging.",
+                suggested_correction=f"Add carton name '{row.get('packaging_size_name')}' in Box Stock.",
                 sheet="Finished Goods", section="Finished Goods",
                 raw_value=row.get("packaging_size_name"), action_type=action_type,
             ))
         if sku not in blanks:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="variety_design",
-                error="Finished Goods size and variety do not have matching Blank stock.",
+                error="Matching Cup Blank was not found for this product size and design. / इस size और design का Cup Blank नहीं मिला।",
                 severity=severity,
-                suggested_correction="Add a Cup Blank row with the same size_ml and variety_design.",
+                suggested_correction=f"Add Cup Blank: {row.get('product_size_ml')} ml, {row.get('variety_design') or 'design'}",
                 sheet="Finished Goods", section="Finished Goods",
                 raw_value=row.get("variety_design"), action_type=action_type,
             ))
@@ -854,9 +985,9 @@ def validate_bulk_cross_sheet(
         if linked_value is None:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="linked_bottom_size_mm",
-                error="Blank bottom mapping is incomplete.",
+                error="Cup Blank is not linked to a Bottom Reel size. / Cup Blank का Bottom Reel size नहीं जुड़ा है।",
                 severity=severity,
-                suggested_correction="Set linked_bottom_size_mm before using this SKU in production.",
+                suggested_correction="Fill Linked Bottom Size MM in Cup_Blank.",
                 sheet="Raw Materials", section="Cup Blank",
                 raw_value=None, action_type=action_type,
             ))
@@ -866,9 +997,9 @@ def validate_bulk_cross_sheet(
         if (linked_size, variety) not in bottoms:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="linked_bottom_size_mm",
-                error="Blank linked bottom size and variety do not match a Bottom Reel row.",
+                error="Matching Bottom Reel was not found for this Cup Blank. / इस Cup Blank का Bottom Reel नहीं मिला।",
                 severity=severity,
-                suggested_correction="Add a Bottom Reel row with the linked size and same variety_design.",
+                suggested_correction=f"Add Bottom Reel: {linked_size} mm, {row.get('variety_design') or 'Plain White'}",
                 sheet="Raw Materials", section="Cup Blank",
                 raw_value=row.get("linked_bottom_size_mm"), action_type=action_type,
             ))
@@ -877,9 +1008,9 @@ def validate_bulk_cross_sheet(
         if row.get("bottom_size_mm") and int(row["bottom_size_mm"]) not in bottom_sizes:
             issues.append(ValidationIssue(
                 row=row.get("_row_number"), field="bottom_size_mm",
-                error="Machine bottom size does not exist in Bottom Reel stock.",
+                error="This machine's bottom size is missing from Bottom Reel stock. / Machine का bottom size stock में नहीं मिला।",
                 severity=severity,
-                suggested_correction="Add the machine bottom_size_mm to Raw Materials / Bottom Reel.",
+                suggested_correction=f"Add Bottom Reel size {row.get('bottom_size_mm')} mm.",
                 sheet="Machines", section="Machines",
                 raw_value=row.get("bottom_size_mm"), action_type=action_type,
             ))
@@ -1032,6 +1163,7 @@ def read_owner_friendly_sheet(
         row_offset=header_index + 2,
         strict_validation=False,
         compatibility_warnings=compatibility_warnings,
+        owner_friendly=True,
     )
 
 
@@ -1057,7 +1189,20 @@ def read_owner_friendly_excel(workbook: dict) -> tuple[dict[str, list[dict]], li
         valid_by_type[sub_tab_type] = rows
         failed_rows.extend(errors)
 
+    auto_issues = auto_normalize_owner_mappings(valid_by_type)
     generate_owner_restore_keys(valid_by_type)
+    failed_rows.extend([
+        {
+            "sheet": issue.sheet,
+            "row": issue.row,
+            "field": issue.field,
+            "error": issue.error,
+            "severity": issue.severity.value,
+            "suggested_correction": issue.suggested_correction,
+            "action_type": issue.action_type,
+        }
+        for issue in auto_issues
+    ])
     failed_rows.extend(compatibility_warnings)
     return valid_by_type, failed_rows
 
