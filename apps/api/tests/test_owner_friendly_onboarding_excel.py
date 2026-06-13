@@ -511,6 +511,8 @@ def test_parse_allowed_sizes_splits_comma_separated_values():
     assert parse_allowed_sizes("55,65,85,100,150,200") == [55, 65, 85, 100, 150, 200]
     assert parse_allowed_sizes("210") == [210]
     assert parse_allowed_sizes("210, 250, 300") == [210, 250, 300]
+    assert parse_allowed_sizes("210 250 300") == [210, 250, 300]
+    assert parse_allowed_sizes(210250300) == [210, 250, 300]
 
 
 def test_big_box_allowed_product_sizes_validate_individually():
@@ -548,6 +550,22 @@ def test_big_box_allowed_product_sizes_validate_individually():
         and "not configured for product size 150ml" in issue.error
         for issue in issues
     )
+
+
+def test_excel_box_stock_numeric_allowed_sizes_cell_is_recovered():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Box_Stock"
+    sheet.append(["Carton Type", "Carton Quantity", "Size For Finished Product"])
+    sheet.append(["Big Box", 20, 210250300])
+    rows, errors = __import__("routers.onboarding", fromlist=["read_owner_friendly_sheet"]).read_owner_friendly_sheet(
+        __import__("pandas").read_excel(BytesIO(_single_sheet_bytes(workbook)), header=None),
+        "box_stock",
+        "Box_Stock",
+        [],
+    )
+    assert errors == []
+    assert parse_allowed_sizes(rows[0]["size_for_finished_product"]) == [210, 250, 300]
 
 
 def _single_sheet_bytes(workbook: Workbook) -> bytes:

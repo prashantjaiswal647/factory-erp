@@ -997,7 +997,7 @@ def validate_bulk_cross_sheet(
                     severity=severity,
                     suggested_correction=(
                         f"Matched Box Stock carton: {matched_box.get('box_type') if matched_box else 'none'}; "
-                        f"allowed sizes: {allowed_sizes or 'none'}."
+                        f"Allowed sizes: {', '.join(str(size) for size in allowed_sizes) if allowed_sizes else 'none'}."
                     ),
                     sheet="Finished Goods", section="Finished Goods",
                     raw_value={

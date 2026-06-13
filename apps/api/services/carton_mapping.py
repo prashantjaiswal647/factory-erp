@@ -10,23 +10,36 @@ def parse_allowed_sizes(value: Any) -> list[int]:
     if value is None:
         return []
     if isinstance(value, (list, tuple, set)):
-        parts = value
+        text = ",".join(str(item) for item in value)
     else:
-        parts = re.split(r"[,;\n]+", str(value))
-    sizes: list[int] = []
+        text = str(value)
+    text = text.strip().replace("，", ",")
+    if not text:
+        return []
+
+    parts = re.split(r"[,/|;\n]+", text)
+    sizes: set[int] = set()
     for part in parts:
-        text = str(part).strip()
-        if not text:
+        token = str(part).strip()
+        if not token:
             continue
-        match = re.fullmatch(r"(\d+)(?:\.0+)?(?:\s*ml)?", text, re.IGNORECASE)
-        if not match:
-            raise ValueError(f"Invalid product size '{text}'")
-        size = int(match.group(1))
+        matches = re.findall(r"\d+", token)
+        if len(matches) > 1:
+            sizes.update(int(match) for match in matches)
+            continue
+        if not matches:
+            raise ValueError(f"Invalid product size '{token}'")
+        digits = matches[0]
+        # Excel may coerce a comma-formatted text cell such as 210,250,300
+        # into the numeric value 210250300. Recover unambiguous 3-digit groups.
+        if len(parts) == 1 and len(digits) > 3 and len(digits) % 3 == 0:
+            sizes.update(int(digits[index:index + 3]) for index in range(0, len(digits), 3))
+            continue
+        size = int(digits)
         if size <= 0:
             raise ValueError("Product sizes must be positive")
-        if size not in sizes:
-            sizes.append(size)
-    return sizes
+        sizes.add(size)
+    return sorted(sizes)
 
 
 def serialize_finished_product_sizes(value: Any) -> str:
