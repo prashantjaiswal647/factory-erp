@@ -68,7 +68,7 @@ from schemas import (
 )
 from routers.operations import log_factory_operation
 from services.activity_logger import log_activity
-from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes, serialize_finished_product_sizes
+from services.carton_mapping import normalize_carton_type, parse_allowed_sizes, serialize_finished_product_sizes
 from services.n8n_sync import sync_data_to_n8n_bg
 from services.bulk_validation import (
     BulkValidationReport,
@@ -436,7 +436,7 @@ class BoxStockBulkRow(BaseModel):
 
     @model_validator(mode="after")
     def validate_finished_product_sizes(self):
-        parse_finished_product_sizes(self.size_for_finished_product)
+        parse_allowed_sizes(self.size_for_finished_product)
         return self
 
 
@@ -978,9 +978,15 @@ def validate_bulk_cross_sheet(
             ))
         else:
             matched_box = boxes.get(normalize_carton_type(carton_type))
-            allowed_sizes = parse_finished_product_sizes(
+            allowed_sizes = parse_allowed_sizes(
                 matched_box.get("size_for_finished_product")
             ) if matched_box else []
+            logger.debug(
+                "Matched carton_type=%s Allowed sizes=%s Product size=%s",
+                matched_box.get("box_type") if matched_box else None,
+                allowed_sizes,
+                product_size,
+            )
             if matched_box is None or product_size not in allowed_sizes:
                 issues.append(ValidationIssue(
                     row=row.get("_row_number"), field="product_size_ml",

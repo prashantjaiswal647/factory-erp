@@ -24,6 +24,7 @@ from routers.onboarding import (
 )
 from schemas import Step3Request
 from services.bulk_validation import enrich_failed_rows
+from services.carton_mapping import parse_allowed_sizes
 
 
 def owner_workbook() -> bytes:
@@ -501,6 +502,50 @@ def test_finished_goods_carton_mapping_uses_carton_type_and_allowed_sizes():
             "This carton type is not configured for product size 210ml. "
             "Add 210 to Size For Finished Product for Small Box."
         )
+        for issue in issues
+    )
+
+
+def test_parse_allowed_sizes_splits_comma_separated_values():
+    assert parse_allowed_sizes("210,250,300") == [210, 250, 300]
+    assert parse_allowed_sizes("55,65,85,100,150,200") == [55, 65, 85, 100, 150, 200]
+    assert parse_allowed_sizes("210") == [210]
+    assert parse_allowed_sizes("210, 250, 300") == [210, 250, 300]
+
+
+def test_big_box_allowed_product_sizes_validate_individually():
+    base = {
+        "box_stock": [{"box_type": "Big Box", "size_for_finished_product": "210,250,300"}],
+        "blank_stock": [],
+        "bottom_reel": [],
+        "machine": [],
+    }
+    for product_size in (210, 250, 300):
+        issues = validate_bulk_cross_sheet({
+            **base,
+            "finished_goods": [{
+                "_row_number": 2,
+                "product_size_ml": product_size,
+                "variety_design": "Lovely Day",
+                "packaging_size_name": f"{product_size}- lovely day",
+                "carton_type": "Big Box",
+            }],
+        })
+        assert not [issue for issue in issues if issue.field in {"carton_type", "product_size_ml"}]
+
+    issues = validate_bulk_cross_sheet({
+        **base,
+        "finished_goods": [{
+            "_row_number": 2,
+            "product_size_ml": 150,
+            "variety_design": "Lovely Day",
+            "packaging_size_name": "150- lovely day",
+            "carton_type": "Big Box",
+        }],
+    })
+    assert any(
+        issue.field == "product_size_ml"
+        and "not configured for product size 150ml" in issue.error
         for issue in issues
     )
 

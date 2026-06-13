@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.activity_logger import log_activity
-from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes
+from services.carton_mapping import normalize_carton_type, parse_allowed_sizes
 from services.n8n_sync import sync_data_to_n8n_bg
 from services.telegram_action_alerts import (
     notify_production_created,
@@ -573,7 +573,7 @@ def create_daily_production(
             .with_for_update()
             .first()
         )
-        allowed_sizes = parse_finished_product_sizes(
+        allowed_sizes = parse_allowed_sizes(
             box_stock.size_for_finished_product if box_stock is not None else ""
         )
         if box_stock is None or int(product_size_ml) not in allowed_sizes:

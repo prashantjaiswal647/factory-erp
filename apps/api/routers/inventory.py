@@ -16,7 +16,7 @@ import logging
 from dependencies import INVENTORY_ROLES, check_permissions
 from db import get_db
 from services.activity_logger import log_activity
-from services.carton_mapping import normalize_carton_type, parse_finished_product_sizes
+from services.carton_mapping import normalize_carton_type, parse_allowed_sizes
 from models import (
     BlankStock,
     BottomStock,
@@ -282,7 +282,7 @@ def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductSt
         )
         .first()
     )
-    if box is None or stock.product_size_ml not in parse_finished_product_sizes(box.size_for_finished_product):
+    if box is None or stock.product_size_ml not in parse_allowed_sizes(box.size_for_finished_product):
         return "Inventory mapping incomplete for this SKU."
     return None
 

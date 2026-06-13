@@ -6,7 +6,7 @@ def normalize_carton_type(value: Any) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
 
-def parse_finished_product_sizes(value: Any) -> list[int]:
+def parse_allowed_sizes(value: Any) -> list[int]:
     if value is None:
         return []
     if isinstance(value, (list, tuple, set)):
@@ -30,4 +30,8 @@ def parse_finished_product_sizes(value: Any) -> list[int]:
 
 
 def serialize_finished_product_sizes(value: Any) -> str:
-    return ",".join(str(size) for size in parse_finished_product_sizes(value))
+    return ",".join(str(size) for size in parse_allowed_sizes(value))
+
+
+# Compatibility alias for callers introduced with the original carton mapping.
+parse_finished_product_sizes = parse_allowed_sizes
