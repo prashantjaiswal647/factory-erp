@@ -142,3 +142,74 @@ def test_invoice_pdf_does_not_crash_without_signature():
     })
 
     assert pdf.startswith(b"%PDF")
+
+
+def test_signature_endpoints(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from fastapi.testclient import TestClient
+    from main import app
+    from db import get_db
+    from dependencies import check_permissions, FACTORY_VIEW_ROLES
+    
+    db = _session()
+    db.add_all([
+        Factory(id=1, name="Factory A"),
+        Factory(id=2, name="Factory B"),
+        User(id=1, factory_id=1, username="owner", password_hash="x", role="Owner"),
+        User(id=2, factory_id=2, username="owner2", password_hash="x", role="Owner"),
+    ])
+    db.commit()
+
+    mock_user = db.query(User).filter_by(id=1).first()
+    from auth import get_current_user, get_current_active_user
+
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_active_user] = lambda: mock_user
+    app.dependency_overrides[check_permissions(FACTORY_VIEW_ROLES)] = lambda: mock_user
+
+    client = TestClient(app)
+
+    # 1. no signatures returns 200 empty slots
+    response = client.get("/api/onboarding/signatures")
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {
+        "owner": None,
+        "sub_owner": None,
+        "supervisor": None
+    }
+
+    # 2. upload signature then list returns 200
+    img_data = _image_bytes()
+    upload_response = client.post(
+        "/api/onboarding/signatures/owner",
+        files={"file": ("owner.png", img_data, "image/png")}
+    )
+    assert upload_response.status_code == 200
+    assert upload_response.json()["role"] == "owner"
+
+    response = client.get("/api/onboarding/signatures")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["owner"] is not None
+    assert data["owner"]["role"] == "owner"
+    assert data["sub_owner"] is None
+    assert data["supervisor"] is None
+
+    # 3. tenant isolation
+    mock_user2 = db.query(User).filter_by(id=2).first()
+    app.dependency_overrides[get_current_user] = lambda: mock_user2
+    app.dependency_overrides[get_current_active_user] = lambda: mock_user2
+    app.dependency_overrides[check_permissions(FACTORY_VIEW_ROLES)] = lambda: mock_user2
+
+    response2 = client.get("/api/onboarding/signatures")
+    assert response2.status_code == 200
+    assert response2.json() == {
+        "owner": None,
+        "sub_owner": None,
+        "supervisor": None
+    }
+
+    # Clean up overrides
+    app.dependency_overrides.clear()
