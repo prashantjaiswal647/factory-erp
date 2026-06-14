@@ -2856,13 +2856,21 @@ def list_authorized_signatures(
     current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
+    try:
+        factory_id = int(current_user.factory_id)
+    except (TypeError, ValueError):
+        return {"owner": None, "sub_owner": None, "supervisor": None}
+
     rows = (
         db.query(FactoryAuthorizedSignature)
-        .filter(FactoryAuthorizedSignature.factory_id == current_user.factory_id)
-        .order_by(FactoryAuthorizedSignature.role.asc())
+        .filter(FactoryAuthorizedSignature.factory_id == factory_id)
         .all()
     )
-    return [_signature_response(row) for row in rows]
+    res = {"owner": None, "sub_owner": None, "supervisor": None}
+    for row in rows:
+        if row.role in res:
+            res[row.role] = _signature_response(row)
+    return res
 
 
 @router.post("/signatures/{role}")
@@ -2890,13 +2898,14 @@ async def upload_authorized_signature(
         raise HTTPException(status_code=422, detail="Invalid signature image") from exc
 
     extension = SIGNATURE_MIME_TYPES[mime_type]
-    signature_dir = Path("volumes/media/factory_signatures") / str(current_user.factory_id)
+    factory_id = int(current_user.factory_id)
+    signature_dir = Path("volumes/media/factory_signatures") / str(factory_id)
     signature_dir.mkdir(parents=True, exist_ok=True)
     target = signature_dir / f"{role}{extension}"
     row = (
         db.query(FactoryAuthorizedSignature)
         .filter(
-            FactoryAuthorizedSignature.factory_id == current_user.factory_id,
+            FactoryAuthorizedSignature.factory_id == factory_id,
             FactoryAuthorizedSignature.role == role,
         )
         .with_for_update()
@@ -2906,7 +2915,7 @@ async def upload_authorized_signature(
     target.write_bytes(content)
     if row is None:
         row = FactoryAuthorizedSignature(
-            factory_id=current_user.factory_id,
+            factory_id=factory_id,
             role=role,
             file_path=target.as_posix(),
             original_filename=file.filename or target.name,
@@ -2918,9 +2927,9 @@ async def upload_authorized_signature(
         row.original_filename = file.filename or target.name
         row.uploaded_by_user_id = current_user.id
     if role == "owner":
-        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        factory = db.query(Factory).filter(Factory.id == factory_id).first()
         if factory is not None:
-            factory.digital_signature_url = f"/media/factory_signatures/{current_user.factory_id}/{target.name}"
+            factory.digital_signature_url = f"/media/factory_signatures/{factory_id}/{target.name}"
     db.commit()
     db.refresh(row)
     if old_path and old_path != target:
@@ -2939,8 +2948,9 @@ def delete_authorized_signature(
         raise HTTPException(status_code=422, detail="Invalid signature role")
     if not _signature_role_allowed(current_user, role):
         raise HTTPException(status_code=403, detail="You cannot manage this signature")
+    factory_id = int(current_user.factory_id)
     row = db.query(FactoryAuthorizedSignature).filter(
-        FactoryAuthorizedSignature.factory_id == current_user.factory_id,
+        FactoryAuthorizedSignature.factory_id == factory_id,
         FactoryAuthorizedSignature.role == role,
     ).first()
     if row is None:
@@ -2948,7 +2958,7 @@ def delete_authorized_signature(
     file_path = Path(row.file_path)
     db.delete(row)
     if role == "owner":
-        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        factory = db.query(Factory).filter(Factory.id == factory_id).first()
         if factory is not None:
             factory.digital_signature_url = None
     db.commit()
