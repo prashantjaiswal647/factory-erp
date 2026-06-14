@@ -54,15 +54,16 @@ MAIN_MENU = [
     [("🔔 Alerts", "menu:alerts"), ("⚙️ Settings", "menu:settings")],
 ]
 VIEW_MENU = [
-    [("Outstanding", "view:outstanding"), ("Today Production", "view:production")],
-    [("Inventory Stock", "view:inventory"), ("Payments Received", "view:payments")],
-    [("Expenses", "view:expenses"), ("Attendance", "view:attendance")],
+    [("Outstanding", "read:outstanding"), ("Today Production", "read:today_production")],
+    [("Inventory Stock", "read:inventory"), ("Payments Received", "read:payments")],
+    [("Expenses", "read:expenses"), ("Attendance", "read:attendance")],
+    [("Day/Night Wastage", "read:wastage"), ("Invoice Summary", "read:invoices")],
     [("⬅️ Back", "menu:main")],
 ]
 ACTION_MENU = [
-    [("Add Payment", "action:payment"), ("Add Production", "action:production")],
-    [("Add Expense", "action:expense"), ("Add Inventory", "action:inventory")],
-    [("Mark Attendance", "action:attendance"), ("Create Invoice", "action:invoice")],
+    [("Add Production", "action:add_production"), ("Save Shift Wastage", "action:save_wastage")],
+    [("Record Payment", "action:record_payment"), ("Create Invoice", "action:create_invoice")],
+    [("Mark Attendance", "action:mark_attendance"), ("Add Expense", "action:add_expense")],
     [("⬅️ Back", "menu:main")],
 ]
 CONFIRM_MENU = [
@@ -129,10 +130,12 @@ def handle_nested_menu_callback(
     if callback_data == "menu:settings":
         create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", "settings", {})
         return "⚙️ Settings\n\nSettings navigation placeholder. ERP data change nahi hua.", inline_keyboard(binding.role, "main")
-    if callback_data.startswith("view:"):
-        label = callback_data.split(":", 1)[1].replace("_", " ").title()
+    if callback_data.startswith("read:"):
+        from services.telegram_read_service import can_read_telegram, render_telegram_read
+        if can_read_telegram(db, binding.factory_id, telegram_user_id) is None:
+            return "Telegram user authorized nahi hai.", inline_keyboard(binding.role, "main")
         create_session(db, binding.factory_id, telegram_user_id, "menu_navigation", callback_data, {})
-        return f"{label}\n\nRead-only data placeholder. Live data integration next phase mein hogi.", inline_keyboard(binding.role, "view")
+        return render_telegram_read(db, binding.factory_id, callback_data), inline_keyboard(binding.role, "view")
     if callback_data.startswith("action:"):
         action = callback_data.split(":", 1)[1]
         create_session(db, binding.factory_id, telegram_user_id, "menu_action", "confirm", {"action": action, "placeholder": True})

@@ -13,7 +13,21 @@ from sqlalchemy.pool import StaticPool
 
 from auth import get_current_user
 from db import Base, get_db
-from models import Factory, TelegramActionSession, TelegramConnectToken, TelegramUserBinding, User
+from models import (
+    BlankStock,
+    Customer,
+    DailyProduction,
+    Factory,
+    FinalProductStock,
+    Machine,
+    OutstandingBill,
+    ShiftWastage,
+    TelegramActionSession,
+    TelegramConnectToken,
+    TelegramUserBinding,
+    User,
+    Worker,
+)
 from routers.integrations import router
 from services.telegram_delivery import TelegramDeliveryError
 
@@ -335,8 +349,9 @@ def test_nested_menu_callbacks_and_back_navigation(telegram_app):
     assert back.json()["message"] == "Munshi AI main menu"
     view_keyboard = sender.call_args_list[1].kwargs["reply_markup"]["inline_keyboard"]
     assert [button["callback_data"] for row in view_keyboard for button in row] == [
-        "view:outstanding", "view:production", "view:inventory",
-        "view:payments", "view:expenses", "view:attendance", "menu:main",
+        "read:outstanding", "read:today_production", "read:inventory",
+        "read:payments", "read:expenses", "read:attendance",
+        "read:wastage", "read:invoices", "menu:main",
     ]
     main_keyboard = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
     assert [button["callback_data"] for row in main_keyboard for button in row] == [
@@ -364,14 +379,14 @@ def test_action_placeholder_requires_confirmation_and_never_writes_business_data
 
     with patch("routers.integrations.send_telegram_message") as sender:
         menu = callback_webhook(client, "action-menu", "menu:action")
-        action = callback_webhook(client, "action-menu", "action:payment")
+        action = callback_webhook(client, "action-menu", "action:record_payment")
         save = callback_webhook(client, "action-menu", "confirm:save")
         cancel = callback_webhook(client, "action-menu", "confirm:cancel")
 
     action_keyboard = sender.call_args_list[0].kwargs["reply_markup"]["inline_keyboard"]
     assert [button["callback_data"] for row in action_keyboard for button in row] == [
-        "action:payment", "action:production", "action:expense",
-        "action:inventory", "action:attendance", "action:invoice", "menu:main",
+        "action:add_production", "action:save_wastage", "action:record_payment",
+        "action:create_invoice", "action:mark_attendance", "action:add_expense", "menu:main",
     ]
     assert menu.json()["status"] == "ok"
     assert action.json()["status"] == "ok"
@@ -703,6 +718,87 @@ def test_owner_menu_contains_full_set_of_buttons(telegram_app):
     # Main menu intentionally contains only four top-level buttons.
     callbacks = [btn["callback_data"] for row in markup for btn in row]
     assert callbacks == ["menu:view", "menu:action", "menu:alerts", "menu:settings"]
+
+
+def test_dekho_menu_uses_stable_live_read_callbacks(telegram_app):
+    client, _, _ = telegram_app
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code, chat_id="chat-read-menu")
+    with patch("routers.integrations.send_telegram_message") as sender:
+        response = callback_webhook(client, "chat-read-menu", "menu:view")
+    assert response.json()["status"] == "ok"
+    markup = sender.call_args.kwargs["reply_markup"]["inline_keyboard"]
+    callbacks = [button["callback_data"] for row in markup for button in row]
+    assert callbacks == [
+        "read:outstanding",
+        "read:today_production",
+        "read:inventory",
+        "read:payments",
+        "read:expenses",
+        "read:attendance",
+        "read:wastage",
+        "read:invoices",
+        "menu:main",
+    ]
+
+
+def test_live_read_buttons_are_factory_scoped(telegram_app):
+    client, SessionLocal, _ = telegram_app
+    from services.timezone_utils import get_kolkata_now
+    today = get_kolkata_now().date()
+    db = SessionLocal()
+    customer_a = Customer(factory_id=1, name="Factory A Buyer", phone="9000000001")
+    customer_b = Customer(factory_id=2, name="Factory B Buyer", phone="9000000002")
+    machine = Machine(factory_id=1, name="Cup Machine", machine_type="Paper Cup")
+    worker = Worker(factory_id=1, name="Production Worker")
+    db.add_all([customer_a, customer_b, machine, worker])
+    db.flush()
+    db.add_all([
+        OutstandingBill(
+            factory_id=1, customer_id=customer_a.id, tracking_number="A-1",
+            bill_date=today - timedelta(days=20), bill_amount=1500, balance_amount=1500, status="active",
+        ),
+        OutstandingBill(
+            factory_id=2, customer_id=customer_b.id, tracking_number="B-1",
+            bill_date=today, bill_amount=9999, balance_amount=9999, status="active",
+        ),
+        BlankStock(factory_id=1, blank_size_ml=250, variety="White", total_qty_kg=25),
+        FinalProductStock(
+            factory_id=1, product_size_ml=250, variety="White", packaging_size_name="50x20",
+            packets_per_box_limit=20, current_quantity=8, total_boxes=8, loose_packets=0,
+        ),
+        DailyProduction(
+            factory_id=1, date=today, worker_id=worker.id, machine_id=machine.id,
+            product_size_ml=250, variety="White", packaging_size_name="50x20",
+            packets_per_box_limit=20, total_boxes_made=5, loose_packets_made=2,
+            blank_used_kg=3, bottom_used_kg=1,
+        ),
+        ShiftWastage(factory_id=1, date=today, shift="Day", wastage_kg=1.25, note="Setup loss"),
+        ShiftWastage(factory_id=1, date=today, shift="Night", wastage_kg=0.75),
+    ])
+    db.commit()
+    db.close()
+
+    code = _create_code(client)
+    with patch("routers.integrations.send_telegram_message"):
+        _bind_code_webhook(client, code, chat_id="chat-live-read")
+
+    outstanding = callback_webhook(client, "chat-live-read", "read:outstanding").json()["message"]
+    inventory = callback_webhook(client, "chat-live-read", "read:inventory").json()["message"]
+    production = callback_webhook(client, "chat-live-read", "read:today_production").json()["message"]
+    wastage = callback_webhook(client, "chat-live-read", "read:wastage").json()["message"]
+
+    assert "Factory A Buyer" in outstanding
+    assert "Factory B Buyer" not in outstanding
+    assert "₹1,500.00" in outstanding
+    assert "Blank 250ml White" in inventory
+    assert "FG 250ml White" in inventory
+    assert "Cup Machine" in production
+    assert "5 box, 2 packet" in production
+    assert "Day: 1.25 kg" in wastage
+    assert "Night: 0.75 kg" in wastage
+    assert "Setup loss" in wastage
 
 
 def test_sub_owner_menu_contains_limited_set_of_buttons(telegram_app):
