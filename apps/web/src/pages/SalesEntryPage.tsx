@@ -6,6 +6,7 @@ import { useDataRefresh } from "../context/DataRefreshContext";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { createDailySale, createPendingSaleOrder, downloadInvoicePdf, generateInvoiceFromSale, getInventory, getNextInvoiceNumber, searchCustomers, getFactoryProfile } from "../lib/api";
 import type { CustomerSearchResult, DailySaleCreate, LiveStockRow } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ function normalizeItem(item: SaleItem): SaleItem {
     loose_packets_sold: 0,
     packets_per_box: packetsPerBox,
     rate_per_packet: ratePerPacket,
-    rate_per_box: Number((ratePerPacket * packetsPerBox).toFixed(2)),
+    rate_per_box: Number(toNumber(ratePerPacket * packetsPerBox).toFixed(2)),
   };
 }
 
@@ -281,9 +282,9 @@ export default function SalesEntryPage() {
     const grandTotal = Math.round(subtotal + totalCgst + totalSgst + totalIgst);
     return {
       subtotal,
-      cgst: Number(totalCgst.toFixed(2)),
-      sgst: Number(totalSgst.toFixed(2)),
-      igst: Number(totalIgst.toFixed(2)),
+      cgst: Number(toNumber(totalCgst).toFixed(2)),
+      sgst: Number(toNumber(totalSgst).toFixed(2)),
+      igst: Number(toNumber(totalIgst).toFixed(2)),
       grandTotal,
     };
   }, [form.items, form.buyer_gstin, form.place_of_supply, isTaxInvoice]);
@@ -860,7 +861,7 @@ function TaxRow({ label, value, accent = false }: { label: string; value: number
     <div className={`flex items-center justify-between px-4 py-2.5 ${accent ? "bg-brand-50/50" : ""}`}>
       <span className={`text-sm ${accent ? "font-semibold text-brand-700" : "text-zinc-600"}`}>{label}</span>
       <span className={`text-sm font-bold tabular-nums ${accent ? "text-brand-700" : "text-zinc-900"}`}>
-        ₹{value.toFixed(2)}
+        ₹{toNumber(value).toFixed(2)}
       </span>
     </div>
   );
@@ -1046,7 +1047,7 @@ function InvoicePreview({ customer, form, billTotal }: { customer: CustomerSearc
         </div>
         <div className="text-right text-sm text-zinc-600">
           <p>Date: {form.date}</p>
-          <p className="mt-2 text-lg font-semibold text-zinc-950">Rs {billTotal.toFixed(2)}</p>
+          <p className="mt-2 text-lg font-semibold text-zinc-950">Rs {toNumber(billTotal).toFixed(2)}</p>
         </div>
       </div>
     </div>

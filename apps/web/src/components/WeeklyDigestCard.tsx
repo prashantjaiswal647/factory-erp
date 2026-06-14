@@ -2,10 +2,11 @@ import { CalendarRange } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { getLatestWeeklyDigest, type WeeklyDigestResponse } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 const formatNumber = (value: number | undefined | null) => {
   if (value == null) return "0";
-  return Number(value).toLocaleString("en-IN");
+  return toNumber(value).toLocaleString("en-IN");
 };
 
 export default function WeeklyDigestCard() {
@@ -17,16 +18,16 @@ export default function WeeklyDigestCard() {
 
   if (!digest) return null;
 
-  const rev = digest.revenue != null ? Number(digest.revenue) : 0;
-  const prof = digest.profit != null ? Number(digest.profit) : 0;
+  const rev = digest.revenue != null ? toNumber(digest.revenue) : 0;
+  const prof = digest.profit != null ? toNumber(digest.profit) : 0;
   const marg = digest.margin;
   const hscore = digest.health_score;
 
   const metrics = [
     ["Revenue", `₹${formatNumber(rev)}`],
     ["Profit", `₹${formatNumber(prof)}`],
-    ["Margin", marg == null ? "Not available" : `${Number(marg).toFixed(1)}%`],
-    ["Health", hscore == null ? "Not available" : `${Number(hscore)}/100`],
+    ["Margin", marg == null ? "Not available" : `${toNumber(marg).toFixed(1)}%`],
+    ["Health", hscore == null ? "Not available" : `${toNumber(hscore)}/100`],
     ["Best Day", digest.best_day || "N/A"],
     ["Worst Day", digest.worst_day || "N/A"],
   ];

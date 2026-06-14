@@ -2,6 +2,7 @@ import { IndianRupee, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { getTodayProfit, type ProfitResponse } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 const statusClasses: Record<string, string> = {
   EXCELLENT: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -17,7 +18,7 @@ function money(value: number | string | undefined | null) {
 }
 
 function margin(value: number | null | undefined) {
-  return value == null ? "Not available" : `${Number(value).toFixed(1)}%`;
+  return value == null ? "Not available" : `${toNumber(value).toFixed(1)}%`;
 }
 
 export default function ProfitIntelligenceCard() {
@@ -48,7 +49,7 @@ export default function ProfitIntelligenceCard() {
           <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${statusClasses[status] || statusClasses.DATA_NOT_AVAILABLE}`}>
             {(status || "").replace(/_/g, " ")}
           </span>
-          <p className="mt-2 text-xs text-zinc-600">Margin {typeof marginPct === "number" ? `${marginPct.toFixed(1)}%` : marginPct || "Not available"}</p>
+          <p className="mt-2 text-xs text-zinc-600">Margin {marginPct != null ? `${toNumber(marginPct).toFixed(1)}%` : "Not available"}</p>
         </div>
         <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
           {[

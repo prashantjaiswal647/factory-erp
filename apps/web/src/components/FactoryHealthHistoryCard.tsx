@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { getFactoryHealthHistory, type FactoryHealthHistoryItem, type FactoryHealthHistoryResponse } from "../lib/api";
 import { factoryHealthRiskRoute } from "../lib/factoryHealthRoutes";
+import { toNumber } from "../lib/format";
 
 const trendClasses = {
   IMPROVING: "bg-emerald-100 text-emerald-700",
@@ -13,7 +14,7 @@ const trendClasses = {
 const safeArray = <T,>(arr: T[] | undefined | null): T[] => Array.isArray(arr) ? arr : [];
 
 function score(value: number | null | undefined) {
-  return value == null ? "Not available" : Number(value).toFixed(1);
+  return value == null ? "Not available" : toNumber(value).toFixed(1);
 }
 
 function HealthLineChart({ items, onSelect }: { items: FactoryHealthHistoryItem[]; onSelect: (item: FactoryHealthHistoryItem) => void }) {
@@ -35,7 +36,7 @@ function HealthLineChart({ items, onSelect }: { items: FactoryHealthHistoryItem[
         <polyline fill="none" stroke="#4f46e5" strokeWidth="3" points={points.map(({ x, y }) => `${x},${y}`).join(" ")} />
         {points.map(({ item, x, y }) => (
           <circle key={item.date} cx={x} cy={y} r="5" fill="#4f46e5" className="cursor-pointer" onClick={() => onSelect(item)}>
-            <title>{item.date}: {Number(item.overall_score ?? 0).toFixed(1)}</title>
+            <title>{item.date}: {toNumber(item.overall_score ?? 0).toFixed(1)}</title>
           </circle>
         ))}
       </svg>
@@ -55,7 +56,7 @@ function DayPanel({ item }: { item: FactoryHealthHistoryItem }) {
     <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="font-bold">{item.date} · {Number(item.overall_score ?? 0).toFixed(1)}/100</p>
+          <p className="font-bold">{item.date} · {toNumber(item.overall_score ?? 0).toFixed(1)}/100</p>
           <p className="text-xs text-zinc-600">{item.health_status || "N/A"} · Largest Risk: {item.largest_risk || "None"}</p>
         </div>
         <Link className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white" to={factoryHealthRiskRoute(item.largest_risk || "Production")}>Open {item.largest_risk || "Production"}</Link>

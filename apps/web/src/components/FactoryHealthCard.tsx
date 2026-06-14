@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { getTodayFactoryHealth, type FactoryHealthResponse } from "../lib/api";
 import { factoryHealthRiskRoute } from "../lib/factoryHealthRoutes";
+import { toNumber } from "../lib/format";
 
 
 const statusClasses = {
@@ -50,7 +51,7 @@ export default function FactoryHealthCard() {
             {status}
           </span>
           <p className="mt-2 flex items-center gap-1 text-xs text-zinc-600">
-            {trend == null ? "First snapshot" : <><TrendIcon className="h-3.5 w-3.5" />{trend > 0 ? "+" : ""}{Number(trend).toFixed(1)} vs previous</>}
+            {trend == null ? "First snapshot" : <><TrendIcon className="h-3.5 w-3.5" />{trend > 0 ? "+" : ""}{toNumber(trend).toFixed(1)} vs previous</>}
           </p>
         </div>
         <div className="grid flex-1 grid-cols-5 gap-2">

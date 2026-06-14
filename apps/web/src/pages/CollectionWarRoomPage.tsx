@@ -21,18 +21,19 @@ import {
 } from "../lib/api";
 import { useDataRefresh } from "../context/DataRefreshContext";
 import { useAuth } from "../context/AuthContext";
+import { toNumber } from "../lib/format";
 
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
 
 function inr(value: number | string | null | undefined): string {
-  const n = Number(value || 0);
+  const n = toNumber(value);
   return `Rs ${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
 function inrShort(value: number | string | null | undefined): string {
-  const n = Number(value || 0);
+  const n = toNumber(value);
   if (n >= 10000000) return `Rs ${(n / 10000000).toFixed(1)}Cr`;
   if (n >= 100000) return `Rs ${(n / 100000).toFixed(1)}L`;
   if (n >= 1000) return `Rs ${(n / 1000).toFixed(1)}K`;

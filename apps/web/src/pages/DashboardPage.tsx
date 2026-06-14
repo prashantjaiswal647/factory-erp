@@ -512,8 +512,8 @@ export default function DashboardPage() {
         </div>
         {dashboardSummary && (dashboardSummary.today_day_wastage_kg !== undefined || dashboardSummary.today_night_wastage_kg !== undefined) && (
           <div className="mt-2 border-t pt-2 grid grid-cols-2 gap-2 text-xs text-zinc-500">
-            <div>Day Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary.today_day_wastage_kg).toFixed(1)} kg</strong></div>
-            <div>Night Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary.today_night_wastage_kg).toFixed(1)} kg</strong></div>
+            <div>Day Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary?.today_day_wastage_kg).toFixed(1)} kg</strong></div>
+            <div>Night Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary?.today_night_wastage_kg).toFixed(1)} kg</strong></div>
           </div>
         )}
         {dashboardSummary?.attendance_breakdown ? (

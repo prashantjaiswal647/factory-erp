@@ -10,6 +10,7 @@ import ConfigurationOverview from "../components/ConfigurationOverview";
 import PhoneNumberInput from "../components/PhoneNumberInput";
 import { isOwnerLevelRole, useAuth } from "../context/AuthContext";
 import { useUpgrade } from "../context/UpgradeContext";
+import { toNumber } from "../lib/format";
 
 const todayWorker: WorkerCreate = { name: "", country_code: "+91", phone: "", daily_wages: 0, duty_hours: 8 };
 const blankStockDraft = { material_name: "Blank", size_ml: 210, kg_per_sack: null as number | null, total_sacks: 0 };
@@ -447,10 +448,10 @@ export default function OnboardingPage() {
 
   function updateBottomStock(patch: Partial<typeof bottomStockDraft>) {
     const previousSuggestedRolls = (bottomStock.rolls_per_bag || 0) * (bottomStock.total_bags || 0);
-    const previousSuggestedWeight = Number(((bottomStock.bag_weight_kg || 0) * (bottomStock.total_bags || 0)).toFixed(3));
+    const previousSuggestedWeight = Number(toNumber((bottomStock.bag_weight_kg || 0) * (bottomStock.total_bags || 0)).toFixed(3));
     const next = { ...bottomStock, ...patch };
     const nextSuggestedRolls = (next.rolls_per_bag || 0) * (next.total_bags || 0);
-    const nextSuggestedWeight = Number(((next.bag_weight_kg || 0) * (next.total_bags || 0)).toFixed(3));
+    const nextSuggestedWeight = Number(toNumber((next.bag_weight_kg || 0) * (next.total_bags || 0)).toFixed(3));
 
     setBottomStock({
       ...next,
@@ -1110,7 +1111,7 @@ export default function OnboardingPage() {
                 <OptionalNumberInput label="Weight per Bora (KG)" value={blankStock.kg_per_sack} onChange={(kg_per_sack) => setBlankStock({ ...blankStock, kg_per_sack })} />
                 <NumberInput label="Total Bora" value={blankStock.total_sacks} onChange={(total_sacks) => setBlankStock({ ...blankStock, total_sacks })} />
               </div>
-              <Readout label="Total Weight (KG)" value={Number(((blankStock.kg_per_sack || 0) * blankStock.total_sacks).toFixed(3))} />
+              <Readout label="Total Weight (KG)" value={Number(toNumber((blankStock.kg_per_sack || 0) * blankStock.total_sacks).toFixed(3))} />
               <StockButton label="Add Blank Stock" color="green" isSaving={isSaving} onClick={addBlankStock} />
             </MaterialCard>
 
@@ -1146,7 +1147,7 @@ export default function OnboardingPage() {
                 <NumberInput label="Price per KG (Rs)" value={plasticStock.price_per_kg} onChange={(price_per_kg) => setPlasticStock({ ...plasticStock, price_per_kg })} />
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-1">
-                <Readout label="Total Plastic (KG)" value={Number((plasticStock.total_boras * plasticStock.weight_per_bora_kg).toFixed(3))} />
+                <Readout label="Total Plastic (KG)" value={Number(toNumber(plasticStock.total_boras * plasticStock.weight_per_bora_kg).toFixed(3))} />
               </div>
               <StockButton label="Add Plastic Stock" color="purple" isSaving={isSaving} onClick={addPlasticStock} />
             </MaterialCard>

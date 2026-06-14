@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toNumber } from "../lib/format";
 
 import { getPerSizeProfit, type PerSizeProfitResponse } from "../lib/api";
 
@@ -86,7 +87,7 @@ export default function PerSizeProfitCard() {
                     <td className="px-2 py-2">{money(item.cost_paise)}</td>
                     <td className="px-2 py-2">{money(item.gross_profit_paise)}</td>
                     <td className="px-2 py-2">
-                      {typeof item.margin_percent === "number" ? `${item.margin_percent.toFixed(1)}%` : item.margin_percent || "0%"}
+                      {item.margin_percent != null ? `${toNumber(item.margin_percent).toFixed(1)}%` : "0%"}
                     </td>
                     <td className="px-2 py-2">
                       <span className={`rounded-full px-2 py-1 font-bold ${statusClasses[status] || statusClasses.DATA_NOT_AVAILABLE}`}>

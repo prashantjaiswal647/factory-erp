@@ -2,6 +2,7 @@ import { AlertTriangle, IndianRupee } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { getTodayWastage, type WastageResponse } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 const statusClasses = {
   NORMAL: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -10,12 +11,12 @@ const statusClasses = {
 };
 
 function trend(value: number | null | undefined) {
-  return value == null ? "Not available" : `${Number(value).toFixed(1)}%`;
+  return value == null ? "Not available" : `${toNumber(value).toFixed(1)}%`;
 }
 
 const formatNumber = (value: number | undefined | null) => {
   if (value == null) return "0";
-  return Number(value).toLocaleString("en-IN");
+  return toNumber(value).toLocaleString("en-IN");
 };
 
 export default function WastageIntelligenceCard() {
@@ -27,10 +28,10 @@ export default function WastageIntelligenceCard() {
 
   if (!data) return null;
 
-  const pct = data.wastage_percentage != null ? Number(data.wastage_percentage) : 0;
+  const pct = data.wastage_percentage != null ? toNumber(data.wastage_percentage) : 0;
   const status = data.wastage_status || "NORMAL";
-  const expected = data.expected_wastage_percentage != null ? Number(data.expected_wastage_percentage) : 0;
-  const loss = data.estimated_loss != null ? Number(data.estimated_loss) : 0;
+  const expected = data.expected_wastage_percentage != null ? toNumber(data.expected_wastage_percentage) : 0;
+  const loss = data.estimated_loss != null ? toNumber(data.estimated_loss) : 0;
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm" aria-label="Wastage intelligence">

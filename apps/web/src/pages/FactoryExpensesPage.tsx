@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { createFactoryExpense, getFactoryExpenses } from "../lib/api";
 import type { FactoryExpense } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 type ExpenseForm = {
   expense_name: string;
@@ -105,7 +106,7 @@ export default function FactoryExpensesPage() {
                 <tr key={expense.id} className="hover:bg-zinc-50">
                   <td className="px-5 py-3 font-medium text-zinc-950">{expense.expense_name}</td>
                   <td className="px-5 py-3 text-zinc-700">{expense.category}</td>
-                  <td className="px-5 py-3 text-zinc-700">Rs {Number(expense.amount).toFixed(2)}</td>
+                  <td className="px-5 py-3 text-zinc-700">Rs {toNumber(expense.amount).toFixed(2)}</td>
                   <td className="px-5 py-3 text-zinc-500">{new Date(expense.timestamp).toLocaleString()}</td>
                 </tr>
               ))}

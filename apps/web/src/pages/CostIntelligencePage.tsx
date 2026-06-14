@@ -2,17 +2,19 @@ import { AlertTriangle, IndianRupee, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { getTodayCostVariance, type CostVarianceResponse } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 const MISSING = "Data not available";
 
 function money(value: string) {
   return value === MISSING
     ? value
-    : `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+    : `₹${toNumber(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
 function percent(value: string) {
-  return value === MISSING ? value : `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(1)}%`;
+  const num = toNumber(value);
+  return value === MISSING ? value : `${num > 0 ? "+" : ""}${num.toFixed(1)}%`;
 }
 
 const badgeClasses = {
