@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import date
 from io import BytesIO
 import json
@@ -141,7 +140,3 @@ async def deliver_master_backup(
         raise
     _complete_delivery(marker, {"recipient": recipient, "filename": filename})
     return True
-
-
-def run_async(coroutine) -> None:
-    asyncio.run(coroutine)

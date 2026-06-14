@@ -258,7 +258,11 @@ Rules:
 - Export uses one XLSX sheet per factory data family and includes factory-scoped stable restore keys.
 - Restore is validate-first and confirmation-only; staged uploads must never import during validation.
 - Confirmed restore creates a pre-restore backup, runs transactionally, and must reject cross-factory metadata.
+- Restore is snapshot-based: records absent from authoritative backup sheets are removed in dependency-safe order, and stock quantities are replaced with workbook values rather than added.
+- A fatal restore error rolls back every database mutation and keeps the staged upload available for retry.
 - Invoice history restore must not call sales creation paths or deduct finished-goods stock again.
+- `master-backup-email-scheduler` sends separate owner emails for weekly backups on Sunday at 20:30 IST and monthly backups on day 1 at 08:30 IST.
+- Scheduled delivery is deduplicated independently by factory, frequency, and period under the persistent `BACKUP_ROOT` volume; weekly and monthly files must never share one email.
 
 ## 14. Deployment Rules
 
@@ -318,6 +322,7 @@ Follow this sequence unless a P0 incident overrides it.
 
 - Required local env vars: `JWT_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `DEFAULT_OWNER_USERNAME`, `DEFAULT_OWNER_PASSWORD`, `DEFAULT_OPERATOR_USERNAME`, `DEFAULT_OPERATOR_PASSWORD`.
 - Optional `BACKUP_ROOT` overrides master backup storage. Docker defaults to `/app/storage/backups`; directories are created only when a backup or restore staging operation runs.
+- Scheduled backup email requires SMTP settings (`SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_HOST`, and optional port/TLS settings) and an active Owner email.
 - The stack expects `.env` at repo root for `docker compose`.
 - `.env` must never be committed.
 - If a local secret appears in chat logs, screenshots, support tickets, or audit output, rotate it.

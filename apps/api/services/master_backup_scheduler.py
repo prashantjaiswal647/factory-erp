@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -7,7 +8,7 @@ from datetime import date, datetime, time as time_value, timedelta
 
 from db import SessionLocal
 from models import Factory, User
-from services.master_backup_email import deliver_master_backup, run_async, send_backup_email
+from services.master_backup_email import deliver_master_backup, send_backup_email
 from services.timezone_utils import KOLKATA_ZONE, get_kolkata_now
 
 
@@ -49,19 +50,11 @@ def run_backup_email_batch(
                 metrics["failed"] += 1
                 continue
             try:
-                delivered = deliver_master_backup(
-                    db, factory, owner, frequency, delivery_date, sender=sender
+                delivered_now = asyncio.run(
+                    deliver_master_backup(
+                        db, factory, owner, frequency, delivery_date, sender=sender
+                    )
                 )
-                if hasattr(delivered, "__await__"):
-                    result: list[bool] = []
-
-                    async def collect() -> None:
-                        result.append(await delivered)
-
-                    run_async(collect())
-                    delivered_now = result[0]
-                else:
-                    delivered_now = bool(delivered)
                 metrics["sent" if delivered_now else "skipped"] += 1
             except Exception:
                 db.rollback()

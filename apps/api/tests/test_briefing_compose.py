@@ -59,3 +59,18 @@ def test_factory_health_scheduler_runs_after_cost_scheduler():
     assert scheduler["command"] == "python -m services.factory_health_scheduler"
     assert scheduler["depends_on"]["cost-scheduler"]["condition"] == "service_started"
     assert "TZ=Asia/Kolkata" in scheduler["environment"]
+
+
+def test_master_backup_email_scheduler_uses_persistent_backup_volume():
+    root = _find_repository_root()
+    if root is None:
+        pytest.skip("Repository-root docker-compose.yml is not copied into the isolated API image")
+
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
+    scheduler = compose["services"]["master-backup-email-scheduler"]
+
+    assert scheduler["container_name"] == "ai-erp-master-backup-email-scheduler"
+    assert scheduler["restart"] in {"always", "unless-stopped"}
+    assert scheduler["command"] == "python -m services.master_backup_scheduler"
+    assert scheduler["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert "./storage/backups:/app/storage/backups" in scheduler["volumes"]

@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import Customer, Factory, InvoiceDocument, OutstandingBill
+from models import Customer, Factory, FinalProductStock, InvoiceDocument, OutstandingBill
 from services.master_backup import (
     SHEETS,
     build_master_backup,
@@ -113,3 +113,59 @@ def test_restore_same_backup_twice_is_idempotent(backup_db):
     assert backup_db.query(Customer).count() == 1
     assert backup_db.query(InvoiceDocument).count() == 1
     assert backup_db.query(OutstandingBill).count() == 1
+
+
+def test_restore_replaces_snapshot_and_stock_is_not_additive(backup_db):
+    stock = FinalProductStock(
+        factory_id=1,
+        product_size_ml=210,
+        variety="Plain",
+        packaging_size_name="210 ML Plain",
+        current_quantity=500,
+        total_boxes=10,
+        loose_packets=5,
+        packets_per_box_limit=50,
+    )
+    backup_db.add(stock)
+    backup_db.commit()
+    backup = build_master_backup(backup_db, 1).getvalue()
+
+    stock.current_quantity = 900
+    stock.total_boxes = 18
+    backup_db.add(Customer(factory_id=1, name="Created Later", phone_number="8888888888"))
+    backup_db.commit()
+
+    restore_id, report = stage_backup(backup, 1)
+    assert report["fatal"] is False
+    result = restore_staged_backup(backup_db, 1, restore_id)
+
+    restored_stock = backup_db.query(FinalProductStock).one()
+    assert restored_stock.current_quantity == 500
+    assert restored_stock.total_boxes == 10
+    assert backup_db.query(Customer).filter(Customer.name == "Created Later").count() == 0
+    assert result["deleted"] >= 1
+
+
+def test_restore_rolls_back_all_changes_on_fatal_error(backup_db, monkeypatch):
+    backup = build_master_backup(backup_db, 1).getvalue()
+    customer = backup_db.query(Customer).one()
+    customer.name = "Current Database Value"
+    backup_db.commit()
+    restore_id, report = stage_backup(backup, 1)
+    assert report["fatal"] is False
+
+    original_coerce = __import__("services.master_backup", fromlist=["_coerce"])._coerce
+    calls = {"count": 0}
+
+    def fail_after_mutation(column, value):
+        calls["count"] += 1
+        if calls["count"] > 4:
+            raise RuntimeError("forced restore failure")
+        return original_coerce(column, value)
+
+    monkeypatch.setattr("services.master_backup._coerce", fail_after_mutation)
+    with pytest.raises(RuntimeError, match="forced restore failure"):
+        restore_staged_backup(backup_db, 1, restore_id)
+
+    backup_db.expire_all()
+    assert backup_db.query(Customer).one().name == "Current Database Value"
