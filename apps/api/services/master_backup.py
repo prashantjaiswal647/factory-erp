@@ -308,42 +308,64 @@ def restore_staged_backup(db: Session, factory_id: int, restore_id: str) -> dict
         raise ValueError("Backup contains fatal validation errors")
     create_pre_restore_backup(db, factory_id)
     workbook = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
-    result = {"inserted": 0, "updated": 0, "skipped": 0}
+    result = {"inserted": 0, "updated": 0, "deleted": 0, "skipped": 0}
     id_maps: dict[str, dict[int, int]] = {}
+    restored_ids: dict[str, set[int]] = {}
 
-    for sheet in RESTORE_ORDER:
-        if sheet not in workbook.sheetnames:
-            continue
-        model = SHEETS[sheet]
-        id_maps.setdefault(model.__tablename__, {})
-        for record in _sheet_records(workbook[sheet]):
-            source_id = int(record.get("id") or 0)
-            normalized_record = dict(record)
-            for column in model.__table__.columns:
-                value = normalized_record.get(column.name)
-                if not column.name.endswith("_id") or value in (None, ""):
-                    continue
-                reference_table = next(iter(column.foreign_keys)).column.table.name if column.foreign_keys else None
-                if reference_table and int(value) in id_maps.get(reference_table, {}):
-                    normalized_record[column.name] = id_maps[reference_table][int(value)]
-                elif reference_table in {"users", "orders", "payments"}:
-                    normalized_record[column.name] = None
-            existing = _find_existing(db, model, factory_id, sheet, normalized_record)
-            target = existing or model()
-            for column in model.__table__.columns:
-                if column.name in {"id", "factory_id"} or column.name not in normalized_record:
-                    continue
-                value = normalized_record[column.name]
-                setattr(target, column.name, _coerce(column, value))
-            target.factory_id = factory_id
-            if not existing:
-                db.add(target)
-                db.flush()
-                result["inserted"] += 1
-            else:
-                result["updated"] += 1
-            if source_id:
-                id_maps[model.__tablename__][source_id] = target.id
-    db.commit()
+    try:
+        for sheet in RESTORE_ORDER:
+            if sheet not in workbook.sheetnames:
+                continue
+            model = SHEETS[sheet]
+            table_name = model.__tablename__
+            id_maps.setdefault(table_name, {})
+            restored_ids.setdefault(table_name, set())
+            for record in _sheet_records(workbook[sheet]):
+                source_id = int(record.get("id") or 0)
+                normalized_record = dict(record)
+                for column in model.__table__.columns:
+                    value = normalized_record.get(column.name)
+                    if not column.name.endswith("_id") or value in (None, ""):
+                        continue
+                    reference_table = next(iter(column.foreign_keys)).column.table.name if column.foreign_keys else None
+                    if reference_table and int(value) in id_maps.get(reference_table, {}):
+                        normalized_record[column.name] = id_maps[reference_table][int(value)]
+                    elif reference_table in {"users", "orders", "payments"}:
+                        normalized_record[column.name] = None
+                existing = _find_existing(db, model, factory_id, sheet, normalized_record)
+                target = existing or model()
+                for column in model.__table__.columns:
+                    if column.name in {"id", "factory_id"} or column.name not in normalized_record:
+                        continue
+                    setattr(target, column.name, _coerce(column, normalized_record[column.name]))
+                target.factory_id = factory_id
+                if not existing:
+                    db.add(target)
+                    db.flush()
+                    result["inserted"] += 1
+                else:
+                    result["updated"] += 1
+                restored_ids[table_name].add(int(target.id))
+                if source_id:
+                    id_maps[table_name][source_id] = int(target.id)
+
+        cleaned_tables: set[str] = set()
+        for sheet in reversed(RESTORE_ORDER):
+            model = SHEETS[sheet]
+            table_name = model.__tablename__
+            if table_name in cleaned_tables:
+                continue
+            cleaned_tables.add(table_name)
+            query = db.query(model).filter(model.factory_id == factory_id)
+            keep_ids = restored_ids.get(table_name, set())
+            if keep_ids:
+                query = query.filter(~model.id.in_(keep_ids))
+            result["deleted"] += query.delete(synchronize_session=False)
+
+        db.flush()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     path.unlink(missing_ok=True)
     return result

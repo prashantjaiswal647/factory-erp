@@ -116,6 +116,9 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     # Dynamic Title
     invoice_type = invoice.get("invoice_type") or payload.get("legal_invoice_type") or "bill_of_supply"
     title_text = "TAX INVOICE" if invoice_type == "tax_invoice" else "BILL OF SUPPLY"
+    is_cancelled = str(invoice.get("status") or "").lower() == "cancelled" or str(payload.get("status") or "").lower() == "cancelled"
+    if is_cancelled:
+        title_text = f"CANCELLED - {title_text}"
 
     # Premium styles
     title_style = ParagraphStyle(

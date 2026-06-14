@@ -756,6 +756,7 @@ def create_invoice_document(
         total_igst=invoice_payload.get("total_igst") or 0.0,
         payload_json=json_safe(invoice_payload),
         created_by_user_id=current_user.id,
+        generated_by_role=(current_user.role or "").strip(),
     )
     db.add(document)
     db.flush()
@@ -2451,14 +2452,18 @@ def _invoice_pdf_snapshot(db: Session, invoice: InvoiceDocument) -> bytes:
     ).first()
     payload = dict(invoice.payload_json or {})
     payload["id"] = invoice.id
+    payload["status"] = invoice.status
     invoice_payload = dict(payload.get("invoice") or {})
     invoice_payload["amount_paid"] = float(bill.amount_paid if bill else invoice.amount_paid)
     invoice_payload["customer_total_due"] = float(bill.balance_amount if bill else invoice.customer_total_due)
+    invoice_payload["status"] = invoice.status
     payload["invoice"] = invoice_payload
     payload["invoice_total"] = float(bill.bill_amount if bill else invoice.bill_total)
     payload["total_paid_against_invoice"] = float(bill.amount_paid if bill else invoice.amount_paid)
     payload["remaining_balance"] = float(bill.balance_amount if bill else invoice.customer_total_due)
     payload["payment_history"] = _invoice_payment_history(db, invoice, bill)
+    payload["generated_by_user_id"] = invoice.created_by_user_id
+    payload["generated_by_role"] = invoice.generated_by_role
     return build_invoice_pdf_bytes(payload)
 
 
@@ -2506,6 +2511,7 @@ def delete_invoice_document(
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
+    from models import PaymentCollection, Payment
     if current_user.role != "Owner":
         raise HTTPException(status_code=403, detail="Only Owner can delete invoices")
     if payload.confirmation.strip() != "DELETE INVOICE":
@@ -2567,7 +2573,7 @@ def delete_invoice_document(
         db.commit()
         return {"status": "archived", "invoice_id": invoice_document_id, "invoice_number": invoice.invoice_number}
 
-    if has_real_payment:
+    if has_real_payment and action != "cancel":
         raise HTTPException(
             status_code=409,
             detail="Invoice has payment entries. Delete payment first or use cancel invoice.",
@@ -2578,7 +2584,64 @@ def delete_invoice_document(
         if bill is not None:
             bill.status = "cancelled"
             bill.balance_amount = Decimal("0.00")
+
+            # Reverse payment collections and payments safely
+            from models import PaymentCollection, Payment, BillPayment, CustomerLedgerAdjustment
+            collections = db.query(PaymentCollection).filter(
+                PaymentCollection.factory_id == current_user.factory_id,
+                PaymentCollection.outstanding_bill_id == bill.id
+            ).all()
+
+            for col in collections:
+                payment = db.query(Payment).filter(
+                    Payment.id == col.payment_id,
+                    Payment.factory_id == current_user.factory_id
+                ).first()
+                if payment:
+                    other_cols = db.query(PaymentCollection).filter(
+                        PaymentCollection.payment_id == payment.id,
+                        PaymentCollection.outstanding_bill_id != bill.id
+                    ).all()
+                    if not other_cols:
+                        db.query(PaymentCollection).filter(PaymentCollection.payment_id == payment.id).delete(synchronize_session=False)
+                        db.delete(payment)
+                    else:
+                        payment.amount_paid = max(to_money(payment.amount_paid) - to_money(col.amount_collected), Decimal("0.00"))
+                        if payment.amount_paid <= 0:
+                            db.query(PaymentCollection).filter(PaymentCollection.payment_id == payment.id).delete(synchronize_session=False)
+                            db.delete(payment)
+                        else:
+                            db.add(payment)
+                db.delete(col)
+
+            # Delete BillPayment associations
+            db.query(BillPayment).filter(
+                BillPayment.factory_id == current_user.factory_id,
+                BillPayment.bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
+            # Delete customer ledger adjustments referencing this bill
+            db.query(CustomerLedgerAdjustment).filter(
+                CustomerLedgerAdjustment.factory_id == current_user.factory_id,
+                CustomerLedgerAdjustment.linked_bill_id == bill.id,
+            ).delete(synchronize_session=False)
+
         if sale_ids:
+            # First find and delete collections referencing payments of these sales
+            sale_payment_ids = [p.id for p in db.query(Payment.id).filter(
+                factory_id_filter(Payment.factory_id, current_user.factory_id),
+                Payment.sale_id.in_(sale_ids),
+            ).all()]
+            if sale_payment_ids:
+                db.query(PaymentCollection).filter(
+                    PaymentCollection.factory_id == current_user.factory_id,
+                    PaymentCollection.payment_id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+                db.query(Payment).filter(
+                    factory_id_filter(Payment.factory_id, current_user.factory_id),
+                    Payment.id.in_(sale_payment_ids),
+                ).delete(synchronize_session=False)
+
             db.query(DailySale).filter(
                 factory_id_filter(DailySale.factory_id, current_user.factory_id),
                 DailySale.id.in_(sale_ids),
@@ -2744,6 +2807,7 @@ def hard_delete_invoice_document(
     current_user: User = Depends(check_permissions(["Owner"])),
     db: Session = Depends(get_db),
 ):
+    from models import PaymentCollection, Payment
     if current_user.role != "Owner":
         raise HTTPException(status_code=403, detail="Only Owner can delete invoices")
     
@@ -2837,7 +2901,7 @@ def hard_delete_invoice_document(
     if not is_latest:
         raise HTTPException(
             status_code=400,
-            detail="This is not the latest invoice. Deleting it will create a numbering gap. You can archive/cancel it instead, or super admin can reset sequence manually."
+            detail="Later invoices exist. Use Cancel Invoice Number instead."
         )
 
     invoice_number = invoice.invoice_number
@@ -2846,7 +2910,7 @@ def hard_delete_invoice_document(
     customer_id = invoice.customer_id
 
     try:
-        from models import CustomerLedgerAdjustment, BillPayment
+        from models import CustomerLedgerAdjustment, BillPayment, PaymentCollection, Payment
 
         if bill is not None:
             # Delete BillPayment associations
@@ -2861,11 +2925,40 @@ def hard_delete_invoice_document(
                 CustomerLedgerAdjustment.linked_bill_id == bill.id,
             ).delete(synchronize_session=False)
 
-            # Delete payment collections referencing this bill
-            db.query(PaymentCollection).filter(
-                PaymentCollection.factory_id == current_user.factory_id,
-                PaymentCollection.outstanding_bill_id == bill.id,
-            ).delete(synchronize_session=False)
+            if payload.reverse_payments:
+                # Reverse payment collections and payments safely
+                collections = db.query(PaymentCollection).filter(
+                    PaymentCollection.factory_id == current_user.factory_id,
+                    PaymentCollection.outstanding_bill_id == bill.id
+                ).all()
+
+                for col in collections:
+                    payment = db.query(Payment).filter(
+                        Payment.id == col.payment_id,
+                        Payment.factory_id == current_user.factory_id
+                    ).first()
+                    if payment:
+                        other_cols = db.query(PaymentCollection).filter(
+                            PaymentCollection.payment_id == payment.id,
+                            PaymentCollection.outstanding_bill_id != bill.id
+                        ).all()
+                        if not other_cols:
+                            db.query(PaymentCollection).filter(PaymentCollection.payment_id == payment.id).delete(synchronize_session=False)
+                            db.delete(payment)
+                        else:
+                            payment.amount_paid = max(to_money(payment.amount_paid) - to_money(col.amount_collected), Decimal("0.00"))
+                            if payment.amount_paid <= 0:
+                                db.query(PaymentCollection).filter(PaymentCollection.payment_id == payment.id).delete(synchronize_session=False)
+                                db.delete(payment)
+                            else:
+                                db.add(payment)
+                    db.delete(col)
+            else:
+                # Delete payment collections referencing this bill
+                db.query(PaymentCollection).filter(
+                    PaymentCollection.factory_id == current_user.factory_id,
+                    PaymentCollection.outstanding_bill_id == bill.id,
+                ).delete(synchronize_session=False)
 
             db.delete(bill)
             db.flush()

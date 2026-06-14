@@ -644,7 +644,7 @@ def test_invoice_hard_delete_flows():
             db=db,
         )
     assert err.value.status_code == 400
-    assert "not the latest invoice" in err.value.detail
+    assert "Later invoices exist. Use Cancel Invoice Number instead." in err.value.detail
 
     # 4. Archived/locked invoice cannot hard delete
     invoice3.accounting_locked = True
@@ -745,7 +745,6 @@ def test_invoice_hard_delete_flows():
         )
     assert err.value.status_code == 422
 
-    # 8. Supervisor cannot hard delete
     with pytest.raises(HTTPException) as err:
         hard_delete_invoice_document(
             invoice2_four.id,
@@ -759,3 +758,149 @@ def test_invoice_hard_delete_flows():
             db=db,
         )
     assert err.value.status_code == 403
+
+
+def test_cancel_invoice_with_payments_exclusive_and_shared():
+    from models import Payment, PaymentCollection, CustomerLedgerAdjustment, BillPayment
+    db = _session()
+    factory = Factory(name="Cancel Paid Factory", invoice_prefix="INV-")
+    db.add(factory)
+    db.flush()
+    customer = Customer(factory_id=factory.id, name="Buyer", phone="9000000000")
+    db.add(customer)
+    db.flush()
+    
+    # Create Invoice 1 and Invoice 2
+    inv1 = _invoice(db, factory, customer, "INV-1", "bill_of_supply")
+    inv2 = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+    bill1 = db.query(OutstandingBill).filter_by(invoice_document_id=inv1.id).one()
+    bill2 = db.query(OutstandingBill).filter_by(invoice_document_id=inv2.id).one()
+
+    # Create exclusive payment for Invoice 1
+    p_excl = Payment(
+        factory_id=factory.id,
+        customer_phone=customer.phone,
+        amount_paid=Decimal("1000.00"),
+        payment_mode="Cash",
+        date=date(2026, 6, 12),
+    )
+    db.add(p_excl)
+    db.flush()
+    col_excl = PaymentCollection(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        payment_id=p_excl.id,
+        outstanding_bill_id=bill1.id,
+        amount_collected=Decimal("1000.00"),
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 12),
+    )
+    db.add(col_excl)
+    db.flush()
+
+    # Create shared payment for Invoice 1 and Invoice 2
+    p_shared = Payment(
+        factory_id=factory.id,
+        customer_phone=customer.phone,
+        amount_paid=Decimal("1500.00"),
+        payment_mode="Cash",
+        date=date(2026, 6, 12),
+    )
+    db.add(p_shared)
+    db.flush()
+    col_shared1 = PaymentCollection(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        payment_id=p_shared.id,
+        outstanding_bill_id=bill1.id,
+        amount_collected=Decimal("500.00"),
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 12),
+    )
+    col_shared2 = PaymentCollection(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        payment_id=p_shared.id,
+        outstanding_bill_id=bill2.id,
+        amount_collected=Decimal("1000.00"),
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 12),
+    )
+    db.add_all([col_shared1, col_shared2])
+    db.flush()
+    
+    # Add a ledger adjustment linked to bill1
+    adj = CustomerLedgerAdjustment(
+        factory_id=factory.id,
+        customer_id=customer.id,
+        adjustment_type="add_balance",
+        amount=Decimal("50.00"),
+        reason="Adjustment for bill1",
+        linked_bill_id=bill1.id,
+    )
+    db.add(adj)
+    db.commit()
+
+    # Cache IDs before deletion
+    p_excl_id = p_excl.id
+    col_excl_id = col_excl.id
+    col_shared1_id = col_shared1.id
+    col_shared2_id = col_shared2.id
+    adj_id = adj.id
+
+    # Cancel Invoice 1
+    response = delete_invoice_document(
+        inv1.id,
+        InvoiceDeleteRequest(confirmation="DELETE INVOICE", action="cancel"),
+        current_user=_owner(factory.id),
+        db=db,
+    )
+    
+    db.refresh(inv1)
+    db.refresh(bill1)
+    assert response["status"] == "cancelled"
+    assert inv1.status == "cancelled"
+    assert bill1.status == "cancelled"
+    assert bill1.balance_amount == Decimal("0.00")
+
+    # Assert exclusive payment was deleted
+    assert db.query(Payment).filter_by(id=p_excl_id).first() is None
+    assert db.query(PaymentCollection).filter_by(id=col_excl_id).first() is None
+
+    # Assert shared payment was NOT deleted but adjusted down to 1000 (1500 - 500)
+    db.refresh(p_shared)
+    assert p_shared.amount_paid == Decimal("1000.00")
+    assert db.query(PaymentCollection).filter_by(id=col_shared1_id).first() is None
+    assert db.query(PaymentCollection).filter_by(id=col_shared2_id).first() is not None
+
+    # Assert ledger adjustment was deleted
+    assert db.query(CustomerLedgerAdjustment).filter_by(id=adj_id).first() is None
+
+
+def test_hard_delete_not_latest_sequence_error_message():
+    db = _session()
+    factory = Factory(name="Seq Factory", invoice_prefix="INV-", next_bill_of_supply_number=3)
+    db.add(factory)
+    db.flush()
+    customer = Customer(factory_id=factory.id, name="Buyer", phone="9000000000")
+    db.add(customer)
+    db.flush()
+
+    inv1 = _invoice(db, factory, customer, "INV-1", "bill_of_supply")
+    inv2 = _invoice(db, factory, customer, "INV-2", "bill_of_supply")
+
+    # Attempt to hard delete middle invoice (inv1)
+    with pytest.raises(HTTPException) as err:
+        hard_delete_invoice_document(
+            inv1.id,
+            InvoiceHardDeleteRequest(
+                reason="Attempt deleting middle invoice",
+                confirm_invoice_number="INV-1",
+                confirm_test_invoice=True,
+                reverse_payments=True
+            ),
+            current_user=_owner(factory.id),
+            db=db,
+        )
+    assert err.value.status_code == 400
+    assert err.value.detail == "Later invoices exist. Use Cancel Invoice Number instead."

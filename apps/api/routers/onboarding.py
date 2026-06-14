@@ -1,6 +1,7 @@
 import logging
 import hashlib
 import re
+from io import BytesIO as ImageBytesIO
 from pathlib import Path
 from uuid import uuid4
 from datetime import date
@@ -11,6 +12,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, status, BackgroundTasks, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi.responses import StreamingResponse
+from PIL import Image as PILImage, UnidentifiedImageError
 from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,6 +27,7 @@ from models import (
     CostingMaster,
     Customer,
     Factory,
+    FactoryAuthorizedSignature,
     FactorySettings,
     FinalProductStock,
     FinishedGoodsStock,
@@ -2814,6 +2817,143 @@ def remove_invoice_signature(
     if old_url and old_url.startswith(f"/media/signatures/{current_user.factory_id}/"):
         (Path("volumes/media") / old_url.removeprefix("/media/")).unlink(missing_ok=True)
     return {"digital_signature_url": None}
+
+
+SIGNATURE_ROLES = {"owner", "sub_owner", "supervisor"}
+SIGNATURE_MIME_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
+
+
+def _signature_role_allowed(current_user: User, role: str) -> bool:
+    normalized_user_role = (current_user.role or "").strip().lower().replace("-", "_")
+    if normalized_user_role == "owner":
+        return True
+    if normalized_user_role == "sub_owner":
+        return role == "sub_owner"
+    if normalized_user_role == "supervisor":
+        return role == "supervisor" and bool(getattr(current_user, "can_manage_signatures", False))
+    return False
+
+
+def _signature_response(row: FactoryAuthorizedSignature) -> dict:
+    return {
+        "id": row.id,
+        "role": row.role,
+        "file_path": row.file_path,
+        "url": f"/media/{row.file_path.removeprefix('volumes/media/')}",
+        "original_filename": row.original_filename,
+        "uploaded_by_user_id": row.uploaded_by_user_id,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@router.get("/signatures")
+def list_authorized_signatures(
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(FactoryAuthorizedSignature)
+        .filter(FactoryAuthorizedSignature.factory_id == current_user.factory_id)
+        .order_by(FactoryAuthorizedSignature.role.asc())
+        .all()
+    )
+    return [_signature_response(row) for row in rows]
+
+
+@router.post("/signatures/{role}")
+async def upload_authorized_signature(
+    role: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
+    db: Session = Depends(get_db),
+):
+    role = role.strip().lower()
+    if role not in SIGNATURE_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid signature role")
+    if not _signature_role_allowed(current_user, role):
+        raise HTTPException(status_code=403, detail="You cannot manage this signature")
+    mime_type = (file.content_type or "").lower()
+    if mime_type not in SIGNATURE_MIME_TYPES:
+        raise HTTPException(status_code=422, detail="Signature must be PNG, JPG, JPEG, or WEBP")
+    content = await file.read(2 * 1024 * 1024 + 1)
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Signature image must be 2 MB or smaller")
+    try:
+        image = PILImage.open(ImageBytesIO(content))
+        image.verify()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid signature image") from exc
+
+    extension = SIGNATURE_MIME_TYPES[mime_type]
+    signature_dir = Path("volumes/media/factory_signatures") / str(current_user.factory_id)
+    signature_dir.mkdir(parents=True, exist_ok=True)
+    target = signature_dir / f"{role}{extension}"
+    row = (
+        db.query(FactoryAuthorizedSignature)
+        .filter(
+            FactoryAuthorizedSignature.factory_id == current_user.factory_id,
+            FactoryAuthorizedSignature.role == role,
+        )
+        .with_for_update()
+        .first()
+    )
+    old_path = Path(row.file_path) if row is not None else None
+    target.write_bytes(content)
+    if row is None:
+        row = FactoryAuthorizedSignature(
+            factory_id=current_user.factory_id,
+            role=role,
+            file_path=target.as_posix(),
+            original_filename=file.filename or target.name,
+            uploaded_by_user_id=current_user.id,
+        )
+        db.add(row)
+    else:
+        row.file_path = target.as_posix()
+        row.original_filename = file.filename or target.name
+        row.uploaded_by_user_id = current_user.id
+    if role == "owner":
+        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        if factory is not None:
+            factory.digital_signature_url = f"/media/factory_signatures/{current_user.factory_id}/{target.name}"
+    db.commit()
+    db.refresh(row)
+    if old_path and old_path != target:
+        old_path.unlink(missing_ok=True)
+    return _signature_response(row)
+
+
+@router.delete("/signatures/{role}")
+def delete_authorized_signature(
+    role: str,
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
+    db: Session = Depends(get_db),
+):
+    role = role.strip().lower()
+    if role not in SIGNATURE_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid signature role")
+    if not _signature_role_allowed(current_user, role):
+        raise HTTPException(status_code=403, detail="You cannot manage this signature")
+    row = db.query(FactoryAuthorizedSignature).filter(
+        FactoryAuthorizedSignature.factory_id == current_user.factory_id,
+        FactoryAuthorizedSignature.role == role,
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Signature not found")
+    file_path = Path(row.file_path)
+    db.delete(row)
+    if role == "owner":
+        factory = db.query(Factory).filter(Factory.id == current_user.factory_id).first()
+        if factory is not None:
+            factory.digital_signature_url = None
+    db.commit()
+    file_path.unlink(missing_ok=True)
+    return {"status": "deleted", "role": role}
 
 
 @router.get("/overview", response_model=OnboardingOverviewResponse)

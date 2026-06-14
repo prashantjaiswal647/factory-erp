@@ -1117,6 +1117,7 @@ class InvoiceDocument(TenantMixin, Base):
     pdf_generated_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_pdf_generated_at = Column(DateTime(timezone=True), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    generated_by_role = Column(String(50), nullable=True, index=True)
     accounting_locked = Column(Boolean, nullable=False, default=False, server_default="false")
     exported_at = Column(DateTime(timezone=True), nullable=True)
     shared_at = Column(DateTime(timezone=True), nullable=True)
@@ -1135,6 +1136,25 @@ class InvoiceDocument(TenantMixin, Base):
         CheckConstraint("amount_paid >= 0", name="ck_invoice_documents_amount_paid_non_negative"),
         CheckConstraint("customer_total_due >= 0", name="ck_invoice_documents_due_non_negative"),
         CheckConstraint("pdf_generated_count >= 0", name="ck_invoice_documents_pdf_count_non_negative"),
+    )
+
+
+class FactoryAuthorizedSignature(TenantMixin, Base):
+    __tablename__ = "factory_authorized_signatures"
+
+    id = Column(Integer, primary_key=True)
+    role = Column(String(30), nullable=False, index=True)
+    file_path = Column(String(500), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    uploaded_by = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("factory_id", "role", name="uq_factory_authorized_signature_role"),
+        CheckConstraint("role IN ('owner', 'sub_owner', 'supervisor')", name="ck_factory_authorized_signature_role"),
     )
 
 

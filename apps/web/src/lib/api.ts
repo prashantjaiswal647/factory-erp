@@ -1478,6 +1478,33 @@ export function removeInvoiceSignature() {
   return api.delete("/api/onboarding/factory-profile/signature");
 }
 
+export type AuthorizedSignatureRole = "owner" | "sub_owner" | "supervisor";
+
+export type AuthorizedSignature = {
+  id: number;
+  role: AuthorizedSignatureRole;
+  file_path: string;
+  url: string;
+  original_filename: string;
+  uploaded_by_user_id: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export function getAuthorizedSignatures() {
+  return api.get<AuthorizedSignature[]>("/api/onboarding/signatures");
+}
+
+export function uploadAuthorizedSignature(role: AuthorizedSignatureRole, file: File) {
+  const data = new FormData();
+  data.append("file", file);
+  return api.post<AuthorizedSignature>(`/api/onboarding/signatures/${role}`, data);
+}
+
+export function deleteAuthorizedSignature(role: AuthorizedSignatureRole) {
+  return api.delete(`/api/onboarding/signatures/${role}`);
+}
+
 export function snoozeCustomer(customerId: number, days = 3) {
   return api.post<{ message: string }>(
     `/api/dashboard/collection-war-room/actions/snooze/${customerId}`,

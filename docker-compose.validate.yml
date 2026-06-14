@@ -150,6 +150,25 @@ services:
       JWT_SECRET_KEY: validate-jwt-secret
       TZ: Asia/Kolkata
 
+  master-backup-email-scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: python -m services.master_backup_scheduler
+    container_name: ai-erp-master-backup-email-scheduler-validate
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql://erp_validate:erp_validate_password@postgres:5432/ai_erp_validate
+      JWT_SECRET_KEY: validate-jwt-secret
+      BACKUP_ROOT: /app/storage/backups
+      TZ: Asia/Kolkata
+    volumes:
+      - ./storage/backups:/app/storage/backups
+
   web:
     build:
       context: ./apps/web

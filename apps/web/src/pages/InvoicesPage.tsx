@@ -107,6 +107,7 @@ export default function InvoicesPage() {
   const [deleteTarget, setDeleteTarget] = useState<InvoiceDocumentSummary | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [deleteAction, setDeleteAction] = useState<"reverse" | "archive" | "cancel" | "hard_delete">("reverse");
   const [showAllocations, setShowAllocations] = useState(false);
   const [showBulkDownload, setShowBulkDownload] = useState(false);
@@ -266,6 +267,7 @@ export default function InvoicesPage() {
 
   async function confirmDeleteInvoice() {
     if (!deleteTarget) return;
+    setDeleteError("");
     if (deleteAction === "hard_delete") {
       if (deleteConfirmation !== deleteTarget.invoice_number) return;
       if (!confirmTestCheckbox) return;
@@ -283,16 +285,18 @@ export default function InvoicesPage() {
         setDeleteConfirmation("");
         setHardDeleteReason("");
         setConfirmTestCheckbox(false);
+        setDeleteError("");
         await loadInvoices();
         await loadCustomers();
       } catch (error) {
+        setDeleteError(apiErrorMessage(error));
         setMessage(apiErrorMessage(error));
       } finally {
         setIsDeleting(false);
       }
       return;
     }
-    const requiredConf = deleteAction === "archive" ? "ARCHIVE INVOICE" : "DELETE INVOICE";
+    const requiredConf = deleteAction === "archive" ? "ARCHIVE INVOICE" : (deleteAction === "cancel" ? "CANCEL INVOICE" : "DELETE INVOICE");
     if (deleteConfirmation !== requiredConf) return;
     setIsDeleting(true);
     try {
@@ -300,9 +304,11 @@ export default function InvoicesPage() {
       setMessage(`Invoice ${deleteTarget.invoice_number} ${deleteAction === "archive" ? "archived" : deleteAction === "cancel" ? "cancelled" : "deleted"}.`);
       setDeleteTarget(null);
       setDeleteConfirmation("");
+      setDeleteError("");
       await loadInvoices();
       await loadCustomers();
     } catch (error) {
+      setDeleteError(apiErrorMessage(error));
       setMessage(apiErrorMessage(error));
     } finally {
       setIsDeleting(false);
@@ -669,10 +675,10 @@ export default function InvoicesPage() {
                           </button>
                           {user?.role === "Owner" ? (
                             <>
-                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("archive"); setShowAllocations(false); }}>
+                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-zinc-200 px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("archive"); setShowAllocations(false); setDeleteError(""); }}>
                                 <Archive className="h-4 w-4" /> Archive Invoice
                               </button>
-                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 px-2 text-xs font-semibold text-red-700 hover:bg-red-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("hard_delete"); setHardDeleteReason(""); setConfirmTestCheckbox(false); setReversePayments(true); }}>
+                              <button className="inline-flex h-9 items-center gap-1 rounded-md border border-red-200 px-2 text-xs font-semibold text-red-700 hover:bg-red-50" onClick={() => { setDeleteTarget(invoice); setDeleteConfirmation(""); setDeleteAction("hard_delete"); setHardDeleteReason(""); setConfirmTestCheckbox(false); setReversePayments(true); setDeleteError(""); }}>
                                 <Trash2 className="h-4 w-4" /> Delete Test Invoice
                               </button>
                             </>
@@ -814,7 +820,7 @@ export default function InvoicesPage() {
                 <div className="grid grid-cols-3 gap-3">
                   <button
                     type="button"
-                    onClick={() => { setDeleteAction("reverse"); setDeleteConfirmation(""); }}
+                    onClick={() => { setDeleteAction("reverse"); setDeleteConfirmation(""); setDeleteError(""); }}
                     className={`flex flex-col text-left p-3 rounded-xl border transition ${
                       deleteAction === "reverse" ? "border-red-600 bg-red-50/20" : "border-zinc-200 bg-white hover:bg-zinc-50"
                     }`}
@@ -824,7 +830,7 @@ export default function InvoicesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setDeleteAction("cancel"); setDeleteConfirmation(""); }}
+                    onClick={() => { setDeleteAction("cancel"); setDeleteConfirmation(""); setDeleteError(""); }}
                     className={`flex flex-col text-left p-3 rounded-xl border transition ${
                       deleteAction === "cancel" ? "border-amber-600 bg-amber-50/30" : "border-zinc-200 bg-white hover:bg-zinc-50"
                     }`}
@@ -834,7 +840,7 @@ export default function InvoicesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setDeleteAction("archive"); setDeleteConfirmation(""); }}
+                    onClick={() => { setDeleteAction("archive"); setDeleteConfirmation(""); setDeleteError(""); }}
                     className={`flex flex-col text-left p-3 rounded-xl border transition ${
                       deleteAction === "archive" ? "border-zinc-900 bg-zinc-50" : "border-zinc-200 bg-white hover:bg-zinc-50"
                     }`}
@@ -878,17 +884,23 @@ export default function InvoicesPage() {
               </div>
             )}
 
+            {deleteError && (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 font-semibold">
+                {deleteError}
+              </div>
+            )}
+
             <label className="block text-sm font-semibold text-zinc-700">
-              Type <span className="font-bold text-zinc-900">{deleteAction === "archive" ? "ARCHIVE INVOICE" : "DELETE INVOICE"}</span> to confirm
+              Type <span className="font-bold text-zinc-900">{deleteAction === "archive" ? "ARCHIVE INVOICE" : (deleteAction === "cancel" ? "CANCEL INVOICE" : "DELETE INVOICE")}</span> to confirm
               <input autoFocus className="mt-2 h-10 w-full rounded-md border border-zinc-300 px-3 text-sm focus:border-zinc-500 focus:outline-none" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} />
             </label>
 
             <div className="flex justify-end gap-3 pt-2">
-              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold hover:bg-zinc-50 transition" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }}>Cancel</button>
+              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold hover:bg-zinc-50 transition" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); setDeleteError(""); }}>Cancel</button>
               <button
                 type="button"
                 disabled={
-                  deleteConfirmation !== (deleteAction === "archive" ? "ARCHIVE INVOICE" : "DELETE INVOICE") ||
+                  deleteConfirmation !== (deleteAction === "archive" ? "ARCHIVE INVOICE" : (deleteAction === "cancel" ? "CANCEL INVOICE" : "DELETE INVOICE")) ||
                   isDeleting ||
                   (deleteAction === "reverse" && toNumber(deleteTarget.amount_paid) > 0)
                 }
@@ -977,6 +989,12 @@ export default function InvoicesPage() {
                 <span className="text-xs text-zinc-700">I understand this is a test/wrong invoice and want to delete it.</span>
               </label>
 
+              {deleteError && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 font-semibold mb-3">
+                  {deleteError}
+                </div>
+              )}
+
               <label className="block">
                 <span className="block text-xs font-semibold text-zinc-700 mb-1">
                   Type <span className="font-bold text-zinc-900">{deleteTarget.invoice_number}</span> to confirm
@@ -990,7 +1008,7 @@ export default function InvoicesPage() {
             </div>
 
             <div className="flex justify-end gap-3 pt-2">
-              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold hover:bg-zinc-50 transition" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); }}>Cancel</button>
+              <button type="button" className="h-10 rounded-md border px-4 text-sm font-semibold hover:bg-zinc-50 transition" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(""); setDeleteError(""); }}>Cancel</button>
               <button
                 type="button"
                 disabled={

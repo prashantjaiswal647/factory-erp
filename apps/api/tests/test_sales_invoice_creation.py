@@ -116,6 +116,7 @@ def test_sales_invoice_creation_updates_stock_and_source_ledger(
     assert invoice_bill.balance_amount == expected_invoice_due
     assert customer.total_due == expected_customer_due
     assert Decimal(invoice.payload_json["invoice"]["previous_due"]) == Decimal(opening_due)
+    assert invoice.generated_by_role == "Owner"
     assert factory_next_number(db, user.factory_id) == 2
     assert settings.bill_of_supply_start_seq == 2
 
