@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -11,13 +12,23 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import Customer, Factory, FinalProductStock, InvoiceDocument, OutstandingBill
+from models import (
+    BillPayment,
+    Customer,
+    Factory,
+    FinalProductStock,
+    InvoiceDocument,
+    OutstandingBill,
+    PaymentCollection,
+)
 from services.master_backup import (
+    RestoreFailure,
     SHEETS,
     build_master_backup,
     build_validation_report,
     restore_staged_backup,
     stage_backup,
+    staged_backup_metadata_path,
     validate_backup,
 )
 
@@ -115,6 +126,34 @@ def test_restore_same_backup_twice_is_idempotent(backup_db):
     assert backup_db.query(OutstandingBill).count() == 1
 
 
+def test_validated_session_confirm_restore_succeeds_and_keeps_filename(backup_db):
+    backup = build_master_backup(backup_db, 1).getvalue()
+    restore_id, report = stage_backup(backup, 1, "factory-master-backup.xlsx")
+
+    assert report["fatal"] is False
+    assert staged_backup_metadata_path(1, restore_id).read_text(encoding="utf-8").find(
+        "factory-master-backup.xlsx"
+    ) >= 0
+    result = restore_staged_backup(backup_db, 1, restore_id)
+
+    assert result["updated"] >= 3
+    assert not staged_backup_metadata_path(1, restore_id).exists()
+
+
+def test_restore_ignores_read_me_and_restore_mapping_sheets(backup_db):
+    backup = build_master_backup(backup_db, 1)
+    workbook = load_workbook(backup)
+    workbook.create_sheet("READ_ME").append(["Documentation only"])
+    workbook.create_sheet("RESTORE_MAPPING").append(["source", "target"])
+    output = BytesIO()
+    workbook.save(output)
+    restore_id, report = stage_backup(output.getvalue(), 1, "formatted-master-backup.xlsx")
+
+    assert report["fatal"] is False
+    result = restore_staged_backup(backup_db, 1, restore_id)
+    assert result["updated"] >= 3
+
+
 def test_restore_replaces_snapshot_and_stock_is_not_additive(backup_db):
     stock = FinalProductStock(
         factory_id=1,
@@ -146,6 +185,50 @@ def test_restore_replaces_snapshot_and_stock_is_not_additive(backup_db):
     assert result["deleted"] >= 1
 
 
+def test_invoice_payment_history_restore_does_not_change_finished_stock(backup_db):
+    stock = FinalProductStock(
+        factory_id=1,
+        product_size_ml=210,
+        variety="Plain",
+        packaging_size_name="210 ML Plain",
+        current_quantity=500,
+        total_boxes=10,
+        loose_packets=0,
+        packets_per_box_limit=50,
+    )
+    payment = PaymentCollection(
+        id=1,
+        factory_id=1,
+        customer_id=1,
+        outstanding_bill_id=1,
+        amount_collected=25,
+        payment_mode="Cash",
+        collection_date=date(2026, 6, 13),
+    )
+    allocation = BillPayment(
+        id=1,
+        factory_id=1,
+        bill_id=1,
+        amount_allocated=25,
+        payment_date=date(2026, 6, 13),
+    )
+    backup_db.add_all([stock, payment, allocation])
+    backup_db.commit()
+    backup = build_master_backup(backup_db, 1).getvalue()
+
+    stock.current_quantity = 700
+    backup_db.commit()
+    restore_id, report = stage_backup(backup, 1)
+    assert report["fatal"] is False
+    restore_staged_backup(backup_db, 1, restore_id)
+
+    assert backup_db.query(FinalProductStock).one().current_quantity == 500
+    assert backup_db.query(InvoiceDocument).count() == 1
+    assert backup_db.query(PaymentCollection).count() == 1
+    assert backup_db.query(BillPayment).count() == 1
+    assert backup_db.query(OutstandingBill).count() == 1
+
+
 def test_restore_rolls_back_all_changes_on_fatal_error(backup_db, monkeypatch):
     backup = build_master_backup(backup_db, 1).getvalue()
     customer = backup_db.query(Customer).one()
@@ -164,8 +247,15 @@ def test_restore_rolls_back_all_changes_on_fatal_error(backup_db, monkeypatch):
         return original_coerce(column, value)
 
     monkeypatch.setattr("services.master_backup._coerce", fail_after_mutation)
-    with pytest.raises(RuntimeError, match="forced restore failure"):
+    with pytest.raises(RestoreFailure, match="could not be applied") as caught:
         restore_staged_backup(backup_db, 1, restore_id)
 
+    assert "Customers" in caught.value.detail
     backup_db.expire_all()
     assert backup_db.query(Customer).one().name == "Current Database Value"
+
+
+def test_api_runtime_installs_pg_dump_client():
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    content = dockerfile.read_text(encoding="utf-8")
+    assert "postgresql-client" in content

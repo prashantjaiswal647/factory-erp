@@ -2239,10 +2239,14 @@ export function validateMasterBackup(file: File) {
 }
 
 export function confirmMasterRestore(restoreId: string) {
-  return api.post<{ inserted: number; updated: number; skipped: number }>("/api/backup/master/restore", {
-    restore_id: restoreId,
-    confirmation: "RESTORE",
-  });
+  return api.post<{ inserted: number; updated: number; deleted: number; skipped: number }>(
+    "/api/backup/master/restore",
+    {
+      restore_id: restoreId,
+      confirmation: "RESTORE",
+    },
+    { timeout: 300000 }
+  );
 }
 
 export function downloadMasterBackupValidationReport(restoreId: string) {

@@ -258,8 +258,11 @@ Rules:
 - Export uses one XLSX sheet per factory data family and includes factory-scoped stable restore keys.
 - Restore is validate-first and confirmation-only; staged uploads must never import during validation.
 - Confirmed restore creates a pre-restore backup, runs transactionally, and must reject cross-factory metadata.
+- The API runtime image must include `postgresql-client`; confirmed PostgreSQL restores call `pg_dump` before any mutation and abort clearly if that safety backup fails.
+- Validation writes factory-scoped staged session metadata containing the original filename, validation status, fatal count, and sheet counts; confirmation must consume that exact validated session.
 - Restore is snapshot-based: records absent from authoritative backup sheets are removed in dependency-safe order, and stock quantities are replaced with workbook values rather than added.
 - A fatal restore error rolls back every database mutation and keeps the staged upload available for retry.
+- Restore logs must include the session ID, filename, sheet/table, parsed rows, created/updated/deleted counts, and server-side traceback while client errors remain sanitized.
 - Invoice history restore must not call sales creation paths or deduct finished-goods stock again.
 - `master-backup-email-scheduler` sends separate owner emails for weekly backups on Sunday at 20:30 IST and monthly backups on day 1 at 08:30 IST.
 - Scheduled delivery is deduplicated independently by factory, frequency, and period under the persistent `BACKUP_ROOT` volume; weekly and monthly files must never share one email.

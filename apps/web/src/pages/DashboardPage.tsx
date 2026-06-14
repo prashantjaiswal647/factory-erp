@@ -229,12 +229,24 @@ export default function DashboardPage() {
     setBackupBusy(true);
     try {
       const response = await confirmMasterRestore(backupValidation.restore_id);
-      setBackupMessage(`Restore complete: ${response.data.inserted} inserted, ${response.data.updated} updated.`);
+      setBackupMessage(
+        `Restore complete: ${response.data.inserted} inserted, ${response.data.updated} updated, ${response.data.deleted} deleted.`
+      );
       setBackupValidation(null);
       setBackupFile(null);
       await load();
     } catch (caught) {
-      setBackupMessage(axios.isAxiosError(caught) ? String(caught.response?.data?.detail || caught.message) : "Restore failed.");
+      if (axios.isAxiosError(caught)) {
+        const detail = caught.response?.data?.detail;
+        const message = typeof detail === "string"
+          ? detail
+          : typeof detail?.message === "string"
+            ? detail.message
+            : caught.message;
+        setBackupMessage(message || "Restore failed.");
+      } else {
+        setBackupMessage("Restore failed.");
+      }
     } finally {
       setBackupBusy(false);
     }

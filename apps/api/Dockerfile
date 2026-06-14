@@ -21,6 +21,10 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy installed site-packages from builder
 COPY --from=builder /root/.local /root/.local
 COPY . .

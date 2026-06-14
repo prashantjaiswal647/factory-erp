@@ -10,6 +10,7 @@ from db import get_db
 from dependencies import check_permissions
 from models import Factory, User
 from services.master_backup import (
+    RestoreFailure,
     build_master_backup,
     build_validation_report,
     preview_backup,
@@ -46,7 +47,7 @@ async def validate_master_backup(
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=422, detail="Only .xlsx backup files are supported")
     file_bytes = await file.read()
-    restore_id, report = stage_backup(file_bytes, int(current_user.factory_id))
+    restore_id, report = stage_backup(file_bytes, int(current_user.factory_id), file.filename)
     preview = preview_backup(db, file_bytes, int(current_user.factory_id))
     return {
         "restore_id": restore_id,
@@ -92,6 +93,9 @@ def confirm_master_restore(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RestoreFailure as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=exc.detail) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Restore failed and all changes were rolled back") from exc

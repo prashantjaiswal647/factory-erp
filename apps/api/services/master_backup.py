@@ -5,9 +5,11 @@ from decimal import Decimal
 from io import BytesIO
 import hashlib
 import json
+import logging
 from pathlib import Path
 import subprocess
 import os
+import traceback
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +34,7 @@ DEFAULT_BACKUP_ROOT = (
 BACKUP_ROOT = Path(os.getenv("BACKUP_ROOT", str(DEFAULT_BACKUP_ROOT))).expanduser()
 STAGING_ROOT = BACKUP_ROOT / "restore-staging"
 META_SHEET = "Backup Metadata"
+logger = logging.getLogger(__name__)
 
 SHEETS = {
     "Factory Profile": Factory,
@@ -174,16 +177,43 @@ def validate_backup(file_bytes: bytes, expected_factory_id: int) -> dict:
     return {"fatal": bool(errors), "errors": errors, "source_factory_id": source_factory_id, "sheet_counts": counts}
 
 
-def stage_backup(file_bytes: bytes, factory_id: int) -> tuple[str, dict]:
+class RestoreFailure(RuntimeError):
+    def __init__(self, message: str, *, sheet: str | None = None, table: str | None = None):
+        super().__init__(message)
+        self.sheet = sheet
+        self.table = table
+
+    @property
+    def detail(self) -> str:
+        context = self.sheet or self.table
+        return f"Restore failed in {context}: {self}" if context else str(self)
+
+
+def stage_backup(file_bytes: bytes, factory_id: int, filename: str | None = None) -> tuple[str, dict]:
     report = validate_backup(file_bytes, factory_id)
     restore_id = uuid4().hex
     STAGING_ROOT.mkdir(parents=True, exist_ok=True)
     (STAGING_ROOT / f"{factory_id}_{restore_id}.xlsx").write_bytes(file_bytes)
+    staged_backup_metadata_path(factory_id, restore_id).write_text(
+        json.dumps({
+            "restore_session_id": restore_id,
+            "factory_id": factory_id,
+            "filename": filename or "master_backup.xlsx",
+            "validation_status": "VALID" if not report["fatal"] else "FAILED",
+            "fatal_count": len(report["errors"]),
+            "sheet_counts": report.get("sheet_counts", {}),
+        }, ensure_ascii=True),
+        encoding="utf-8",
+    )
     return restore_id, report
 
 
 def staged_backup_path(factory_id: int, restore_id: str) -> Path:
     return STAGING_ROOT / f"{factory_id}_{restore_id}.xlsx"
+
+
+def staged_backup_metadata_path(factory_id: int, restore_id: str) -> Path:
+    return STAGING_ROOT / f"{factory_id}_{restore_id}.json"
 
 
 def build_validation_report(file_bytes: bytes, factory_id: int) -> BytesIO:
@@ -300,17 +330,41 @@ def create_pre_restore_backup(db: Session, factory_id: int) -> Path:
 
 def restore_staged_backup(db: Session, factory_id: int, restore_id: str) -> dict:
     path = staged_backup_path(factory_id, restore_id)
+    metadata_path = staged_backup_metadata_path(factory_id, restore_id)
     if not path.exists():
         raise ValueError("Restore upload has expired or does not exist")
+    if not metadata_path.exists():
+        raise ValueError("Validated restore session metadata is missing; validate the file again")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("validation_status") != "VALID" or int(metadata.get("fatal_count") or 0) != 0:
+        raise ValueError("Restore session did not pass validation")
     file_bytes = path.read_bytes()
     report = validate_backup(file_bytes, factory_id)
     if report["fatal"]:
         raise ValueError("Backup contains fatal validation errors")
-    create_pre_restore_backup(db, factory_id)
+    filename = str(metadata.get("filename") or path.name)
+    logger.info(
+        "master_restore_start restore_session_id=%s filename=%s factory_id=%s sheet_counts=%s",
+        restore_id, filename, factory_id, report.get("sheet_counts", {}),
+    )
+    try:
+        backup_path = create_pre_restore_backup(db, factory_id)
+    except Exception as exc:
+        logger.exception(
+            "master_restore_pre_backup_failed restore_session_id=%s filename=%s factory_id=%s",
+            restore_id, filename, factory_id,
+        )
+        raise RestoreFailure("Database safety backup could not be created; no data was changed") from exc
+    logger.info(
+        "master_restore_pre_backup_created restore_session_id=%s backup_path=%s",
+        restore_id, backup_path,
+    )
     workbook = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
     result = {"inserted": 0, "updated": 0, "deleted": 0, "skipped": 0}
     id_maps: dict[str, dict[int, int]] = {}
     restored_ids: dict[str, set[int]] = {}
+    current_sheet: str | None = None
+    current_table: str | None = None
 
     try:
         for sheet in RESTORE_ORDER:
@@ -318,9 +372,18 @@ def restore_staged_backup(db: Session, factory_id: int, restore_id: str) -> dict
                 continue
             model = SHEETS[sheet]
             table_name = model.__tablename__
+            current_sheet = sheet
+            current_table = table_name
             id_maps.setdefault(table_name, {})
             restored_ids.setdefault(table_name, set())
-            for record in _sheet_records(workbook[sheet]):
+            records = _sheet_records(workbook[sheet])
+            sheet_created = 0
+            sheet_updated = 0
+            logger.info(
+                "master_restore_sheet_start restore_session_id=%s sheet=%s table=%s rows_parsed=%s",
+                restore_id, sheet, table_name, len(records),
+            )
+            for record in records:
                 source_id = int(record.get("id") or 0)
                 normalized_record = dict(record)
                 for column in model.__table__.columns:
@@ -343,11 +406,18 @@ def restore_staged_backup(db: Session, factory_id: int, restore_id: str) -> dict
                     db.add(target)
                     db.flush()
                     result["inserted"] += 1
+                    sheet_created += 1
                 else:
                     result["updated"] += 1
+                    sheet_updated += 1
                 restored_ids[table_name].add(int(target.id))
                 if source_id:
                     id_maps[table_name][source_id] = int(target.id)
+            logger.info(
+                "master_restore_sheet_complete restore_session_id=%s sheet=%s table=%s "
+                "created=%s updated=%s",
+                restore_id, sheet, table_name, sheet_created, sheet_updated,
+            )
 
         cleaned_tables: set[str] = set()
         for sheet in reversed(RESTORE_ORDER):
@@ -356,16 +426,39 @@ def restore_staged_backup(db: Session, factory_id: int, restore_id: str) -> dict
             if table_name in cleaned_tables:
                 continue
             cleaned_tables.add(table_name)
+            current_sheet = sheet
+            current_table = table_name
             query = db.query(model).filter(model.factory_id == factory_id)
             keep_ids = restored_ids.get(table_name, set())
             if keep_ids:
                 query = query.filter(~model.id.in_(keep_ids))
-            result["deleted"] += query.delete(synchronize_session=False)
+            deleted = query.delete(synchronize_session=False)
+            result["deleted"] += deleted
+            logger.info(
+                "master_restore_snapshot_cleanup restore_session_id=%s sheet=%s table=%s deleted=%s",
+                restore_id, sheet, table_name, deleted,
+            )
 
         db.flush()
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise
+        logger.error(
+            "master_restore_failed restore_session_id=%s filename=%s sheet=%s table=%s traceback=%s",
+            restore_id, filename, current_sheet, current_table, traceback.format_exc(),
+        )
+        raise RestoreFailure(
+            "A workbook row or snapshot cleanup operation could not be applied. "
+            "Review this sheet's values and retry validation.",
+            sheet=current_sheet,
+            table=current_table,
+        ) from exc
     path.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
+    logger.info(
+        "master_restore_complete restore_session_id=%s filename=%s factory_id=%s "
+        "created=%s updated=%s deleted=%s",
+        restore_id, filename, factory_id,
+        result["inserted"], result["updated"], result["deleted"],
+    )
     return result
