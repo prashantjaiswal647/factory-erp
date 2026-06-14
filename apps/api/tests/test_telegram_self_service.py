@@ -426,7 +426,7 @@ def _create_code(client: TestClient) -> str:
     assert response.status_code == 200, response.text
     payload = response.json()
     assert len(payload["code"]) == 6
-    assert payload["code"].isalnum() and payload["code"].isupper()
+    assert payload["code"].isdigit()
     assert payload["bot_username"] == "MunshiHermesAi_Bot"
     return payload["code"]
 
@@ -452,7 +452,7 @@ def test_connect_code_endpoint_returns_deep_link_and_code(telegram_app):
     assert response.status_code == 200, response.text
     payload = response.json()
     assert len(payload["code"]) == 6
-    assert payload["code"].isalnum() and payload["code"].isupper()
+    assert payload["code"].isdigit()
     assert payload["deep_link"].startswith("https://t.me/")
     assert payload["deep_link"].endswith(f"?start=bind_{payload['code']}")
     assert payload["bot_username"] == "MunshiHermesAi_Bot"

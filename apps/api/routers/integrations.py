@@ -506,7 +506,7 @@ def create_telegram_connect_code(
     current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
     db: Session = Depends(get_db),
 ):
-    """Generate a one-time 6-character code that the owner types in the bot.
+    """Generate a one-time 6-digit code that the owner types in the bot.
 
     Preferred path for the 30-second self-service flow: the frontend shows
     the code, opens `https://t.me/<bot>?start=bind_<code>` automatically, and
@@ -522,9 +522,7 @@ def create_telegram_connect_code(
         raise HTTPException(status_code=404, detail="User not found")
 
     import random
-    import string
-
-    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    code = "".join(random.choices("0123456789", k=6))
     expires_at = _utcnow() + timedelta(minutes=10)
     user.telegram_binding_code = code
     user.telegram_binding_expiry = expires_at

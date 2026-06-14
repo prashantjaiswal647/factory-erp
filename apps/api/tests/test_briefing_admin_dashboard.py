@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -11,6 +12,9 @@ from db import Base, get_db
 from models import Factory, MorningBriefingLog
 from routers.briefing_admin import router
 from routers.super_admin import require_super_admin
+
+
+REPORTING_DATE = date(2026, 6, 14)
 
 
 engine = create_engine(
@@ -58,7 +62,7 @@ def _seed():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     now = datetime.now(timezone.utc)
-    today = date.today()
+    today = REPORTING_DATE
     db = SessionLocal()
     db.add_all(
         [
@@ -111,8 +115,13 @@ def _seed():
     db.close()
 
 
-def setup_function():
+@pytest.fixture(autouse=True)
+def isolated_briefing_data(monkeypatch):
     _compatibility_patch()
+    monkeypatch.setattr(
+        "services.briefing_observability.get_kolkata_now",
+        lambda: datetime(2026, 6, 14, 9, 0, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+    )
     _seed()
 
 
