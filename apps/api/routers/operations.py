@@ -241,43 +241,28 @@ def mark_worker_present_for_production(
     production_date,
     production_qty: int,
 ) -> Optional[AttendanceLog]:
-    existing_log = (
-        db.query(AttendanceLog)
-        .filter(AttendanceLog.factory_id == factory_id)
-        .filter(AttendanceLog.worker_id == worker.id)
-        .filter(AttendanceLog.date == production_date)
-        .first()
-    )
-    if existing_log is not None:
-        logger.info("Automatic attendance skipped; existing attendance log found id=%s", existing_log.id)
-        return None
+    from services.attendance_service import upsert_worker_attendance
 
-    duty_hours = float(worker.duty_hours or worker.shift_hours or 8.0)
-    if duty_hours <= 0:
-        duty_hours = 8.0
-
-    attendance_log = AttendanceLog(
+    attendance_log, created = upsert_worker_attendance(
+        db,
         factory_id=factory_id,
-        date=production_date,
-        worker_id=worker.id,
-        status="Present",
-        is_present=True,
-        duty_hours=duty_hours,
-        production_qty=Decimal(production_qty or 0),
+        worker=worker,
+        attendance_date=production_date,
+        attendance_status="Present",
+        production_qty=production_qty or 0,
     )
-    db.add(attendance_log)
-    db.flush()
 
-    try:
-        log_factory_operation(
-            db,
-            factory_id=int(factory_id),
-            event_type="attendance",
-            description=f"System automatically marked attendance Present for {worker.name} (linked to production)",
-            log_date=production_date,
-        )
-    except Exception as log_error:
-        logger.exception("Suppressed activity log failure for automatic attendance: %s", log_error)
+    if created:
+        try:
+            log_factory_operation(
+                db,
+                factory_id=int(factory_id),
+                event_type="attendance",
+                description=f"System automatically marked attendance Present for {worker.name} (linked to production)",
+                log_date=production_date,
+            )
+        except Exception as log_error:
+            logger.exception("Suppressed activity log failure for automatic attendance: %s", log_error)
 
     logger.info("Automatic attendance marked present for production worker attendance_log_id=%s", attendance_log.id)
     return attendance_log

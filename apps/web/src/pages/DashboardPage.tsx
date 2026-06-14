@@ -504,6 +504,15 @@ export default function DashboardPage() {
             <div>Night Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary.today_night_wastage_kg).toFixed(1)} kg</strong></div>
           </div>
         )}
+        {dashboardSummary?.attendance_breakdown ? (
+          <div className="mt-3 flex flex-wrap gap-2 border-t pt-3 text-xs">
+            {Object.entries(dashboardSummary.attendance_breakdown).map(([status, count]) => (
+              <span key={status} className="rounded-full bg-zinc-100 px-3 py-1 font-semibold text-zinc-700">
+                {status}: {count}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {(user?.role === "Owner" || user?.role === "Sub-Owner") && safeArray(pendingSales).length > 0 ? (

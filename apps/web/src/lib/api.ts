@@ -1008,7 +1008,7 @@ export type WorkerUpdatePayload = {
 export type WorkerLedgerDay = {
   date: string;
   attendance_id?: number | null;
-  status: "Present" | "Absent" | "Half-day";
+  status: "Present" | "Absent" | "Weekly Off" | "Paid Holiday" | "Paid Leave" | "Half Day";
   production_qty?: string | null;
   duty_amount: string;
   advance_amount: string;
@@ -1086,6 +1086,7 @@ export type DashboardSummary = {
   today_day_wastage_kg?: number;
   today_night_wastage_kg?: number;
   today_total_wastage_kg?: number;
+  attendance_breakdown?: Record<string, number>;
 };
 
 export function getDashboardSummary() {
@@ -1498,6 +1499,13 @@ export function updateWorkerProfile(workerId: number, payload: WorkerUpdatePaylo
 
 export function upsertWorkerAttendance(workerId: number, payload: { date: string; status: WorkerLedgerDay["status"]; production_qty?: number | null }) {
   return api.post<WorkerLedgerDay>(`/api/workers/${workerId}/attendance`, payload);
+}
+
+export function markAllActiveWorkersWeeklyOff(date: string) {
+  return api.post<{ date: string; status: string; workers_updated: number }>(
+    "/api/workers/attendance/weekly-off/all",
+    { date },
+  );
 }
 
 export function addWorkerAdvance(workerId: number, payload: { date: string; amount: number }) {

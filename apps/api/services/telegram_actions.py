@@ -28,6 +28,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from models import (
@@ -585,7 +586,10 @@ def handle_attendance_status(
     attendance_status: str,
 ) -> TelegramActionResult:
     """Status selected → show confirmation."""
-    if attendance_status not in ("Present", "Absent", "Half-day"):
+    from services.attendance_service import normalize_attendance_status
+    try:
+        attendance_status = normalize_attendance_status(attendance_status)
+    except HTTPException:
         return TelegramActionResult(
             message="⚠️ Invalid status. Please start again.",
             buttons=_main_buttons(),
@@ -1746,4 +1750,3 @@ def handle_edit_production_cancel(
     if session:
         update_session(db, session.session_id, "cancelled", {}, status="cancelled")
     return TelegramActionResult(message="❌ Production update cancelled.", buttons=_main_buttons())
-

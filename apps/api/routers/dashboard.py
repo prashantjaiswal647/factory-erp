@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, Response
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,7 @@ from ai_agent import initialize_groq_llm
 from auth import get_current_active_user, get_effective_subscription, set_no_store_headers
 from dependencies import DASHBOARD_ROLES, check_permissions
 from db import get_db
-from models import BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog, OutstandingBill, ShiftWastage
+from models import AttendanceLog, BlankStock, BottomStock, BoxStock, Customer, DailyProduction, DailySale, Factory, FactoryExpense, Payment, User, Worker, Machine, WastageLog, OutstandingBill, ShiftWastage
 from schemas import AnalyticsSummaryResponse
 
 
@@ -39,6 +39,7 @@ class AiDashboardStats(BaseModel):
     today_day_wastage_kg: Optional[Decimal] = Decimal("0.0")
     today_night_wastage_kg: Optional[Decimal] = Decimal("0.0")
     today_total_wastage_kg: Optional[Decimal] = Decimal("0.0")
+    attendance_breakdown: dict[str, int] = Field(default_factory=dict)
 
 
 class AiInsightsResponse(BaseModel):
@@ -225,6 +226,14 @@ def get_dashboard_summary(
         elif row.shift.strip().lower() == "night":
             today_night = val
     today_total = today_day + today_night
+    attendance_rows = (
+        db.query(AttendanceLog.status, sql_func.count(AttendanceLog.id))
+        .filter(AttendanceLog.factory_id == factory_id)
+        .filter(AttendanceLog.date == today)
+        .group_by(AttendanceLog.status)
+        .all()
+    )
+    attendance_breakdown = {status: int(count) for status, count in attendance_rows}
 
     stats = {
         "total_sales_last_7_days": total_sales,
@@ -235,6 +244,7 @@ def get_dashboard_summary(
         "today_day_wastage_kg": today_day,
         "today_night_wastage_kg": today_night,
         "today_total_wastage_kg": today_total,
+        "attendance_breakdown": attendance_breakdown,
     }
 
     if r is not None:

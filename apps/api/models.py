@@ -906,7 +906,10 @@ class AttendanceLog(TenantMixin, Base):
     __table_args__ = (
         UniqueConstraint("factory_id", "date", "employee_id", name="uq_attendance_logs_factory_date_employee"),
         UniqueConstraint("factory_id", "date", "worker_id", name="uq_attendance_logs_factory_date_worker"),
-        CheckConstraint("status IN ('Present', 'Absent', 'Half-day')", name="ck_attendance_logs_status"),
+        CheckConstraint(
+            "status IN ('Present', 'Absent', 'Weekly Off', 'Paid Holiday', 'Paid Leave', 'Half Day', 'Half-day')",
+            name="ck_attendance_logs_status",
+        ),
         CheckConstraint("duty_hours > 0", name="ck_attendance_logs_duty_hours_positive"),
         CheckConstraint("overtime_hours >= 0", name="ck_attendance_logs_overtime_non_negative"),
     )

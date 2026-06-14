@@ -14,6 +14,10 @@ from models import AdvancePayment, AttendanceLog, Factory, HisabSettlement, User
 from schemas import OpeningAttendanceResponse
 from services.activity_logger import log_activity
 from services.telegram_action_alerts import notify_worker_advance
+from services.attendance_service import (
+    attendance_units,
+    upsert_worker_attendance,
+)
 
 
 router = APIRouter(prefix="/api/workers", tags=["attendance-ledger"])
@@ -30,14 +34,6 @@ def month_bounds(month: str) -> tuple[date, date]:
         return date(year, month_number, 1), date(year, month_number, monthrange(year, month_number)[1])
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Month must be YYYY-MM") from exc
-
-
-def attendance_units(status: str) -> Decimal:
-    if status == "Present":
-        return Decimal("1")
-    if status == "Half-day":
-        return Decimal("0.5")
-    return Decimal("0")
 
 
 def worker_rate(worker: Worker) -> Decimal:
@@ -92,8 +88,18 @@ class WorkerLedgerResponse(BaseModel):
 
 class AttendanceUpsert(BaseModel):
     date: date
-    status: str = Field(..., pattern="^(Present|Absent|Half-day)$")
+    status: str
     production_qty: Optional[Decimal] = Field(default=None, ge=0)
+
+
+class BulkWeeklyOffRequest(BaseModel):
+    date: date
+
+
+class BulkWeeklyOffResponse(BaseModel):
+    date: date
+    status: str
+    workers_updated: int
 
 
 class AdvanceCreate(BaseModel):
@@ -291,21 +297,14 @@ def upsert_attendance(
     db: Session = Depends(get_db),
 ):
     worker = get_worker(db, current_user.factory_id, worker_id)
-    log = (
-        db.query(AttendanceLog)
-        .filter(AttendanceLog.factory_id == current_user.factory_id)
-        .filter(AttendanceLog.worker_id == worker.id)
-        .filter(AttendanceLog.date == payload.date)
-        .first()
+    log, _ = upsert_worker_attendance(
+        db,
+        factory_id=current_user.factory_id,
+        worker=worker,
+        attendance_date=payload.date,
+        attendance_status=payload.status,
+        production_qty=payload.production_qty,
     )
-    if log is None:
-        log = AttendanceLog(factory_id=current_user.factory_id, worker_id=worker.id, date=payload.date)
-        db.add(log)
-    if log.is_settled:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Attendance already settled")
-    log.status = payload.status
-    log.is_present = payload.status in ("Present", "Half-day")
-    log.production_qty = payload.production_qty
 
     activity = ActivityLog(
         factory_id=current_user.factory_id,
@@ -343,6 +342,40 @@ def upsert_attendance(
         production_qty=log.production_qty,
         duty_amount=money(attendance_units(log.status) * worker_rate(worker)),
         advance_amount=advance_amount,
+    )
+
+
+@router.post("/attendance/weekly-off/all", response_model=BulkWeeklyOffResponse)
+def mark_all_active_workers_weekly_off(
+    payload: BulkWeeklyOffRequest,
+    current_user: User = Depends(check_permissions(["Owner"])),
+    db: Session = Depends(get_db),
+):
+    workers = (
+        db.query(Worker)
+        .filter(Worker.factory_id == current_user.factory_id)
+        .filter(Worker.is_active.is_(True))
+        .order_by(Worker.id.asc())
+        .all()
+    )
+    for worker in workers:
+        upsert_worker_attendance(
+            db,
+            factory_id=current_user.factory_id,
+            worker=worker,
+            attendance_date=payload.date,
+            attendance_status="Weekly Off",
+        )
+    db.add(ActivityLog(
+        factory_id=current_user.factory_id,
+        event_type="attendance",
+        description=f"All active workers marked Weekly Off for {payload.date}",
+    ))
+    db.commit()
+    return BulkWeeklyOffResponse(
+        date=payload.date,
+        status="Weekly Off",
+        workers_updated=len(workers),
     )
 
 
@@ -634,7 +667,7 @@ def get_worker_payroll_summary(
     logs = query.all()
     
     daily_present = sum((1 for log in logs if log.status == "Present"))
-    daily_half = sum((1 for log in logs if log.status == "Half-day"))
+    daily_half = sum((1 for log in logs if log.status in ("Half Day", "Half-day")))
     daily_absent = sum((1 for log in logs if log.status == "Absent"))
     daily_payable_days = sum((attendance_units(log.status) for log in logs), Decimal("0"))
     daily_ot_hours = sum((Decimal(str(log.overtime_hours or 0)) for log in logs), Decimal("0"))

@@ -6,6 +6,7 @@ import {
   addWorkerAdvance,
   getAttendanceSummary,
   getWorkerLedger,
+  markAllActiveWorkersWeeklyOff,
   settleWorkerHisab,
   upsertWorkerAttendance
 } from "../lib/api";
@@ -45,6 +46,7 @@ export default function AttendancePage() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [bulkDate, setBulkDate] = useState(new Date().toISOString().slice(0, 10));
 
   async function loadSummary() {
     setIsLoading(true);
@@ -98,6 +100,21 @@ export default function AttendancePage() {
     setToast("Advance saved");
   }
 
+  async function markAllWeeklyOff() {
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await markAllActiveWorkersWeeklyOff(bulkDate);
+      setToast(`${response.data.workers_updated} active workers marked Weekly Off`);
+      await loadSummary();
+      if (selectedWorker) await loadLedger(selectedWorker);
+    } catch {
+      setError("Weekly Off bulk update failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function refreshAfterWorkerEdit(updatedWorker: WorkerProfile) {
     await loadSummary();
     if (selectedWorker) {
@@ -145,10 +162,19 @@ export default function AttendancePage() {
           <h1 className="text-2xl font-semibold text-zinc-950">Attendance & Worker Ledger</h1>
           <p className="text-sm text-zinc-500">Duty, advance aur clear hisab ek hi jagah.</p>
         </div>
-        <label className="grid gap-1 text-sm font-medium text-zinc-700">
-          Month Filter
-          <input className="h-10 rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
-        </label>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="grid gap-1 text-sm font-medium text-zinc-700">
+            Weekly Off Date
+            <input className="h-10 rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="date" value={bulkDate} onChange={(event) => setBulkDate(event.target.value)} />
+          </label>
+          <button className="h-10 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white disabled:bg-zinc-300" type="button" disabled={isSaving} onClick={markAllWeeklyOff}>
+            Mark All Active Workers Weekly Off
+          </button>
+          <label className="grid gap-1 text-sm font-medium text-zinc-700">
+            Month Filter
+            <input className="h-10 rounded-md border border-zinc-200 px-3 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100" type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          </label>
+        </div>
       </header>
 
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div> : null}
@@ -271,7 +297,10 @@ export default function AttendancePage() {
                           <select className="h-9 rounded-md border border-zinc-200 px-2 text-sm outline-none focus:border-brand-500" value={day.status} onChange={(event) => updateAttendance(day, { status: event.target.value as WorkerLedgerDay["status"] })}>
                             <option value="Present">Present</option>
                             <option value="Absent">Absent</option>
-                            <option value="Half-day">Half-day</option>
+                            <option value="Weekly Off">Weekly Off</option>
+                            <option value="Paid Holiday">Paid Holiday</option>
+                            <option value="Paid Leave">Paid Leave</option>
+                            <option value="Half Day">Half Day</option>
                           </select>
                         </td>
                       <td className="px-4 py-3">
