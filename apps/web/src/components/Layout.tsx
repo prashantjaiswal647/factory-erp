@@ -37,6 +37,7 @@ const navigation: NavigationItem[] = [
   { label: "Factory Expenses", href: "/expenses", icon: ReceiptText, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"], section: "Revenue & Accounts" },
   { label: "Staff Management", href: "/staff", icon: UserCog, roles: ["Owner", "Sub-Owner"], section: "Admin" },
   { label: "Integrations", href: "/integrations", icon: PlugZap, roles: ["Owner", "Sub-Owner"], section: "Admin" },
+  { label: "Go-Live Reset", href: "/admin/go-live-reset", icon: RotateCw, roles: ["Owner"], section: "Admin" },
   { label: "AI Chat", href: "/ai-supervisor", icon: Bot, roles: ["Owner", "Sub-Owner", "Supervisor", "Operator"] }
 ];
 

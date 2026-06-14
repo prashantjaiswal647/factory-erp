@@ -2253,6 +2253,33 @@ export function downloadMasterBackupValidationReport(restoreId: string) {
   return api.get<Blob>(`/api/backup/master/validation-report/${restoreId}`, { responseType: "blob" });
 }
 
+export type GoLiveResetScope = "sales" | "production" | "all";
+export type GoLiveResetPreview = {
+  invoices: number;
+  payments: number;
+  outstanding_bills: number;
+  payment_allocations: number;
+  production_entries: number;
+  wastage_entries: number;
+  affected_stock_records: number;
+  customers_kept: number;
+};
+
+export function previewGoLiveReset(scope: GoLiveResetScope) {
+  return api.post<GoLiveResetPreview>("/api/admin/go-live-reset/preview", { scope });
+}
+
+export function confirmGoLiveReset(payload: {
+  scope: GoLiveResetScope;
+  confirmation: string;
+  reason: string;
+  inventory_mode: "keep_current" | "restore_baseline";
+  invoice_starts: { tax_invoice: number; bill_of_supply: number; simple_bill: number };
+  opening_outstanding: Array<{ customer_id: number; amount: number }>;
+}) {
+  return api.post("/api/admin/go-live-reset/confirm", payload, { timeout: 300000 });
+}
+
 export function deleteOnboardingEntry(entryId: string, type?: string) {
   const normalizedType = normalizeOnboardingDeleteType(entryId, type);
   return api.delete(`/api/onboarding/entry/${entryId}`, {

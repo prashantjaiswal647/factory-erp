@@ -51,6 +51,7 @@ import UnauthorizedPage from "./pages/UnauthorizedPage";
 import PrivacyPolicy from "./components/PrivacyPolicy";
 import TermsConditions from "./components/TermsConditions";
 import RefundPolicy from "./components/RefundPolicy";
+import GoLiveResetPage from "./pages/GoLiveResetPage";
 
 function RoleLanding() {
   const { user } = useAuth();
@@ -224,6 +225,14 @@ export default function App() {
           element={
             <PrivateRoute allowedRoles={["Owner", "Sub-Owner"]}>
               <OnboardingPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="admin/go-live-reset"
+          element={
+            <PrivateRoute allowedRoles={["Owner"]}>
+              <GoLiveResetPage />
             </PrivateRoute>
           }
         />

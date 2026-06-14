@@ -99,6 +99,7 @@ from routers import factory_health
 from routers import wastage
 from routers import profit
 from routers import weekly_digest
+from routers import go_live_reset
 from routers import purchases
 from routers import alerts
 from routers.daily_sequence import router as daily_sequence_router
@@ -237,6 +238,7 @@ def register_application_routers(application: FastAPI) -> None:
     application.include_router(profit.admin_router)
     application.include_router(weekly_digest.router)
     application.include_router(weekly_digest.admin_router)
+    application.include_router(go_live_reset.router)
     application.include_router(briefing_admin_router)
     application.include_router(explanation_admin_router)
     application.include_router(telegram_actions_router)

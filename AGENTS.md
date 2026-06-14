@@ -267,6 +267,16 @@ Rules:
 - `master-backup-email-scheduler` sends separate owner emails for weekly backups on Sunday at 20:30 IST and monthly backups on day 1 at 08:30 IST.
 - Scheduled delivery is deduplicated independently by factory, frequency, and period under the persistent `BACKUP_ROOT` volume; weekly and monthly files must never share one email.
 
+## 13B. Go-Live Reset
+
+- Owner-only go-live cleanup APIs live under `/api/admin/go-live-reset`; Supervisor and Sub Owner must never receive access.
+- Reset always follows preview -> exact confirmation text -> pre-reset database backup -> one database transaction -> ActivityLog audit.
+- Master onboarding records remain: factory, customers, workers, machines, material/packaging stock rows, and finished-goods SKU rows.
+- Sales reset removes test invoices, deliveries, payments, allocations, invoice-linked ledger adjustments, recovery followups, and outstanding rows; only explicitly confirmed opening outstanding is recreated.
+- Production reset is optional and removes production batches, compatibility daily production rows, and wastage rows.
+- Invoice starts must update both `Factory.next_*_invoice_number` and the matching `FactorySettings.*_start_seq`.
+- Inventory mode is explicit: keep current quantities, or reverse selected transaction effects using persisted sales/production consumption snapshots before deleting those transactions.
+
 ## 14. Deployment Rules
 
 - `validate-and-test.sh` must pass before `deploy.sh`.
