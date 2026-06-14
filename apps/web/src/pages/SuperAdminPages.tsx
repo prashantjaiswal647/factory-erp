@@ -6,6 +6,7 @@ import { Link, Navigate, Outlet, useNavigate, useParams } from "react-router-dom
 import PasswordInput from "../components/PasswordInput";
 import ActivateSubscriptionButton from "../components/billing/ActivateSubscriptionButton";
 import { superAdminApi } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 const ADMIN_TOKEN_KEY = "munshi_super_admin_token";
 
@@ -522,7 +523,7 @@ export function SuperAdminDashboardPage() {
         <ErrorNote message={healthLeaderboard.error} />
         {healthLeaderboard.isLoading ? <p>Loading health scores...</p> : (
           <div className="space-y-4">
-            <Metric label="Average Health" value={`${healthLeaderboard.data.average_health.toFixed(1)}/100`} />
+            <Metric label="Average Health" value={`${toNumber(healthLeaderboard.data.average_health).toFixed(1)}/100`} />
             <div className="grid gap-4 lg:grid-cols-2">
               <HealthRankTable title="Top Factories" rows={healthLeaderboard.data.top_factories} />
               <HealthRankTable title="Lowest Factories" rows={healthLeaderboard.data.lowest_factories} />
@@ -534,7 +535,7 @@ export function SuperAdminDashboardPage() {
         <ErrorNote message={profitLeaderboard.error} />
         {profitLeaderboard.isLoading ? <p>Loading profit margins...</p> : (
           <div className="space-y-4">
-            <Metric label="Average Margin" value={`${profitLeaderboard.data.average_margin.toFixed(1)}%`} />
+            <Metric label="Average Margin" value={`${toNumber(profitLeaderboard.data.average_margin).toFixed(1)}%`} />
             <div className="grid gap-4 lg:grid-cols-2">
               <ProfitRankTable title="Top Profitable Factories" rows={profitLeaderboard.data.top_factories} />
               <ProfitRankTable title="Lowest Profit Factories" rows={profitLeaderboard.data.lowest_factories} />
@@ -593,7 +594,7 @@ function HealthRankTable({ title, rows }: { title: string; rows: FactoryHealthRa
               <p className="truncate font-semibold">{row.factory_name}</p>
               <p className="text-xs text-zinc-500">{row.health_status} · Risk: {row.largest_risk}</p>
             </div>
-            <strong>{row.overall_score.toFixed(1)}</strong>
+            <strong>{toNumber(row.overall_score).toFixed(1)}</strong>
           </div>
         ))}
         {rows.length === 0 ? <p className="text-sm text-zinc-500">No health snapshots available.</p> : null}
@@ -613,7 +614,7 @@ function ProfitRankTable({ title, rows }: { title: string; rows: ProfitRank[] })
               <p className="truncate font-semibold">{row.factory_name}</p>
               <p className="text-xs text-zinc-500">{row.profit_status} · Risk: {row.largest_profit_risk}</p>
             </div>
-            <strong>{row.profit_margin_percent.toFixed(1)}%</strong>
+            <strong>{toNumber(row.profit_margin_percent).toFixed(1)}%</strong>
           </div>
         ))}
         {rows.length === 0 ? <p className="text-sm text-zinc-500">No profit snapshots available.</p> : null}
@@ -1490,7 +1491,7 @@ export function SuperAdminBriefingsPage() {
             <tbody>{spikes.data.items.map((event) => <tr key={event.id} className="border-b border-zinc-100">
               <td className="px-3 py-3 font-semibold">{event.factory_name}</td>
               <td className="px-3 py-3">{event.snapshot_date}</td>
-              <td className="px-3 py-3 font-semibold">{event.variance_percent == null ? "Not available" : `${event.variance_percent > 0 ? "+" : ""}${event.variance_percent.toFixed(1)}%`}</td>
+              <td className="px-3 py-3 font-semibold">{event.variance_percent == null ? "Not available" : `${toNumber(event.variance_percent) > 0 ? "+" : ""}${toNumber(event.variance_percent).toFixed(1)}%`}</td>
               <td className="px-3 py-3">{event.primary_driver || "Not available"}</td>
               <td className="px-3 py-3"><BriefingStatus status={event.status} /></td>
             </tr>)}</tbody>

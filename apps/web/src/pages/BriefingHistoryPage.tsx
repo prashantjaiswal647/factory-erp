@@ -3,6 +3,7 @@ import { ArrowLeft, Loader, Eye, RefreshCw, BarChart2, ShieldAlert } from "lucid
 import { useAuth } from "../context/AuthContext";
 import { api, getDailyProductionHistory } from "../lib/api";
 import type { ProductionHistoryEntry } from "../lib/api";
+import { toNumber } from "../lib/format";
 
 type BriefingHistoryItem = {
   id: number;
@@ -185,7 +186,7 @@ export default function BriefingHistoryPage() {
             <BarChart2 className="h-5 w-5 text-[#6D28D9]" />
           </div>
           <div className="mt-2 text-2xl font-bold text-[#6D28D9]">
-            {avgHealth ? `${avgHealth.toFixed(1)}/100` : "--"}
+            {avgHealth ? `${toNumber(avgHealth).toFixed(1)}/100` : "--"}
           </div>
         </div>
 

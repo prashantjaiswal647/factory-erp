@@ -1,14 +1,14 @@
-export function toNumber(value: unknown): number {
+export function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
   if (typeof value === "string") {
     const cleaned = value.replace(/,/g, "").trim();
-    if (!cleaned) return 0;
+    if (!cleaned) return fallback;
     const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : 0;
+    return Number.isFinite(parsed) ? parsed : fallback;
   }
-  return 0;
+  return fallback;
 }
 
 export function asNumber(value: unknown) {
@@ -34,6 +34,10 @@ export function formatNumber(value: unknown, maximumFractionDigits = 0) {
   return new Intl.NumberFormat("en-IN", {
     maximumFractionDigits
   }).format(toNumber(value));
+}
+
+export function formatMoneyValue(value: unknown, fallback = 0) {
+  return toNumber(value, fallback).toFixed(2);
 }
 
 export function formatDate(value: string) {

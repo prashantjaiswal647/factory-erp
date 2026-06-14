@@ -25,6 +25,7 @@ import ProfitIntelligenceCard from "../components/ProfitIntelligenceCard";
 import PerSizeProfitCard from "../components/PerSizeProfitCard";
 import WeeklyDigestCard from "../components/WeeklyDigestCard";
 import { WidgetErrorBoundary } from "../components/ErrorBoundary";
+import { toNumber } from "../lib/format";
 import {
   approveSalesOrder,
   confirmMasterRestore,
@@ -495,12 +496,12 @@ export default function DashboardPage() {
           <CompactMetric icon={IndianRupee} label="Collected" value={`Rs ${formatNumber(financials.collections)}`} />
           <CompactMetric icon={Boxes} label="Sales" value={`Rs ${formatNumber(financials.sales)}`} />
           <CompactMetric icon={CalendarDays} label="Expenses" value={`Rs ${formatNumber(financials.expenses)}`} />
-          <CompactMetric icon={AlertTriangle} label="Today Total Wastage" value={`${(dashboardSummary?.today_total_wastage_kg ?? totalWastage).toFixed(1)} kg`} />
+          <CompactMetric icon={AlertTriangle} label="Today Total Wastage" value={`${toNumber(dashboardSummary?.today_total_wastage_kg ?? totalWastage).toFixed(1)} kg`} />
         </div>
         {dashboardSummary && (dashboardSummary.today_day_wastage_kg !== undefined || dashboardSummary.today_night_wastage_kg !== undefined) && (
           <div className="mt-2 border-t pt-2 grid grid-cols-2 gap-2 text-xs text-zinc-500">
-            <div>Day Shift Wastage: <strong className="text-zinc-900">{(dashboardSummary.today_day_wastage_kg ?? 0).toFixed(1)} kg</strong></div>
-            <div>Night Shift Wastage: <strong className="text-zinc-900">{(dashboardSummary.today_night_wastage_kg ?? 0).toFixed(1)} kg</strong></div>
+            <div>Day Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary.today_day_wastage_kg).toFixed(1)} kg</strong></div>
+            <div>Night Shift Wastage: <strong className="text-zinc-900">{toNumber(dashboardSummary.today_night_wastage_kg).toFixed(1)} kg</strong></div>
           </div>
         )}
       </section>
