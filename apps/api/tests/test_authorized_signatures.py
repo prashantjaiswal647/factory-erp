@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from db import Base
 from models import Factory, FactoryAuthorizedSignature, User
 from routers.onboarding import upload_authorized_signature
-from services.invoice_pdf import resolve_authorized_signature_path
+from services.invoice_pdf import build_invoice_pdf_bytes, resolve_authorized_signature_path
 
 
 def _session():
@@ -92,3 +92,53 @@ async def test_invalid_type_and_file_size_are_rejected(tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as size_error:
         await upload_authorized_signature("owner", oversized, current_user=_user(1, 1, "Owner"), db=db)
     assert size_error.value.status_code == 422
+
+
+def test_no_signature_and_missing_file_return_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add(Factory(id=1, name="Factory A"))
+    db.add(FactoryAuthorizedSignature(
+        factory_id=1,
+        role="owner",
+        file_path="volumes/media/factory_signatures/1/missing.png",
+        original_filename="missing.png",
+        uploaded_by_user_id=1,
+    ))
+    db.commit()
+
+    assert resolve_authorized_signature_path(db, 2, "Owner") is None
+    assert resolve_authorized_signature_path(db, 1, "Owner") is None
+
+
+def test_signature_path_traversal_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(_image_bytes())
+    factory = SimpleNamespace(authorized_signature_path="../outside.png")
+
+    assert resolve_authorized_signature_path(factory) is None
+
+
+def test_legacy_factory_signature_path_resolves_inside_allowed_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    signature = tmp_path / "volumes" / "media" / "signatures" / "1" / "owner.png"
+    signature.parent.mkdir(parents=True)
+    signature.write_bytes(_image_bytes())
+    factory = SimpleNamespace(signature_path=str(signature))
+
+    assert resolve_authorized_signature_path(factory) == signature.resolve()
+
+
+def test_invoice_pdf_does_not_crash_without_signature():
+    pdf = build_invoice_pdf_bytes({
+        "invoice": {
+            "invoice_id": "INV-1",
+            "invoice_date": "2026-06-14",
+            "customer_name": "Customer",
+            "bill_total": 100,
+        },
+        "items": [{"description": "Paper Cups", "quantity": 1, "rate": 100}],
+    })
+
+    assert pdf.startswith(b"%PDF")

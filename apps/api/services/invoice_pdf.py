@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,97 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from db import SessionLocal
-from models import Factory
+from models import Factory, FactoryAuthorizedSignature
 
 logger = logging.getLogger(__name__)
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "volumes/media"))
+AUTHORIZED_SIGNATURE_ROOT = Path(
+    os.getenv("AUTHORIZED_SIGNATURE_ROOT", str(MEDIA_ROOT / "factory_signatures"))
+)
+LEGACY_SIGNATURE_ROOT = Path(
+    os.getenv("LEGACY_SIGNATURE_ROOT", str(MEDIA_ROOT / "signatures"))
+)
+
+
+def _normalized_role(role: str | None) -> str:
+    value = (role or "owner").strip().lower().replace("-", "_").replace(" ", "_")
+    return value if value in {"owner", "sub_owner", "supervisor"} else "owner"
+
+
+def _safe_existing_signature_path(value: str | Path | None) -> Path | None:
+    if not value:
+        return None
+    raw = str(value).strip().replace("\\", "/")
+    if not raw:
+        return None
+    if raw.startswith("/media/"):
+        candidate = MEDIA_ROOT / raw.removeprefix("/media/")
+    else:
+        stored = Path(raw)
+        if stored.is_absolute():
+            candidate = stored
+        elif raw.startswith("volumes/media/"):
+            candidate = Path(raw)
+        elif raw.startswith("factory_signatures/") or raw.startswith("signatures/"):
+            candidate = MEDIA_ROOT / raw
+        else:
+            candidate = AUTHORIZED_SIGNATURE_ROOT / raw
+
+    try:
+        resolved = candidate.resolve(strict=False)
+        allowed_roots = (
+            AUTHORIZED_SIGNATURE_ROOT.resolve(strict=False),
+            LEGACY_SIGNATURE_ROOT.resolve(strict=False),
+        )
+        if not any(resolved.is_relative_to(root) for root in allowed_roots):
+            return None
+        return resolved if resolved.is_file() else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def resolve_authorized_signature_path(
+    db_or_factory,
+    factory_id: int | None = None,
+    generated_by_role: str | None = None,
+) -> Path | None:
+    """Resolve a role signature safely, with owner and legacy-field fallback."""
+    if hasattr(db_or_factory, "query"):
+        db = db_or_factory
+        if factory_id is None:
+            return None
+        role = _normalized_role(generated_by_role)
+        roles = [role] if role == "owner" else [role, "owner"]
+        rows = (
+            db.query(FactoryAuthorizedSignature)
+            .filter(
+                FactoryAuthorizedSignature.factory_id == int(factory_id),
+                FactoryAuthorizedSignature.role.in_(roles),
+            )
+            .all()
+        )
+        by_role = {row.role: row for row in rows}
+        for candidate_role in roles:
+            row = by_role.get(candidate_role)
+            path = _safe_existing_signature_path(row.file_path if row else None)
+            if path is not None:
+                return path
+        factory = db.query(Factory).filter(Factory.id == int(factory_id)).first()
+    else:
+        factory = db_or_factory
+
+    if factory is None:
+        return None
+    for field in (
+        "authorized_signature_path",
+        "signature_path",
+        "invoice_signature_path",
+        "digital_signature_url",
+    ):
+        path = _safe_existing_signature_path(getattr(factory, field, None))
+        if path is not None:
+            return path
+    return None
 
 
 def number_to_words_in_words(num: float) -> str:
@@ -92,7 +181,7 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     factory_gst = ""
     factory_address = ""
     factory_place = ""
-    signature_url = ""
+    signature_path: Path | None = None
     
     if factory_id:
         db = SessionLocal()
@@ -103,7 +192,14 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
                 factory_gst = factory.gst_number or ""
                 factory_address = factory.address or ""
                 factory_place = factory.address_place or ""
-                signature_url = factory.digital_signature_url or ""
+                generated_by_role = (
+                    invoice.get("generated_by_role")
+                    or payload.get("generated_by_role")
+                    or "Owner"
+                )
+                signature_path = resolve_authorized_signature_path(
+                    db, int(factory_id), generated_by_role
+                )
         except Exception:
             logger.warning("Error fetching factory details in PDF build", exc_info=True)
         finally:
@@ -451,13 +547,11 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
     )
     sig_block = [
         Paragraph(f"For <b>{factory_name}</b>", sig_style),
-        Paragraph("Digitally authorized" if signature_url else "", sig_style),
+        Paragraph("Digitally authorized" if signature_path else "", sig_style),
     ]
-    if signature_url.startswith("/media/"):
-        signature_path = Path("volumes/media") / signature_url.removeprefix("/media/")
-        if signature_path.exists():
-            sig_block.extend([Spacer(1, 4), Image(str(signature_path), width=90, height=40, kind="proportional")])
-    sig_block.extend([Spacer(1, 8 if signature_url else 30), Paragraph("Authorized Signatory", sig_style)])
+    if signature_path is not None:
+        sig_block.extend([Spacer(1, 4), Image(str(signature_path), width=90, height=40, kind="proportional")])
+    sig_block.extend([Spacer(1, 8 if signature_path else 30), Paragraph("Authorized Signatory", sig_style)])
     sig_table = Table([["", sig_block]], colWidths=[320, 200])
     sig_table.setStyle(
         TableStyle(
