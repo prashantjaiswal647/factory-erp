@@ -2253,16 +2253,19 @@ export function downloadMasterBackupValidationReport(restoreId: string) {
   return api.get<Blob>(`/api/backup/master/validation-report/${restoreId}`, { responseType: "blob" });
 }
 
-export type GoLiveResetScope = "sales" | "production" | "all";
+export type GoLiveResetScope = "sales_only" | "production_only" | "all_transaction_data";
 export type GoLiveResetPreview = {
   invoices: number;
+  invoice_items: number;
   payments: number;
   outstanding_bills: number;
   payment_allocations: number;
+  customer_ledger_entries: number;
   production_entries: number;
   wastage_entries: number;
   affected_stock_records: number;
   customers_kept: number;
+  warnings: string[];
 };
 
 export function previewGoLiveReset(scope: GoLiveResetScope) {
@@ -2273,7 +2276,7 @@ export function confirmGoLiveReset(payload: {
   scope: GoLiveResetScope;
   confirmation: string;
   reason: string;
-  inventory_mode: "keep_current" | "restore_baseline";
+  inventory_mode: "keep_current_inventory_as_is" | "restore_from_onboarding_snapshot" | "reset_transaction_impacts";
   invoice_starts: { tax_invoice: number; bill_of_supply: number; simple_bill: number };
   opening_outstanding: Array<{ customer_id: number; amount: number }>;
 }) {

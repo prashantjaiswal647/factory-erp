@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 import logging
 
+from sqlalchemy import delete, inspect
 from sqlalchemy.orm import Session
 
 from models import (
@@ -15,6 +16,9 @@ from models import (
     CustomerLedgerAdjustment,
     DailyProduction,
     DailySale,
+    DailyFactoryHealthSnapshot,
+    DailyProfitSnapshot,
+    DailyWastageSnapshot,
     Factory,
     FactorySettings,
     FinalProductStock,
@@ -27,6 +31,7 @@ from models import (
     PaymentCollection,
     ProductionBatch,
     ProductionBatchWorkerLine,
+    BriefingSnapshot,
     RecoveryFollowup,
     RecycledInvoice,
     SalesInvoice,
@@ -37,52 +42,96 @@ from services.master_backup import create_pre_restore_backup
 
 
 logger = logging.getLogger(__name__)
-SALES_SCOPES = {"sales", "all"}
-PRODUCTION_SCOPES = {"production", "all"}
+SALES_SCOPES = {"sales", "sales_only", "all", "all_transaction_data"}
+PRODUCTION_SCOPES = {"production", "production_only", "all", "all_transaction_data"}
+
+
+def _table_exists(db: Session, model) -> bool:
+    tables = db.info.get("go_live_reset_tables")
+    if tables is None:
+        tables = set(inspect(db.get_bind()).get_table_names())
+        db.info["go_live_reset_tables"] = tables
+    exists = model.__tablename__ in tables
+    if not exists:
+        logger.warning(
+            "Go-live reset skipped missing optional table table=%s",
+            model.__tablename__,
+        )
+    return exists
+
+
+def _count(db: Session, model, factory_id: int, *filters) -> int:
+    if not _table_exists(db, model):
+        return 0
+    return db.query(model).filter(model.factory_id == factory_id, *filters).count()
+
+
+def _delete(db: Session, model, factory_id: int, *filters) -> int:
+    if not _table_exists(db, model):
+        return 0
+    statement = delete(model).where(model.factory_id == factory_id, *filters)
+    result = db.execute(statement)
+    return int(result.rowcount or 0)
 
 
 def preview_go_live_reset(db: Session, factory_id: int, scope: str) -> dict:
     include_sales = scope in SALES_SCOPES
     include_production = scope in PRODUCTION_SCOPES
+    warnings = []
+    if scope not in SALES_SCOPES | PRODUCTION_SCOPES:
+        warnings.append(f"Unknown reset scope '{scope}'; no transaction data will be selected.")
     return {
         "invoices": (
-            db.query(InvoiceDocument).filter(InvoiceDocument.factory_id == factory_id).count()
-            + db.query(SalesInvoice).filter(SalesInvoice.factory_id == factory_id).count()
+            _count(db, InvoiceDocument, factory_id)
+            + _count(db, SalesInvoice, factory_id)
             if include_sales else 0
         ),
+        "invoice_items": _count(db, OrderItem, factory_id) if include_sales else 0,
         "payments": (
-            db.query(Payment).filter(Payment.factory_id == factory_id).count()
-            + db.query(PaymentCollection).filter(PaymentCollection.factory_id == factory_id).count()
+            _count(db, Payment, factory_id)
+            + _count(db, PaymentCollection, factory_id)
             if include_sales else 0
         ),
         "outstanding_bills": (
-            db.query(OutstandingBill).filter(OutstandingBill.factory_id == factory_id).count()
+            _count(db, OutstandingBill, factory_id)
             if include_sales else 0
         ),
         "payment_allocations": (
-            db.query(BillPayment).filter(BillPayment.factory_id == factory_id).count()
+            _count(db, BillPayment, factory_id)
+            if include_sales else 0
+        ),
+        "customer_ledger_entries": (
+            _count(
+                db,
+                CustomerLedgerAdjustment,
+                factory_id,
+                CustomerLedgerAdjustment.linked_bill_id.isnot(None),
+            )
             if include_sales else 0
         ),
         "production_entries": (
-            db.query(DailyProduction).filter(DailyProduction.factory_id == factory_id).count()
+            _count(db, DailyProduction, factory_id)
+            + _count(db, ProductionBatch, factory_id)
+            + _count(db, ProductionBatchWorkerLine, factory_id)
             if include_production else 0
         ),
         "wastage_entries": (
-            db.query(WastageLog).filter(WastageLog.factory_id == factory_id).count()
-            + db.query(ShiftWastage).filter(ShiftWastage.factory_id == factory_id).count()
+            _count(db, WastageLog, factory_id)
+            + _count(db, ShiftWastage, factory_id)
             if include_production else 0
         ),
         "affected_stock_records": _affected_stock_count(db, factory_id, include_sales, include_production),
-        "customers_kept": db.query(Customer).filter(Customer.factory_id == factory_id).count(),
+        "customers_kept": _count(db, Customer, factory_id),
+        "warnings": warnings,
     }
 
 
 def _affected_stock_count(db: Session, factory_id: int, include_sales: bool, include_production: bool) -> int:
     keys: set[tuple] = set()
-    if include_sales:
+    if include_sales and _table_exists(db, DailySale):
         for row in db.query(DailySale).filter(DailySale.factory_id == factory_id):
             keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
-    if include_production:
+    if include_production and _table_exists(db, DailyProduction):
         for row in db.query(DailyProduction).filter(DailyProduction.factory_id == factory_id):
             keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
             if row.blank_used_kg or row.blank_used_bora:
@@ -145,13 +194,11 @@ def _restore_production_stock(db: Session, factory_id: int) -> None:
 
 def _delete_sales_transactions(db: Session, factory_id: int) -> dict[str, int]:
     counts = {}
-    counts[CustomerLedgerAdjustment.__tablename__] = (
-        db.query(CustomerLedgerAdjustment)
-        .filter(
-            CustomerLedgerAdjustment.factory_id == factory_id,
-            CustomerLedgerAdjustment.linked_bill_id.isnot(None),
-        )
-        .delete(synchronize_session="fetch")
+    counts[CustomerLedgerAdjustment.__tablename__] = _delete(
+        db,
+        CustomerLedgerAdjustment,
+        factory_id,
+        CustomerLedgerAdjustment.linked_bill_id.isnot(None),
     )
     models = [
         RecoveryFollowup,
@@ -168,9 +215,8 @@ def _delete_sales_transactions(db: Session, factory_id: int) -> dict[str, int]:
         Order,
     ]
     for model in models:
-        counts[model.__tablename__] = (
-            db.query(model).filter(model.factory_id == factory_id).delete(synchronize_session="fetch")
-        )
+        counts[model.__tablename__] = _delete(db, model, factory_id)
+    db.expunge_all()
     return counts
 
 
@@ -182,10 +228,12 @@ def _delete_production_transactions(db: Session, factory_id: int) -> dict[str, i
         DailyProduction,
         ShiftWastage,
         WastageLog,
+        DailyWastageSnapshot,
+        DailyFactoryHealthSnapshot,
+        DailyProfitSnapshot,
+        BriefingSnapshot,
     ]:
-        counts[model.__tablename__] = (
-            db.query(model).filter(model.factory_id == factory_id).delete(synchronize_session="fetch")
-        )
+        counts[model.__tablename__] = _delete(db, model, factory_id)
     return counts
 
 
@@ -195,9 +243,10 @@ def _replace_opening_outstanding(
     opening_outstanding: list[dict],
     user_id: int,
 ) -> None:
-    for customer in db.query(Customer).filter(Customer.factory_id == factory_id).all():
-        customer.previous_due = Decimal("0")
-        customer.total_due = Decimal("0")
+    db.query(Customer).filter(Customer.factory_id == factory_id).update(
+        {Customer.previous_due: Decimal("0"), Customer.total_due: Decimal("0")},
+        synchronize_session=False,
+    )
     for item in opening_outstanding:
         amount = Decimal(str(item["amount"]))
         if amount <= 0:
@@ -239,7 +288,7 @@ def confirm_go_live_reset(
     preview = preview_go_live_reset(db, factory_id, scope)
     deleted: dict[str, int] = {}
     try:
-        if inventory_mode == "restore_baseline":
+        if inventory_mode in {"restore_baseline", "reset_transaction_impacts"}:
             if scope in SALES_SCOPES:
                 _restore_sales_stock(db, factory_id)
             if scope in PRODUCTION_SCOPES:

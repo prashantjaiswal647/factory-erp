@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -22,6 +23,7 @@ from models import (
     Worker,
 )
 from services.go_live_reset import confirm_go_live_reset, preview_go_live_reset
+from routers.go_live_reset import ConfirmRequest, confirm_reset
 
 
 @pytest.fixture()
@@ -207,3 +209,94 @@ def test_backup_failure_prevents_any_reset(reset_db, monkeypatch):
     assert db.query(InvoiceDocument).count() == 1
     assert db.query(Customer).count() == 1
     assert db.query(DailyProduction).count() == 1
+
+
+def test_preview_works_with_empty_db(reset_db):
+    db, _ = reset_db
+    _confirm(db, scope="all_transaction_data")
+
+    preview = preview_go_live_reset(db, 1, "all_transaction_data")
+
+    assert preview["invoices"] == 0
+    assert preview["invoice_items"] == 0
+    assert preview["payments"] == 0
+    assert preview["payment_allocations"] == 0
+    assert preview["outstanding_bills"] == 0
+    assert preview["customer_ledger_entries"] == 0
+    assert preview["production_entries"] == 0
+    assert preview["wastage_entries"] == 0
+    assert preview["affected_stock_records"] == 0
+
+
+def test_preview_works_when_optional_tables_are_missing(reset_db, caplog):
+    db, _ = reset_db
+    db.info["go_live_reset_tables"] = {"customers"}
+
+    preview = preview_go_live_reset(db, 1, "all_transaction_data")
+
+    assert preview["invoices"] == 0
+    assert preview["production_entries"] == 0
+    assert preview["customers_kept"] == 1
+    assert "missing optional table" in caplog.text
+
+
+def test_production_only_keeps_sales_and_master_data(reset_db):
+    db, _ = reset_db
+
+    _confirm(db, scope="production_only")
+
+    assert db.query(DailyProduction).count() == 0
+    assert db.query(InvoiceDocument).count() == 1
+    assert db.query(Customer).count() == 1
+    assert db.query(Worker).count() == 1
+    assert db.query(Machine).count() == 1
+    assert db.query(FinalProductStock).count() == 1
+
+
+def test_all_transaction_data_removes_sales_and_production(reset_db):
+    db, _ = reset_db
+
+    _confirm(db, scope="all_transaction_data")
+
+    assert db.query(InvoiceDocument).count() == 0
+    assert db.query(OutstandingBill).count() == 0
+    assert db.query(PaymentCollection).count() == 0
+    assert db.query(DailyProduction).count() == 0
+    assert db.query(Customer).count() == 1
+    assert db.query(Worker).count() == 1
+    assert db.query(Machine).count() == 1
+    assert db.query(FinalProductStock).count() == 1
+
+
+def test_transaction_rolls_back_when_production_delete_fails(reset_db, monkeypatch):
+    db, _ = reset_db
+
+    def fail_production(*_):
+        raise RuntimeError("production delete failed")
+
+    monkeypatch.setattr("services.go_live_reset._delete_production_transactions", fail_production)
+    with pytest.raises(RuntimeError, match="production delete failed"):
+        _confirm(db, scope="all_transaction_data")
+
+    assert db.query(InvoiceDocument).count() == 1
+    assert db.query(OutstandingBill).count() == 1
+    assert db.query(PaymentCollection).count() == 1
+    assert db.query(DailyProduction).count() == 1
+    assert db.query(Customer).count() == 1
+
+
+def test_confirm_requires_exact_confirmation_text(reset_db):
+    db, _ = reset_db
+    payload = ConfirmRequest(
+        scope="sales_only",
+        confirmation="RESET LIVE",
+        reason="Remove test transactions",
+        inventory_mode="keep_current_inventory_as_is",
+    )
+    owner = type("Owner", (), {"factory_id": 1, "id": 99})()
+
+    with pytest.raises(HTTPException) as caught:
+        confirm_reset(payload, owner, db)
+
+    assert caught.value.status_code == 422
+    assert db.query(InvoiceDocument).count() == 1
