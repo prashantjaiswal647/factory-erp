@@ -2,7 +2,7 @@ import { Check, Factory, PackageCheck, Plus, Settings, Trash2, UserRound } from 
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog, setupDynamicMachine, deleteAuthorizedSignature, getAuthorizedSignatures, uploadAuthorizedSignature } from "../lib/api";
+import { createBlankStock, createBottomStock, createBoxPackagingStock, createMachines, createPlasticStock, createWorker, getFinalStockOptions, getMachineLimits, onboardFinishedGoods, getOnboardingOverview, deleteDashboardMachine, getFactoryProfile, updateFactoryProfile, createManualActivityLog, setupDynamicMachine, deleteAuthorizedSignature, getAuthorizedSignatureFile, getAuthorizedSignatures, uploadAuthorizedSignature } from "../lib/api";
 import type { AuthorizedSignature, AuthorizedSignatureRole, BoxPackagingStockCreate, FinalStockOption, MachineCreate, MachineLimitUsage, PlasticStockCreate, WorkerCreate, OpeningAttendancePayload } from "../lib/api";
 import BulkUploadSection from "../components/BulkUploadSection";
 import { EditMachineModal } from "../components/EditMachineModal";
@@ -29,6 +29,15 @@ const machineDraft: MachineCreate = {
   raw_materials_mapped: [""],
   is_active: true
 };
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
@@ -125,46 +134,72 @@ export default function OnboardingPage() {
     try {
       const data: unknown = (await getAuthorizedSignatures()).data;
       const roles: AuthorizedSignatureRole[] = ["owner", "sub_owner", "supervisor"];
-      if (
-        !data ||
-        typeof data !== "object" ||
-        !roles.every((role) => {
-          const slot = (data as Record<string, unknown>)[role];
-          if (!slot || typeof slot !== "object") return false;
-          const value = slot as Record<string, unknown>;
-          return (
-            typeof value.uploaded === "boolean" &&
-            (value.file_url === null || typeof value.file_url === "string") &&
-            (value.updated_at === null || typeof value.updated_at === "string")
-          );
-        })
-      ) {
-        setSignatures([]);
+      const emptySlots = Object.fromEntries(
+        roles.map((role) => [role, {
+          uploaded: false,
+          role,
+          file_url: null,
+          original_filename: null,
+          updated_at: null,
+          created_at: null,
+        }]),
+      );
+      const objectData: Record<string, unknown> = Array.isArray(data)
+        ? {
+            ...emptySlots,
+            ...Object.fromEntries(
+            data
+              .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+              .map((item) => [String(item.role || ""), {
+                uploaded: true,
+                role: item.role,
+                file_url: item.file_url || item.url || null,
+                original_filename: item.original_filename || null,
+                updated_at: item.updated_at || null,
+                created_at: item.created_at || null,
+              }]),
+            ),
+          }
+        : data && typeof data === "object"
+          ? data as Record<string, unknown>
+          : {};
+      const normalized = roles.map((role) => {
+        const slot = objectData[role];
+        if (!slot || typeof slot !== "object") return null;
+        const value = slot as Record<string, unknown>;
+        if (
+          typeof value.uploaded !== "boolean" ||
+          value.role !== role ||
+          (value.file_url !== null && typeof value.file_url !== "string") ||
+          (value.original_filename !== null && typeof value.original_filename !== "string") ||
+          (value.updated_at !== null && typeof value.updated_at !== "string") ||
+          (value.created_at !== null && typeof value.created_at !== "string")
+        ) return null;
+        return value;
+      });
+      if (normalized.some((slot) => slot === null)) {
         setSignaturesError("Authorized signatures could not be loaded because the server returned an invalid response.");
         return;
       }
-      setSignatures(
-        roles.flatMap((role) => {
-          const slot = (data as Record<AuthorizedSignatureRole, {
-            uploaded: boolean;
-            file_url: string | null;
-            updated_at: string | null;
-          }>)[role];
-          if (!slot.uploaded || !slot.file_url) return [];
-          return [{
+      const nextSignatures = await Promise.all(
+        roles.map(async (role, index) => {
+          const slot = normalized[index] as Record<string, unknown>;
+          if (!slot.uploaded || !slot.file_url) return null;
+          const fileResponse = await getAuthorizedSignatureFile(role);
+          return {
             id: 0,
             role,
             file_path: "",
-            url: slot.file_url,
-            original_filename: "",
+            url: await blobToDataUrl(fileResponse.data),
+            original_filename: String(slot.original_filename || ""),
             uploaded_by_user_id: 0,
-            created_at: slot.updated_at || "",
-            updated_at: slot.updated_at || "",
-          }];
+            created_at: String(slot.created_at || ""),
+            updated_at: String(slot.updated_at || ""),
+          };
         })
       );
+      setSignatures(nextSignatures.filter((item): item is AuthorizedSignature => item !== null));
     } catch {
-      setSignatures([]);
       setSignaturesError("Unable to load authorized signatures. You can continue onboarding and retry later.");
     } finally {
       setSignaturesLoading(false);

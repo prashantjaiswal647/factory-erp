@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, status, BackgroundTasks, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image as PILImage, UnidentifiedImageError
 from sqlalchemy import func as sql_func
 from sqlalchemy.exc import IntegrityError
@@ -2851,14 +2851,23 @@ def _signature_response(row: FactoryAuthorizedSignature) -> dict:
     }
 
 
-def _signature_listing_slot(row: FactoryAuthorizedSignature | None) -> dict:
+def _signature_listing_slot(role: str, row: FactoryAuthorizedSignature | None) -> dict:
     if row is None:
-        return {"uploaded": False, "file_url": None, "updated_at": None}
-    relative_path = str(row.file_path).replace("\\", "/").removeprefix("volumes/media/")
+        return {
+            "uploaded": False,
+            "role": role,
+            "file_url": None,
+            "original_filename": None,
+            "updated_at": None,
+            "created_at": None,
+        }
     return {
         "uploaded": True,
-        "file_url": f"/media/{relative_path}",
+        "role": role,
+        "file_url": f"/api/onboarding/signatures/{role}/file",
+        "original_filename": row.original_filename,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 
@@ -2871,7 +2880,7 @@ def list_authorized_signatures(
         factory_id = int(current_user.factory_id)
     except (TypeError, ValueError):
         return {
-            role: _signature_listing_slot(None)
+            role: _signature_listing_slot(role, None)
             for role in ("owner", "sub_owner", "supervisor")
         }
 
@@ -2883,8 +2892,39 @@ def list_authorized_signatures(
     rows_by_role = {row.role: row for row in rows if row.role in SIGNATURE_ROLES}
     res = {}
     for role in ("owner", "sub_owner", "supervisor"):
-        res[role] = _signature_listing_slot(rows_by_role.get(role))
+        res[role] = _signature_listing_slot(role, rows_by_role.get(role))
     return res
+
+
+@router.get("/signatures/{role}/file")
+def get_authorized_signature_file(
+    role: str,
+    current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
+    db: Session = Depends(get_db),
+):
+    role = role.strip().lower()
+    if role not in SIGNATURE_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid signature role")
+    factory_id = int(current_user.factory_id)
+    row = db.query(FactoryAuthorizedSignature).filter(
+        FactoryAuthorizedSignature.factory_id == factory_id,
+        FactoryAuthorizedSignature.role == role,
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Signature not found")
+
+    allowed_root = (
+        Path("volumes/media/factory_signatures") / str(factory_id)
+    ).resolve()
+    file_path = Path(row.file_path).resolve()
+    if allowed_root not in file_path.parents or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Signature file not found")
+
+    media_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+    media_type = media_types.get(file_path.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="Signature file not found")
+    return FileResponse(file_path, media_type=media_type)
 
 
 @router.post("/signatures/{role}")

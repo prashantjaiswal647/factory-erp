@@ -175,9 +175,15 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data == {
-        "owner": {"uploaded": False, "file_url": None, "updated_at": None},
-        "sub_owner": {"uploaded": False, "file_url": None, "updated_at": None},
-        "supervisor": {"uploaded": False, "file_url": None, "updated_at": None},
+        role: {
+            "uploaded": False,
+            "role": role,
+            "file_url": None,
+            "original_filename": None,
+            "updated_at": None,
+            "created_at": None,
+        }
+        for role in ("owner", "sub_owner", "supervisor")
     }
 
     # 2. upload signature then list returns 200
@@ -193,10 +199,16 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["owner"]["uploaded"] is True
-    assert data["owner"]["file_url"] == "/media/factory_signatures/1/owner.png"
+    assert data["owner"]["role"] == "owner"
+    assert data["owner"]["file_url"] == "/api/onboarding/signatures/owner/file"
+    assert data["owner"]["original_filename"] == "owner.png"
     assert isinstance(data["owner"]["updated_at"], str)
-    assert data["sub_owner"] == {"uploaded": False, "file_url": None, "updated_at": None}
-    assert data["supervisor"] == {"uploaded": False, "file_url": None, "updated_at": None}
+    assert isinstance(data["owner"]["created_at"], str)
+
+    file_response = client.get(data["owner"]["file_url"])
+    assert file_response.status_code == 200
+    assert file_response.headers["content-type"] == "image/png"
+    assert file_response.content == img_data
 
     # 3. tenant isolation
     mock_user2 = db.query(User).filter_by(id=2).first()
@@ -207,10 +219,17 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     response2 = client.get("/api/onboarding/signatures")
     assert response2.status_code == 200
     assert response2.json() == {
-        "owner": {"uploaded": False, "file_url": None, "updated_at": None},
-        "sub_owner": {"uploaded": False, "file_url": None, "updated_at": None},
-        "supervisor": {"uploaded": False, "file_url": None, "updated_at": None},
+        role: {
+            "uploaded": False,
+            "role": role,
+            "file_url": None,
+            "original_filename": None,
+            "updated_at": None,
+            "created_at": None,
+        }
+        for role in ("owner", "sub_owner", "supervisor")
     }
+    assert client.get("/api/onboarding/signatures/owner/file").status_code == 404
 
     # Clean up overrides
     app.dependency_overrides.clear()
@@ -233,9 +252,13 @@ def test_signature_listing_returns_frontend_schema(tmp_path, monkeypatch):
 
     assert set(response) == {"owner", "sub_owner", "supervisor"}
     for role, slot in response.items():
-        assert set(slot) == {"uploaded", "file_url", "updated_at"}
+        assert set(slot) == {
+            "uploaded", "role", "file_url", "original_filename", "updated_at", "created_at"
+        }
         assert isinstance(slot["uploaded"], bool)
-        assert slot["file_url"] is None or slot["file_url"].startswith("/media/")
+        assert slot["role"] == role
+        assert slot["file_url"] is None or slot["file_url"].startswith("/api/onboarding/signatures/")
         assert "volumes/media" not in (slot["file_url"] or "")
         assert slot["updated_at"] is None or isinstance(slot["updated_at"], str)
+        assert slot["created_at"] is None or isinstance(slot["created_at"], str)
     assert response["owner"]["uploaded"] is True

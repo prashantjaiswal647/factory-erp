@@ -1493,8 +1493,11 @@ export type AuthorizedSignature = {
 
 export type AuthorizedSignatureListingSlot = {
   uploaded: boolean;
+  role: AuthorizedSignatureRole;
   file_url: string | null;
+  original_filename: string | null;
   updated_at: string | null;
+  created_at: string | null;
 };
 
 export type AuthorizedSignatureListing = Record<
@@ -1504,6 +1507,12 @@ export type AuthorizedSignatureListing = Record<
 
 export function getAuthorizedSignatures() {
   return api.get<AuthorizedSignatureListing>("/api/onboarding/signatures");
+}
+
+export function getAuthorizedSignatureFile(role: AuthorizedSignatureRole) {
+  return api.get<Blob>(`/api/onboarding/signatures/${role}/file`, {
+    responseType: "blob",
+  });
 }
 
 export function uploadAuthorizedSignature(role: AuthorizedSignatureRole, file: File) {
