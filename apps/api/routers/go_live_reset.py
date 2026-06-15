@@ -60,7 +60,7 @@ def preview_reset(
             current_user.factory_id,
             payload.scope,
         )
-        return {
+        counts = {
             "invoices": 0,
             "invoice_items": 0,
             "payments": 0,
@@ -71,6 +71,10 @@ def preview_reset(
             "wastage_entries": 0,
             "affected_stock_records": 0,
             "customers_kept": 0,
+        }
+        return {
+            **counts,
+            "counts": counts,
             "warnings": ["Preview counts could not be read safely. No data was changed."],
         }
 

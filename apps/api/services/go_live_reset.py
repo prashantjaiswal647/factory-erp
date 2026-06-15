@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 import logging
 
-from sqlalchemy import delete, inspect
+from sqlalchemy import Integer, String, delete, inspect
 from sqlalchemy.orm import Session
 
 from models import (
@@ -46,11 +46,24 @@ SALES_SCOPES = {"sales", "sales_only", "all", "all_transaction_data"}
 PRODUCTION_SCOPES = {"production", "production_only", "all", "all_transaction_data"}
 
 
+def _load_schema_snapshot(db: Session) -> None:
+    if "go_live_reset_tables" in db.info and "go_live_reset_factory_id_types" in db.info:
+        return
+    inspector = inspect(db.get_bind())
+    tables = set(inspector.get_table_names())
+    factory_id_types = {}
+    for table in tables:
+        for column in inspector.get_columns(table):
+            if column["name"] == "factory_id":
+                factory_id_types[table] = column["type"]
+                break
+    db.info["go_live_reset_tables"] = tables
+    db.info["go_live_reset_factory_id_types"] = factory_id_types
+
+
 def _table_exists(db: Session, model) -> bool:
+    _load_schema_snapshot(db)
     tables = db.info.get("go_live_reset_tables")
-    if tables is None:
-        tables = set(inspect(db.get_bind()).get_table_names())
-        db.info["go_live_reset_tables"] = tables
     exists = model.__tablename__ in tables
     if not exists:
         logger.warning(
@@ -60,16 +73,47 @@ def _table_exists(db: Session, model) -> bool:
     return exists
 
 
-def _count(db: Session, model, factory_id: int, *filters) -> int:
+def normalize_factory_filter(db: Session, model, factory_id):
+    _load_schema_snapshot(db)
+    column = model.__table__.c.get("factory_id")
+    if column is None:
+        raise ValueError(f"{model.__tablename__} has no factory_id column")
+    type_cache = db.info["go_live_reset_factory_id_types"]
+    column_type = type_cache.get(model.__tablename__, column.type)
+    if isinstance(column_type, String):
+        value = str(factory_id)
+    elif isinstance(column_type, Integer):
+        value = int(factory_id)
+    else:
+        value = factory_id
+    return column == value
+
+
+def _add_warning(warnings: list[str] | None, message: str) -> None:
+    logger.warning(message)
+    if warnings is not None and message not in warnings:
+        warnings.append(message)
+
+
+def _count(db: Session, model, factory_id, *filters, warnings: list[str] | None = None) -> int:
     if not _table_exists(db, model):
+        _add_warning(warnings, f"Skipped missing table {model.__tablename__}.")
         return 0
-    return db.query(model).filter(model.factory_id == factory_id, *filters).count()
+    try:
+        with db.begin_nested():
+            return db.query(model).filter(normalize_factory_filter(db, model, factory_id), *filters).count()
+    except Exception as exc:
+        _add_warning(
+            warnings,
+            f"Could not count {model.__tablename__}; using 0 ({exc.__class__.__name__}).",
+        )
+        return 0
 
 
 def _delete(db: Session, model, factory_id: int, *filters) -> int:
     if not _table_exists(db, model):
         return 0
-    statement = delete(model).where(model.factory_id == factory_id, *filters)
+    statement = delete(model).where(normalize_factory_filter(db, model, factory_id), *filters)
     result = db.execute(statement)
     return int(result.rowcount or 0)
 
@@ -80,24 +124,24 @@ def preview_go_live_reset(db: Session, factory_id: int, scope: str) -> dict:
     warnings = []
     if scope not in SALES_SCOPES | PRODUCTION_SCOPES:
         warnings.append(f"Unknown reset scope '{scope}'; no transaction data will be selected.")
-    return {
+    result = {
         "invoices": (
-            _count(db, InvoiceDocument, factory_id)
-            + _count(db, SalesInvoice, factory_id)
+            _count(db, InvoiceDocument, factory_id, warnings=warnings)
+            + _count(db, SalesInvoice, factory_id, warnings=warnings)
             if include_sales else 0
         ),
-        "invoice_items": _count(db, OrderItem, factory_id) if include_sales else 0,
+        "invoice_items": _count(db, OrderItem, factory_id, warnings=warnings) if include_sales else 0,
         "payments": (
-            _count(db, Payment, factory_id)
-            + _count(db, PaymentCollection, factory_id)
+            _count(db, Payment, factory_id, warnings=warnings)
+            + _count(db, PaymentCollection, factory_id, warnings=warnings)
             if include_sales else 0
         ),
         "outstanding_bills": (
-            _count(db, OutstandingBill, factory_id)
+            _count(db, OutstandingBill, factory_id, warnings=warnings)
             if include_sales else 0
         ),
         "payment_allocations": (
-            _count(db, BillPayment, factory_id)
+            _count(db, BillPayment, factory_id, warnings=warnings)
             if include_sales else 0
         ),
         "customer_ledger_entries": (
@@ -106,47 +150,68 @@ def preview_go_live_reset(db: Session, factory_id: int, scope: str) -> dict:
                 CustomerLedgerAdjustment,
                 factory_id,
                 CustomerLedgerAdjustment.linked_bill_id.isnot(None),
+                warnings=warnings,
             )
             if include_sales else 0
         ),
         "production_entries": (
-            _count(db, DailyProduction, factory_id)
-            + _count(db, ProductionBatch, factory_id)
-            + _count(db, ProductionBatchWorkerLine, factory_id)
+            _count(db, DailyProduction, factory_id, warnings=warnings)
+            + _count(db, ProductionBatch, factory_id, warnings=warnings)
+            + _count(db, ProductionBatchWorkerLine, factory_id, warnings=warnings)
             if include_production else 0
         ),
         "wastage_entries": (
-            _count(db, WastageLog, factory_id)
-            + _count(db, ShiftWastage, factory_id)
+            _count(db, WastageLog, factory_id, warnings=warnings)
+            + _count(db, ShiftWastage, factory_id, warnings=warnings)
             if include_production else 0
         ),
-        "affected_stock_records": _affected_stock_count(db, factory_id, include_sales, include_production),
-        "customers_kept": _count(db, Customer, factory_id),
-        "warnings": warnings,
+        "affected_stock_records": _affected_stock_count(
+            db, factory_id, include_sales, include_production, warnings
+        ),
+        "customers_kept": _count(db, Customer, factory_id, warnings=warnings),
     }
+    result["warnings"] = warnings
+    result["counts"] = {key: value for key, value in result.items() if isinstance(value, int)}
+    return result
 
 
-def _affected_stock_count(db: Session, factory_id: int, include_sales: bool, include_production: bool) -> int:
+def _affected_stock_count(
+    db: Session,
+    factory_id: int,
+    include_sales: bool,
+    include_production: bool,
+    warnings: list[str] | None = None,
+) -> int:
     keys: set[tuple] = set()
-    if include_sales and _table_exists(db, DailySale):
-        for row in db.query(DailySale).filter(DailySale.factory_id == factory_id):
-            keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
-    if include_production and _table_exists(db, DailyProduction):
-        for row in db.query(DailyProduction).filter(DailyProduction.factory_id == factory_id):
-            keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
-            if row.blank_used_kg or row.blank_used_bora:
-                keys.add(("blank", row.product_size_ml, row.variety))
-            if row.bottom_used_rolls or row.bottom_used_kg:
-                keys.add(("bottom", row.product_size_ml, row.variety))
+    try:
+        with db.begin_nested():
+            if include_sales and _table_exists(db, DailySale):
+                for row in db.query(DailySale).filter(normalize_factory_filter(db, DailySale, factory_id)):
+                    keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
+            if include_production and _table_exists(db, DailyProduction):
+                for row in db.query(DailyProduction).filter(
+                    normalize_factory_filter(db, DailyProduction, factory_id)
+                ):
+                    keys.add(("finished", row.product_size_ml, row.variety, row.packaging_size_name))
+                    if row.blank_used_kg or row.blank_used_bora:
+                        keys.add(("blank", row.product_size_ml, row.variety))
+                    if row.bottom_used_rolls or row.bottom_used_kg:
+                        keys.add(("bottom", row.product_size_ml, row.variety))
+    except Exception as exc:
+        _add_warning(
+            warnings,
+            f"Could not inspect affected stock records; using 0 ({exc.__class__.__name__}).",
+        )
+        return 0
     return len(keys)
 
 
 def _restore_sales_stock(db: Session, factory_id: int) -> None:
-    for sale in db.query(DailySale).filter(DailySale.factory_id == factory_id).all():
+    for sale in db.query(DailySale).filter(normalize_factory_filter(db, DailySale, factory_id)).all():
         stock = (
             db.query(FinalProductStock)
             .filter(
-                FinalProductStock.factory_id == factory_id,
+                normalize_factory_filter(db, FinalProductStock, factory_id),
                 FinalProductStock.product_size_ml == sale.product_size_ml,
                 FinalProductStock.variety == sale.variety,
                 FinalProductStock.packaging_size_name == sale.packaging_size_name,
@@ -161,12 +226,14 @@ def _restore_sales_stock(db: Session, factory_id: int) -> None:
 
 
 def _restore_production_stock(db: Session, factory_id: int) -> None:
-    for row in db.query(DailyProduction).filter(DailyProduction.factory_id == factory_id).all():
+    for row in db.query(DailyProduction).filter(
+        normalize_factory_filter(db, DailyProduction, factory_id)
+    ).all():
         if row.status == "ACTIVE":
             stock = (
                 db.query(FinalProductStock)
                 .filter(
-                    FinalProductStock.factory_id == factory_id,
+                    normalize_factory_filter(db, FinalProductStock, factory_id),
                     FinalProductStock.product_size_ml == row.product_size_ml,
                     FinalProductStock.variety == row.variety,
                     FinalProductStock.packaging_size_name == row.packaging_size_name,
@@ -180,7 +247,7 @@ def _restore_production_stock(db: Session, factory_id: int) -> None:
         blank = (
             db.query(BlankStock)
             .filter(
-                BlankStock.factory_id == factory_id,
+                normalize_factory_filter(db, BlankStock, factory_id),
                 BlankStock.blank_size_ml == row.product_size_ml,
                 BlankStock.variety == row.variety,
             )
@@ -243,7 +310,7 @@ def _replace_opening_outstanding(
     opening_outstanding: list[dict],
     user_id: int,
 ) -> None:
-    db.query(Customer).filter(Customer.factory_id == factory_id).update(
+    db.query(Customer).filter(normalize_factory_filter(db, Customer, factory_id)).update(
         {Customer.previous_due: Decimal("0"), Customer.total_due: Decimal("0")},
         synchronize_session=False,
     )
@@ -253,7 +320,10 @@ def _replace_opening_outstanding(
             continue
         customer = (
             db.query(Customer)
-            .filter(Customer.factory_id == factory_id, Customer.id == int(item["customer_id"]))
+            .filter(
+                normalize_factory_filter(db, Customer, factory_id),
+                Customer.id == int(item["customer_id"]),
+            )
             .one()
         )
         customer.previous_due = amount
@@ -297,7 +367,9 @@ def confirm_go_live_reset(
             deleted.update(_delete_sales_transactions(db, factory_id))
             _replace_opening_outstanding(db, factory_id, opening_outstanding, user_id)
             factory = db.query(Factory).filter(Factory.id == factory_id).one()
-            settings = db.query(FactorySettings).filter(FactorySettings.factory_id == factory_id).first()
+            settings = db.query(FactorySettings).filter(
+                normalize_factory_filter(db, FactorySettings, factory_id)
+            ).first()
             if settings is None:
                 settings = FactorySettings(factory_id=factory_id)
                 db.add(settings)

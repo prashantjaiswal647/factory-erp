@@ -2266,6 +2266,7 @@ export type GoLiveResetPreview = {
   affected_stock_records: number;
   customers_kept: number;
   warnings: string[];
+  counts: Record<string, number>;
 };
 
 export function previewGoLiveReset(scope: GoLiveResetScope) {

@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
+from sqlalchemy import String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -20,6 +21,7 @@ from models import (
     Machine,
     OutstandingBill,
     PaymentCollection,
+    ShiftWastage,
     Worker,
 )
 from services.go_live_reset import confirm_go_live_reset, preview_go_live_reset
@@ -231,6 +233,7 @@ def test_preview_works_with_empty_db(reset_db):
 def test_preview_works_when_optional_tables_are_missing(reset_db, caplog):
     db, _ = reset_db
     db.info["go_live_reset_tables"] = {"customers"}
+    db.info["go_live_reset_factory_id_types"] = {"customers": Customer.__table__.c.factory_id.type}
 
     preview = preview_go_live_reset(db, 1, "all_transaction_data")
 
@@ -300,3 +303,32 @@ def test_confirm_requires_exact_confirmation_text(reset_db):
 
     assert caught.value.status_code == 422
     assert db.query(InvoiceDocument).count() == 1
+
+
+def test_preview_handles_string_factory_id(reset_db):
+    db, _ = reset_db
+    db.add(ShiftWastage(factory_id="2", date=date(2026, 6, 1), shift="Day", wastage_kg=1))
+    db.commit()
+    db.info["go_live_reset_factory_id_types"] = {"shift_wastages": String()}
+
+    preview = preview_go_live_reset(db, 2, "production_only")
+
+    assert preview["wastage_entries"] == 1
+    assert preview["counts"]["wastage_entries"] == 1
+
+
+def test_preview_never_raises(reset_db, monkeypatch):
+    db, _ = reset_db
+    original = __import__("services.go_live_reset", fromlist=["normalize_factory_filter"]).normalize_factory_filter
+
+    def fail_one_model(session, model, factory_id):
+        if model is ShiftWastage:
+            raise TypeError("simulated incompatible factory_id")
+        return original(session, model, factory_id)
+
+    monkeypatch.setattr("services.go_live_reset.normalize_factory_filter", fail_one_model)
+
+    preview = preview_go_live_reset(db, 1, "all_transaction_data")
+
+    assert preview["counts"]["wastage_entries"] == 0
+    assert any("shift_wastages" in warning for warning in preview["warnings"])
