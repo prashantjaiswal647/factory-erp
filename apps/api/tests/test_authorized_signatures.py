@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from db import Base
 from models import Factory, FactoryAuthorizedSignature, User
-from routers.onboarding import upload_authorized_signature
+from routers.onboarding import list_authorized_signatures, upload_authorized_signature
 from services.invoice_pdf import build_invoice_pdf_bytes, resolve_authorized_signature_path
 
 
@@ -175,9 +175,9 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data == {
-        "owner": None,
-        "sub_owner": None,
-        "supervisor": None
+        "owner": {"uploaded": False, "file_url": None, "updated_at": None},
+        "sub_owner": {"uploaded": False, "file_url": None, "updated_at": None},
+        "supervisor": {"uploaded": False, "file_url": None, "updated_at": None},
     }
 
     # 2. upload signature then list returns 200
@@ -192,10 +192,11 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     response = client.get("/api/onboarding/signatures")
     assert response.status_code == 200
     data = response.json()
-    assert data["owner"] is not None
-    assert data["owner"]["role"] == "owner"
-    assert data["sub_owner"] is None
-    assert data["supervisor"] is None
+    assert data["owner"]["uploaded"] is True
+    assert data["owner"]["file_url"] == "/media/factory_signatures/1/owner.png"
+    assert isinstance(data["owner"]["updated_at"], str)
+    assert data["sub_owner"] == {"uploaded": False, "file_url": None, "updated_at": None}
+    assert data["supervisor"] == {"uploaded": False, "file_url": None, "updated_at": None}
 
     # 3. tenant isolation
     mock_user2 = db.query(User).filter_by(id=2).first()
@@ -206,10 +207,35 @@ def test_signature_endpoints(tmp_path, monkeypatch):
     response2 = client.get("/api/onboarding/signatures")
     assert response2.status_code == 200
     assert response2.json() == {
-        "owner": None,
-        "sub_owner": None,
-        "supervisor": None
+        "owner": {"uploaded": False, "file_url": None, "updated_at": None},
+        "sub_owner": {"uploaded": False, "file_url": None, "updated_at": None},
+        "supervisor": {"uploaded": False, "file_url": None, "updated_at": None},
     }
 
     # Clean up overrides
     app.dependency_overrides.clear()
+
+
+def test_signature_listing_returns_frontend_schema(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add(Factory(id=1, name="Factory A"))
+    db.add(FactoryAuthorizedSignature(
+        factory_id=1,
+        role="owner",
+        file_path="volumes/media/factory_signatures/1/owner.png",
+        original_filename="owner.png",
+        uploaded_by_user_id=1,
+    ))
+    db.commit()
+
+    response = list_authorized_signatures(current_user=_user(1, 1, "Owner"), db=db)
+
+    assert set(response) == {"owner", "sub_owner", "supervisor"}
+    for role, slot in response.items():
+        assert set(slot) == {"uploaded", "file_url", "updated_at"}
+        assert isinstance(slot["uploaded"], bool)
+        assert slot["file_url"] is None or slot["file_url"].startswith("/media/")
+        assert "volumes/media" not in (slot["file_url"] or "")
+        assert slot["updated_at"] is None or isinstance(slot["updated_at"], str)
+    assert response["owner"]["uploaded"] is True

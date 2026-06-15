@@ -2851,6 +2851,17 @@ def _signature_response(row: FactoryAuthorizedSignature) -> dict:
     }
 
 
+def _signature_listing_slot(row: FactoryAuthorizedSignature | None) -> dict:
+    if row is None:
+        return {"uploaded": False, "file_url": None, "updated_at": None}
+    relative_path = str(row.file_path).replace("\\", "/").removeprefix("volumes/media/")
+    return {
+        "uploaded": True,
+        "file_url": f"/media/{relative_path}",
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 @router.get("/signatures")
 def list_authorized_signatures(
     current_user: User = Depends(check_permissions(FACTORY_VIEW_ROLES)),
@@ -2859,17 +2870,20 @@ def list_authorized_signatures(
     try:
         factory_id = int(current_user.factory_id)
     except (TypeError, ValueError):
-        return {"owner": None, "sub_owner": None, "supervisor": None}
+        return {
+            role: _signature_listing_slot(None)
+            for role in ("owner", "sub_owner", "supervisor")
+        }
 
     rows = (
         db.query(FactoryAuthorizedSignature)
         .filter(FactoryAuthorizedSignature.factory_id == factory_id)
         .all()
     )
-    res = {"owner": None, "sub_owner": None, "supervisor": None}
-    for row in rows:
-        if row.role in res:
-            res[row.role] = _signature_response(row)
+    rows_by_role = {row.role: row for row in rows if row.role in SIGNATURE_ROLES}
+    res = {}
+    for role in ("owner", "sub_owner", "supervisor"):
+        res[role] = _signature_listing_slot(rows_by_role.get(role))
     return res
 
 

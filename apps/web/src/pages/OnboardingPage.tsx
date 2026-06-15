@@ -124,12 +124,45 @@ export default function OnboardingPage() {
     setSignaturesError("");
     try {
       const data: unknown = (await getAuthorizedSignatures()).data;
-      if (!Array.isArray(data)) {
+      const roles: AuthorizedSignatureRole[] = ["owner", "sub_owner", "supervisor"];
+      if (
+        !data ||
+        typeof data !== "object" ||
+        !roles.every((role) => {
+          const slot = (data as Record<string, unknown>)[role];
+          if (!slot || typeof slot !== "object") return false;
+          const value = slot as Record<string, unknown>;
+          return (
+            typeof value.uploaded === "boolean" &&
+            (value.file_url === null || typeof value.file_url === "string") &&
+            (value.updated_at === null || typeof value.updated_at === "string")
+          );
+        })
+      ) {
         setSignatures([]);
         setSignaturesError("Authorized signatures could not be loaded because the server returned an invalid response.");
         return;
       }
-      setSignatures(data);
+      setSignatures(
+        roles.flatMap((role) => {
+          const slot = (data as Record<AuthorizedSignatureRole, {
+            uploaded: boolean;
+            file_url: string | null;
+            updated_at: string | null;
+          }>)[role];
+          if (!slot.uploaded || !slot.file_url) return [];
+          return [{
+            id: 0,
+            role,
+            file_path: "",
+            url: slot.file_url,
+            original_filename: "",
+            uploaded_by_user_id: 0,
+            created_at: slot.updated_at || "",
+            updated_at: slot.updated_at || "",
+          }];
+        })
+      );
     } catch {
       setSignatures([]);
       setSignaturesError("Unable to load authorized signatures. You can continue onboarding and retry later.");

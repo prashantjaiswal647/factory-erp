@@ -37,7 +37,13 @@ describe("OnboardingPage authorized signatures", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("test_onboarding_signature_page_handles_empty_response", async () => {
-    vi.mocked(api.getAuthorizedSignatures).mockResolvedValue({ data: [] } as never);
+    vi.mocked(api.getAuthorizedSignatures).mockResolvedValue({
+      data: {
+        owner: { uploaded: false, file_url: null, updated_at: null },
+        sub_owner: { uploaded: false, file_url: null, updated_at: null },
+        supervisor: { uploaded: false, file_url: null, updated_at: null },
+      },
+    } as never);
 
     render(<OnboardingPage />);
 
@@ -45,7 +51,28 @@ describe("OnboardingPage authorized signatures", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("test_onboarding_signature_page_handles_object_response", async () => {
+  it("test_onboarding_signature_page_handles_uploaded_signature", async () => {
+    vi.mocked(api.getAuthorizedSignatures).mockResolvedValue({
+      data: {
+        owner: {
+          uploaded: true,
+          file_url: "/media/factory_signatures/1/owner.png",
+          updated_at: "2026-06-15T12:00:00+00:00",
+        },
+        sub_owner: { uploaded: false, file_url: null, updated_at: null },
+        supervisor: { uploaded: false, file_url: null, updated_at: null },
+      },
+    } as never);
+
+    render(<OnboardingPage />);
+
+    const image = await screen.findByAltText("Owner Signature");
+    expect(image.getAttribute("src")).toBe("/media/factory_signatures/1/owner.png");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getAllByText("Not uploaded")).toHaveLength(2);
+  });
+
+  it("test_onboarding_signature_page_rejects_invalid_schema", async () => {
     vi.mocked(api.getAuthorizedSignatures).mockResolvedValue({
       data: { owner: null, sub_owner: null, supervisor: null },
     } as never);
@@ -53,7 +80,6 @@ describe("OnboardingPage authorized signatures", () => {
     render(<OnboardingPage />);
 
     expect((await screen.findByRole("alert")).textContent).toContain("server returned an invalid response");
-    expect(screen.getAllByText("Not uploaded")).toHaveLength(3);
   });
 
   it("test_onboarding_signature_page_handles_api_failure", async () => {
