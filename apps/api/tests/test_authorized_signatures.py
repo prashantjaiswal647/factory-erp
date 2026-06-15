@@ -1,5 +1,6 @@
 from io import BytesIO
 from types import SimpleNamespace
+from datetime import date
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -9,8 +10,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db import Base
-from models import Factory, FactoryAuthorizedSignature, User
+from models import Factory, FactoryAuthorizedSignature, InvoiceDocument, User
 from routers.onboarding import list_authorized_signatures, upload_authorized_signature
+from routers.sales import _invoice_pdf_snapshot
 from services.invoice_pdf import build_invoice_pdf_bytes, resolve_authorized_signature_path
 
 
@@ -142,6 +144,117 @@ def test_invoice_pdf_does_not_crash_without_signature():
     })
 
     assert pdf.startswith(b"%PDF")
+
+
+def _invoice_payload(role):
+    return {
+        "factory_id": 1,
+        "generated_by_role": role,
+        "invoice": {
+            "invoice_id": "INV-1",
+            "invoice_date": "2026-06-15",
+            "customer_name": "Customer",
+            "bill_total": 100,
+            "generated_by_role": role,
+        },
+        "items": [{"description": "Paper Cups", "quantity": 1, "rate": 100}],
+    }
+
+
+@pytest.mark.anyio
+async def test_invoice_pdf_renders_owner_signature(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add_all([
+        Factory(id=1, name="Factory A"),
+        User(id=1, factory_id=1, username="owner", password_hash="x", role="Owner"),
+    ])
+    db.commit()
+    upload = UploadFile(
+        filename="owner.png",
+        file=BytesIO(_image_bytes()),
+        headers={"content-type": "image/png"},
+    )
+    await upload_authorized_signature("owner", upload, current_user=_user(1, 1, "Owner"), db=db)
+    monkeypatch.setattr("services.invoice_pdf.SessionLocal", lambda: db)
+    rendered_paths = []
+    real_image = __import__("services.invoice_pdf", fromlist=["Image"]).Image
+
+    def capture_image(path, *args, **kwargs):
+        rendered_paths.append(path)
+        return real_image(path, *args, **kwargs)
+
+    monkeypatch.setattr("services.invoice_pdf.Image", capture_image)
+    pdf = build_invoice_pdf_bytes(_invoice_payload("Owner"))
+
+    assert pdf.startswith(b"%PDF")
+    assert len(rendered_paths) == 1
+    assert rendered_paths[0].endswith("owner.png")
+
+
+@pytest.mark.anyio
+async def test_invoice_pdf_sub_owner_falls_back_to_owner_signature(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add_all([
+        Factory(id=1, name="Factory A"),
+        User(id=1, factory_id=1, username="owner", password_hash="x", role="Owner"),
+    ])
+    db.commit()
+    upload = UploadFile(
+        filename="owner.webp",
+        file=BytesIO(_image_bytes("WEBP")),
+        headers={"content-type": "image/webp"},
+    )
+    await upload_authorized_signature("owner", upload, current_user=_user(1, 1, "Owner"), db=db)
+    monkeypatch.setattr("services.invoice_pdf.SessionLocal", lambda: db)
+    rendered_paths = []
+    real_image = __import__("services.invoice_pdf", fromlist=["Image"]).Image
+    monkeypatch.setattr(
+        "services.invoice_pdf.Image",
+        lambda path, *args, **kwargs: (
+            rendered_paths.append(path),
+            real_image(path, *args, **kwargs),
+        )[1],
+    )
+
+    pdf = build_invoice_pdf_bytes(_invoice_payload("Sub-Owner"))
+
+    assert pdf.startswith(b"%PDF")
+    assert len(rendered_paths) == 1
+    assert rendered_paths[0].endswith("owner.webp")
+
+
+def test_invoice_snapshot_passes_factory_and_generated_role(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add(Factory(id=1, name="Factory A"))
+    invoice = InvoiceDocument(
+        factory_id=1,
+        invoice_number="INV-1",
+        invoice_date=date(2026, 6, 15),
+        customer_name="Customer",
+        payment_method="Cash",
+        bill_total=100,
+        amount_paid=0,
+        customer_total_due=100,
+        payload_json=_invoice_payload("Sub-Owner"),
+        generated_by_role="Sub-Owner",
+    )
+    db.add(invoice)
+    db.commit()
+    captured = {}
+
+    def capture_payload(payload):
+        captured.update(payload)
+        return b"%PDF-test"
+
+    monkeypatch.setattr("routers.sales.build_invoice_pdf_bytes", capture_payload)
+
+    assert _invoice_pdf_snapshot(db, invoice) == b"%PDF-test"
+    assert captured["factory_id"] == 1
+    assert captured["generated_by_role"] == "Sub-Owner"
+    assert captured["invoice"]["factory_id"] == 1
 
 
 def test_signature_endpoints(tmp_path, monkeypatch):

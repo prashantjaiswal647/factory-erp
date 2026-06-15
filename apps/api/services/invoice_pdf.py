@@ -88,7 +88,19 @@ def resolve_authorized_signature_path(
             row = by_role.get(candidate_role)
             path = _safe_existing_signature_path(row.file_path if row else None)
             if path is not None:
+                logger.info(
+                    "Invoice signature resolved: role=%s path=%s",
+                    candidate_role,
+                    path,
+                )
                 return path
+            if row is not None:
+                logger.warning(
+                    "Invoice signature file missing: role=%s factory_id=%s stored_path=%s",
+                    candidate_role,
+                    factory_id,
+                    row.file_path,
+                )
         factory = db.query(Factory).filter(Factory.id == int(factory_id)).first()
     else:
         factory = db_or_factory
@@ -103,7 +115,13 @@ def resolve_authorized_signature_path(
     ):
         path = _safe_existing_signature_path(getattr(factory, field, None))
         if path is not None:
+            logger.info("Invoice signature resolved: role=owner path=%s", path)
             return path
+    logger.warning(
+        "Invoice signature not available: role=%s factory_id=%s",
+        _normalized_role(generated_by_role),
+        factory_id,
+    )
     return None
 
 

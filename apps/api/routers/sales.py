@@ -2452,8 +2452,11 @@ def _invoice_pdf_snapshot(db: Session, invoice: InvoiceDocument) -> bytes:
     ).first()
     payload = dict(invoice.payload_json or {})
     payload["id"] = invoice.id
+    payload["factory_id"] = invoice.factory_id
     payload["status"] = invoice.status
     invoice_payload = dict(payload.get("invoice") or {})
+    invoice_payload["factory_id"] = invoice.factory_id
+    invoice_payload["generated_by_role"] = invoice.generated_by_role
     invoice_payload["amount_paid"] = float(bill.amount_paid if bill else invoice.amount_paid)
     invoice_payload["customer_total_due"] = float(bill.balance_amount if bill else invoice.customer_total_due)
     invoice_payload["status"] = invoice.status

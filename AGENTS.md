@@ -402,6 +402,7 @@ Follow this sequence unless a P0 incident overrides it.
 - `invoice_delivery_logs` records download, reprint, Telegram, and email activity without changing invoice accounting data.
 - Invoice PDFs and delivery/history endpoints must always verify `factory_id`.
 - Authorized invoice signatures are stored in `factory_authorized_signatures`, unique by factory and role (`owner`, `sub_owner`, `supervisor`); image files live under `volumes/media/factory_signatures/{factory_id}/`.
+- The API container must mount `./volumes/media:/app/volumes/media` so uploaded signatures remain available to ReportLab across container rebuilds.
 - Invoice documents persist `generated_by_role`. PDF rendering uses that role's signature, falls back to the Owner signature, then renders only `Authorized Signatory` when no image exists.
 - Signature uploads must remain factory scoped, image-validated, limited to 2 MB, and stored as file paths rather than base64 invoice payload data.
 
