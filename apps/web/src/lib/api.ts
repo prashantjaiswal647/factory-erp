@@ -286,23 +286,52 @@ export type ProductionBatchCreate = {
   date: string;
   shift: string;
   machine_id: number;
-  finished_good_id: number;
-  product_size_ml: number;
-  variety_design: string;
-  packaging_size_name: string;
-  carton_type: string;
-  pcs_per_packet: number;
-  packets_per_box: number;
-  worker_rows: Array<{
+  worker_cards: Array<{
     worker_id: number;
-    boxes_made: number;
-    loose_packets_made: number;
     blank_used_bora: number;
     bottom_used_roll: number;
     note?: string | null;
+    outputs: Array<{
+      finished_good_id: number;
+      boxes_made: number;
+      loose_packets_made: number;
+    }>;
   }>;
   shift_wastage_kg: number;
   wastage_note?: string | null;
+};
+
+export type ProductionBatchHistory = {
+  id: number;
+  date: string;
+  shift: string;
+  machine_id: number;
+  total_boxes: number;
+  total_loose_packets: number;
+  total_blank_bora: number;
+  total_bottom_roll: number;
+  shift_wastage_kg: number;
+  wastage_note: string | null;
+  worker_lines: Array<{
+    id: number;
+    worker_id: number;
+    worker_name: string;
+    blank_used_bora: number;
+    bottom_used_roll: number;
+    note: string | null;
+    outputs: Array<{
+      id: number;
+      finished_good_id: number;
+      product_size_ml: number;
+      variety: string;
+      packaging_size_name: string;
+      carton_type: string;
+      boxes_made: number;
+      loose_packets_made: number;
+      boxes_from_loose: number;
+      daily_production_id: number;
+    }>;
+  }>;
 };
 
 export type ProductionHistoryEntry = {
@@ -1143,6 +1172,12 @@ export function downloadInvoicePdf(invoiceId: number, inline?: boolean) {
 
 export function createDailyProductionBatch(payload: ProductionBatchCreate) {
   return api.post("/api/production/daily-batch", payload);
+}
+
+export function getDailyProductionBatches(date?: string) {
+  return api.get<ProductionBatchHistory[]>("/api/production/daily-batches", {
+    params: date ? { date } : undefined,
+  });
 }
 
 export function deleteInvoice(

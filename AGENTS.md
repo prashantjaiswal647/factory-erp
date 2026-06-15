@@ -356,6 +356,9 @@ Follow this sequence unless a P0 incident overrides it.
 ## 18A. Production Lifecycle
 
 - `daily_productions.status` is the canonical lifecycle flag: `ACTIVE` or `REJECTED`.
+- Shift production entry is batch-based: one `ProductionBatchWorkerLine` stores each worker's shared blank/bottom consumption, and child `ProductionBatchOutputLine` rows store multiple finished-good outputs for that worker.
+- Each output creates a compatibility `DailyProduction` row; only the first output per worker carries explicit blank/bottom consumption, so raw material is never multiplied by output count.
+- `POST /api/production/daily-batch` accepts `worker_cards[].outputs[]`, validates every worker/SKU/machine/carton mapping in the authenticated factory, and saves shift wastage once.
 - Finished-goods stock calculations must include only `ACTIVE` production rows.
 - Production history and worker summaries read `daily_productions` directly and remain factory scoped.
 - Owner rejection requires a reason, records actor/timestamp, writes an ActivityLog, and reverses finished-goods impact through deterministic stock recalculation.

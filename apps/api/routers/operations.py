@@ -29,6 +29,7 @@ from models import (
     AppUsageLog,
     MaterialYield,
     ProductionBatch,
+    ProductionBatchOutputLine,
     ProductionBatchWorkerLine,
     ShiftWastage,
 )
@@ -275,6 +276,7 @@ def _create_daily_production(
     db: Session = Depends(get_db),
     *,
     commit: bool = True,
+    allow_material_fallback: bool = True,
 ):
     factory_id = str(current_user.factory_id)
     if payload.factory_id and str(payload.factory_id) != factory_id:
@@ -454,7 +456,7 @@ def _create_daily_production(
         total_pieces = Decimal(payload.total_boxes_made * payload.packets_per_box_limit + payload.loose_packets_made) * Decimal(payload.pieces_per_packet)
 
         # 1. Blank Stock BOM Fallback
-        if blank_used_kg <= 0 and total_pieces > 0:
+        if allow_material_fallback and blank_used_kg <= 0 and total_pieces > 0:
             blank_yield = (
                 db.query(MaterialYield)
                 .filter(MaterialYield.factory_id == factory_id)
@@ -468,7 +470,7 @@ def _create_daily_production(
                     blank_used_bori = to_qty(blank_used_kg / Decimal(blank_stock.weight_per_bora_kg))
 
         # 2. Bottom Stock BOM Fallback
-        if bottom_used_kg <= 0 and total_pieces > 0:
+        if allow_material_fallback and bottom_used_kg <= 0 and total_pieces > 0:
             bottom_yield = (
                 db.query(MaterialYield)
                 .filter(MaterialYield.factory_id == factory_id)
@@ -546,8 +548,17 @@ def _create_daily_production(
             db.add(final_stock)
             db.flush()
 
-        total_boxes_before = final_stock.total_boxes or 0
-        loose_before = final_stock.loose_packets or 0
+        from routers.inventory import calculate_live_sku_stock
+        total_boxes_before, loose_before = calculate_live_sku_stock(
+            db=db,
+            factory_id=factory_id,
+            product_size_ml=product_size_ml,
+            variety=variety,
+            packaging_size_name=packaging_size_name,
+            onboarding_boxes=final_stock.total_boxes or 0,
+            onboarding_loose=final_stock.loose_packets or 0,
+            packets_per_box_limit=final_stock.packets_per_box_limit or payload.packets_per_box_limit,
+        )
         current_loose = loose_before + payload.loose_packets_made
         boxes_from_loose = current_loose // payload.packets_per_box_limit
         final_loose_packets = current_loose % payload.packets_per_box_limit
@@ -751,27 +762,25 @@ def create_daily_production(
     return _create_daily_production(payload, background_tasks, current_user, db)
 
 
-class ProductionBatchWorkerLineCreate(BaseModel):
-    worker_id: int = Field(..., gt=0)
+class ProductionBatchOutputCreate(BaseModel):
+    finished_good_id: int = Field(..., gt=0)
     boxes_made: int = Field(default=0, ge=0)
     loose_packets_made: int = Field(default=0, ge=0)
+
+
+class ProductionBatchWorkerCardCreate(BaseModel):
+    worker_id: int = Field(..., gt=0)
     blank_used_bora: Decimal = Field(default=Decimal("0.000"), ge=0)
     bottom_used_roll: int = Field(default=0, ge=0)
     note: Optional[str] = Field(default=None, max_length=1000)
+    outputs: List[ProductionBatchOutputCreate] = Field(..., min_length=1)
 
 
 class ProductionBatchCreate(BaseModel):
     date: date_cls
     shift: str = Field(..., min_length=1, max_length=50)
     machine_id: int = Field(..., gt=0)
-    finished_good_id: int = Field(..., gt=0)
-    product_size_ml: int = Field(..., gt=0)
-    variety_design: str = Field(..., min_length=1, max_length=100)
-    packaging_size_name: str = Field(..., min_length=1, max_length=100)
-    carton_type: str = Field(..., min_length=1, max_length=100)
-    pcs_per_packet: int = Field(..., gt=0)
-    packets_per_box: int = Field(..., gt=0)
-    worker_rows: List[ProductionBatchWorkerLineCreate] = Field(..., min_length=1)
+    worker_cards: List[ProductionBatchWorkerCardCreate] = Field(..., min_length=1)
     shift_wastage_kg: Decimal = Field(default=Decimal("0.000"), ge=0)
     wastage_note: Optional[str] = Field(default=None, max_length=1000)
 
@@ -790,61 +799,109 @@ def create_daily_production_batch(
     ).first()
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
-    sku = db.query(FinalProductStock).filter(
-        FinalProductStock.id == payload.finished_good_id,
-        FinalProductStock.factory_id == factory_id,
-    ).with_for_update().first()
-    if sku is None:
-        raise HTTPException(status_code=404, detail="Finished good SKU not found")
-    if (
-        sku.product_size_ml != payload.product_size_ml
-        or sku.variety.strip().casefold() != payload.variety_design.strip().casefold()
-        or sku.packaging_size_name.strip().casefold() != payload.packaging_size_name.strip().casefold()
-        or (sku.carton_type or "").strip().casefold() != payload.carton_type.strip().casefold()
-    ):
-        raise HTTPException(status_code=400, detail="Selected finished good SKU does not match the batch header.")
     machine_size = machine.mould_size_ml or machine.cup_size_ml
-    if machine_size and int(machine_size) != payload.product_size_ml:
-        raise HTTPException(status_code=400, detail="Product size does not match selected machine mould size.")
 
-    duplicate_workers = len({row.worker_id for row in payload.worker_rows}) != len(payload.worker_rows)
+    duplicate_workers = len({card.worker_id for card in payload.worker_cards}) != len(payload.worker_cards)
     if duplicate_workers:
         raise HTTPException(status_code=400, detail="Each worker can appear only once in a production batch.")
-    if not any(row.boxes_made or row.loose_packets_made for row in payload.worker_rows):
-        raise HTTPException(status_code=400, detail="At least one worker row must contain production.")
+    worker_ids = [card.worker_id for card in payload.worker_cards]
+    workers_found = db.query(Worker).filter(
+        Worker.factory_id == factory_id,
+        Worker.id.in_(worker_ids),
+    ).count()
+    if workers_found != len(worker_ids):
+        raise HTTPException(status_code=404, detail="Worker not found")
 
-    loose_before = int(sku.loose_packets or 0)
-    total_boxes = sum(row.boxes_made for row in payload.worker_rows)
-    total_loose = sum(row.loose_packets_made for row in payload.worker_rows)
-    converted_boxes = (loose_before + total_loose) // payload.packets_per_box - (loose_before // payload.packets_per_box)
-    remaining_loose = (loose_before + total_loose) % payload.packets_per_box
-    total_blank = sum((row.blank_used_bora for row in payload.worker_rows), Decimal("0.000"))
-    total_bottom = sum(row.bottom_used_roll for row in payload.worker_rows)
-    carton_stock = db.query(BoxStock).filter(
-        BoxStock.factory_id == factory_id,
-        sql_func.lower(sql_func.trim(BoxStock.box_type)) == normalize_carton_type(sku.carton_type),
-    ).with_for_update().first()
-    required_cartons = total_boxes + converted_boxes
-    if carton_stock is None or int(carton_stock.total_boxes or 0) < required_cartons:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Insufficient Box Stock. Available: {int(carton_stock.total_boxes or 0) if carton_stock else 0} boxes, "
-                f"Required: {required_cartons} boxes."
-            ),
+    output_ids = [
+        output.finished_good_id
+        for card in payload.worker_cards
+        for output in card.outputs
+    ]
+    skus = db.query(FinalProductStock).filter(
+        FinalProductStock.factory_id == factory_id,
+        FinalProductStock.id.in_(output_ids),
+    ).with_for_update().all()
+    sku_by_id = {sku.id: sku for sku in skus}
+    if len(sku_by_id) != len(set(output_ids)):
+        raise HTTPException(status_code=404, detail="Finished good SKU not found")
+    if not any(
+        output.boxes_made or output.loose_packets_made
+        for card in payload.worker_cards
+        for output in card.outputs
+    ):
+        raise HTTPException(status_code=400, detail="At least one output line must contain production.")
+
+    carton_requirements: dict[str, int] = {}
+    converted_by_sku: dict[int, int] = {}
+    remaining_by_sku: dict[int, int] = {}
+    totals_by_sku: dict[int, dict[str, int]] = {}
+    for card in payload.worker_cards:
+        duplicate_outputs = len({output.finished_good_id for output in card.outputs}) != len(card.outputs)
+        if duplicate_outputs:
+            raise HTTPException(status_code=400, detail="A worker card cannot repeat the same finished good SKU.")
+        for output in card.outputs:
+            sku = sku_by_id[output.finished_good_id]
+            if machine_size and int(machine_size) != int(sku.product_size_ml):
+                raise HTTPException(status_code=400, detail="Product size does not match selected machine mould size.")
+            if not sku.carton_type:
+                raise HTTPException(status_code=400, detail="Inventory mapping incomplete: finished product carton_type is missing.")
+            totals = totals_by_sku.setdefault(sku.id, {"boxes": 0, "loose": 0})
+            totals["boxes"] += output.boxes_made
+            totals["loose"] += output.loose_packets_made
+
+    for sku_id, totals in totals_by_sku.items():
+        sku = sku_by_id[sku_id]
+        packets_per_box = int(sku.packets_per_box_limit)
+        from routers.inventory import calculate_live_sku_stock
+        _, loose_before = calculate_live_sku_stock(
+            db=db,
+            factory_id=factory_id,
+            product_size_ml=sku.product_size_ml,
+            variety=sku.variety,
+            packaging_size_name=sku.packaging_size_name,
+            onboarding_boxes=sku.total_boxes or 0,
+            onboarding_loose=sku.loose_packets or 0,
+            packets_per_box_limit=packets_per_box,
         )
+        converted = (loose_before + totals["loose"]) // packets_per_box - (loose_before // packets_per_box)
+        converted_by_sku[sku_id] = converted
+        remaining_by_sku[sku_id] = (loose_before + totals["loose"]) % packets_per_box
+        carton_key = normalize_carton_type(sku.carton_type)
+        carton_requirements[carton_key] = carton_requirements.get(carton_key, 0) + totals["boxes"] + converted
+
+    for carton_key, required in carton_requirements.items():
+        carton_stock = db.query(BoxStock).filter(
+            BoxStock.factory_id == factory_id,
+            sql_func.lower(sql_func.trim(BoxStock.box_type)) == carton_key,
+        ).with_for_update().first()
+        related_sizes = {
+            int(sku.product_size_ml)
+            for sku in skus
+            if normalize_carton_type(sku.carton_type) == carton_key
+        }
+        allowed_sizes = parse_allowed_sizes(carton_stock.size_for_finished_product if carton_stock else "")
+        if carton_stock is None or not related_sizes.issubset(allowed_sizes):
+            raise HTTPException(status_code=400, detail="Carton type is not configured for every selected product size.")
+        if int(carton_stock.total_boxes or 0) < required:
+            raise HTTPException(status_code=400, detail=f"Insufficient Box Stock. Available: {int(carton_stock.total_boxes or 0)}, Required: {required}.")
+
+    total_boxes = sum(value["boxes"] for value in totals_by_sku.values())
+    total_loose = sum(value["loose"] for value in totals_by_sku.values())
+    total_blank = sum((card.blank_used_bora for card in payload.worker_cards), Decimal("0.000"))
+    total_bottom = sum(card.bottom_used_roll for card in payload.worker_cards)
+    first_sku = sku_by_id[output_ids[0]]
 
     batch = ProductionBatch(
         factory_id=factory_id,
         date=payload.date,
         shift=payload.shift.strip(),
         machine_id=machine.id,
-        finished_good_id=sku.id,
-        carton_type=sku.carton_type,
+        finished_good_id=first_sku.id,
+        carton_type="MULTIPLE" if len(carton_requirements) > 1 else first_sku.carton_type,
         total_boxes=total_boxes,
         total_loose_packets=total_loose,
-        converted_boxes_from_loose=converted_boxes,
-        remaining_loose_packets=remaining_loose,
+        converted_boxes_from_loose=sum(converted_by_sku.values()),
+        remaining_loose_packets=sum(remaining_by_sku.values()),
         total_blank_bora=total_blank,
         total_bottom_roll=total_bottom,
         shift_wastage_kg=payload.shift_wastage_kg,
@@ -856,48 +913,74 @@ def create_daily_production_batch(
 
     responses: list[DailyProductionResponse] = []
     try:
-        for index, worker_row in enumerate(payload.worker_rows):
-            response = _create_daily_production(
-                DailyProductionCreate(
-                    date=payload.date,
-                    worker_id=worker_row.worker_id,
-                    machine_id=payload.machine_id,
-                    product_id=payload.finished_good_id,
-                    product_size_ml=payload.product_size_ml,
-                    variety=payload.variety_design,
-                    packaging_size_name=payload.packaging_size_name,
-                    pieces_per_packet=payload.pcs_per_packet,
-                    packets_per_box_limit=payload.packets_per_box,
-                    shift="Night" if payload.shift.strip().casefold() == "night" else "Day",
-                    total_boxes_made=worker_row.boxes_made,
-                    loose_packets_made=worker_row.loose_packets_made,
-                    blank_used_bori=worker_row.blank_used_bora,
-                    bottom_used_rolls=worker_row.bottom_used_roll,
-                    wastage_kg=payload.shift_wastage_kg if index == 0 else Decimal("0.000"),
-                    remarks=worker_row.note,
-                ),
-                background_tasks,
-                current_user,
-                db,
-                commit=False,
-            )
-            responses.append(response)
-            db.add(ProductionBatchWorkerLine(
+        for worker_card in payload.worker_cards:
+            worker_line = ProductionBatchWorkerLine(
                 factory_id=factory_id,
                 batch_id=batch.id,
-                worker_id=worker_row.worker_id,
-                daily_production_id=response.production_id,
-                boxes_made=worker_row.boxes_made,
-                loose_packets_made=worker_row.loose_packets_made,
-                blank_used_bora=worker_row.blank_used_bora,
-                bottom_used_roll=worker_row.bottom_used_roll,
-                note=worker_row.note,
+                worker_id=worker_card.worker_id,
+                boxes_made=sum(output.boxes_made for output in worker_card.outputs),
+                loose_packets_made=sum(output.loose_packets_made for output in worker_card.outputs),
+                blank_used_bora=worker_card.blank_used_bora,
+                bottom_used_roll=worker_card.bottom_used_roll,
+                note=worker_card.note,
+            )
+            db.add(worker_line)
+            db.flush()
+            for output_index, output in enumerate(worker_card.outputs):
+                sku = sku_by_id[output.finished_good_id]
+                response = _create_daily_production(
+                    DailyProductionCreate(
+                        date=payload.date,
+                        worker_id=worker_card.worker_id,
+                        machine_id=payload.machine_id,
+                        product_id=sku.id,
+                        product_size_ml=sku.product_size_ml,
+                        variety=sku.variety,
+                        packaging_size_name=sku.packaging_size_name,
+                        pieces_per_packet=sku.pieces_per_packet,
+                        packets_per_box_limit=sku.packets_per_box_limit,
+                        shift="Night" if payload.shift.strip().casefold() == "night" else "Day",
+                        total_boxes_made=output.boxes_made,
+                        loose_packets_made=output.loose_packets_made,
+                        blank_used_bori=worker_card.blank_used_bora if output_index == 0 else Decimal("0.000"),
+                        bottom_used_rolls=worker_card.bottom_used_roll if output_index == 0 else 0,
+                        wastage_kg=Decimal("0.000"),
+                        remarks=worker_card.note,
+                    ),
+                    background_tasks,
+                    current_user,
+                    db,
+                    commit=False,
+                    allow_material_fallback=False,
+                )
+                responses.append(response)
+                if output_index == 0:
+                    worker_line.daily_production_id = response.production_id
+                db.add(ProductionBatchOutputLine(
+                    factory_id=factory_id,
+                    worker_line_id=worker_line.id,
+                    finished_good_id=sku.id,
+                    daily_production_id=response.production_id,
+                    boxes_made=output.boxes_made,
+                    loose_packets_made=output.loose_packets_made,
+                    boxes_from_loose=response.boxes_from_loose,
+                ))
+        existing_wastage = db.query(ShiftWastage).filter(
+            ShiftWastage.factory_id == factory_id,
+            ShiftWastage.date == payload.date,
+            ShiftWastage.shift == payload.shift.strip(),
+        ).first()
+        if existing_wastage is None:
+            db.add(ShiftWastage(
+                factory_id=factory_id,
+                date=payload.date,
+                shift=payload.shift.strip(),
+                wastage_kg=payload.shift_wastage_kg,
+                note=payload.wastage_note,
             ))
-        line_converted_boxes = sum(response.boxes_from_loose for response in responses)
-        missing_carton_deduction = converted_boxes - line_converted_boxes
-        if missing_carton_deduction > 0:
-            carton_stock.total_boxes -= missing_carton_deduction
-            carton_stock.quantity = carton_stock.total_boxes
+        else:
+            existing_wastage.wastage_kg = payload.shift_wastage_kg
+            existing_wastage.note = payload.wastage_note
         db.commit()
     except Exception:
         db.rollback()
@@ -905,16 +988,18 @@ def create_daily_production_batch(
 
     return {
         "batch_id": batch.id,
-        "worker_line_count": len(payload.worker_rows),
+        "worker_line_count": len(payload.worker_cards),
+        "output_line_count": len(responses),
         "daily_production_ids": [response.production_id for response in responses],
         "total_boxes_made": total_boxes,
         "total_loose_packets_made": total_loose,
-        "converted_boxes_from_loose": converted_boxes,
-        "remaining_loose_packets": remaining_loose,
-        "finished_boxes_added": total_boxes + converted_boxes,
+        "converted_boxes_from_loose": sum(converted_by_sku.values()),
+        "remaining_loose_packets": sum(remaining_by_sku.values()),
+        "finished_boxes_added": total_boxes + sum(converted_by_sku.values()),
         "blank_bora_deducted": float(total_blank),
         "bottom_rolls_deducted": total_bottom,
-        "cartons_deducted": total_boxes + converted_boxes,
+        "cartons_deducted": sum(carton_requirements.values()),
+        "cartons_deducted_by_type": carton_requirements,
         "shift_wastage_kg": float(payload.shift_wastage_kg),
     }
 
@@ -944,6 +1029,19 @@ def list_daily_production_batches(
             Worker.id.in_(worker_ids),
         ).all()
     } if worker_ids else {}
+    sku_ids = {
+        output.finished_good_id
+        for batch in batches
+        for line in batch.worker_lines
+        for output in line.outputs
+    }
+    sku_by_id = {
+        sku.id: sku
+        for sku in db.query(FinalProductStock).filter(
+            FinalProductStock.factory_id == str(current_user.factory_id),
+            FinalProductStock.id.in_(sku_ids),
+        ).all()
+    } if sku_ids else {}
     return [{
         "id": batch.id,
         "date": batch.date.isoformat(),
@@ -968,6 +1066,18 @@ def list_daily_production_batches(
             "blank_used_bora": float(line.blank_used_bora or 0),
             "bottom_used_roll": line.bottom_used_roll,
             "note": line.note,
+            "outputs": [{
+                "id": output.id,
+                "finished_good_id": output.finished_good_id,
+                "product_size_ml": sku_by_id[output.finished_good_id].product_size_ml if output.finished_good_id in sku_by_id else None,
+                "variety": sku_by_id[output.finished_good_id].variety if output.finished_good_id in sku_by_id else None,
+                "packaging_size_name": sku_by_id[output.finished_good_id].packaging_size_name if output.finished_good_id in sku_by_id else None,
+                "carton_type": sku_by_id[output.finished_good_id].carton_type if output.finished_good_id in sku_by_id else None,
+                "boxes_made": output.boxes_made,
+                "loose_packets_made": output.loose_packets_made,
+                "boxes_from_loose": output.boxes_from_loose,
+                "daily_production_id": output.daily_production_id,
+            } for output in line.outputs],
         } for line in batch.worker_lines],
     } for batch in batches]
 

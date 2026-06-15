@@ -3,12 +3,13 @@ import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  createDailyProduction,
+  createDailyProductionBatch,
   createFinishedGoodVariant,
   getDashboardMachines,
   getDashboardWorkers,
   getFinalStockOptions,
   getDailyProductionHistory,
+  getDailyProductionBatches,
   getProductionWorkerSummary,
   rejectDailyProduction,
   getInventory,
@@ -18,6 +19,7 @@ import {
 import type {
   DailyProductionCreate,
   ProductionBatchCreate,
+  ProductionBatchHistory,
   DashboardMachine,
   DashboardWorker,
   FinalStockOption,
@@ -35,6 +37,34 @@ type NewVariantForm = {
   packets_per_box_limit: string;
   opening_stock_boxes: string;
 };
+
+type WorkerOutputDraft = {
+  finished_good_id: number;
+  boxes_made: number;
+  loose_packets_made: number;
+};
+
+type WorkerCardDraft = {
+  worker_id: number;
+  blank_used_bora: number;
+  bottom_used_roll: number;
+  note: string;
+  outputs: WorkerOutputDraft[];
+};
+
+const emptyOutput = (): WorkerOutputDraft => ({
+  finished_good_id: 0,
+  boxes_made: 0,
+  loose_packets_made: 0,
+});
+
+const emptyWorkerCard = (workerId = 0): WorkerCardDraft => ({
+  worker_id: workerId,
+  blank_used_bora: 0,
+  bottom_used_roll: 0,
+  note: "",
+  outputs: [emptyOutput()],
+});
 
 const emptyNewVariant: NewVariantForm = {
   product_size_ml: "",
@@ -103,6 +133,9 @@ export default function ProductionPage() {
   const [wastageShift, setWastageShift] = useState<"Day" | "Night" | "Custom">("Day");
   const [isSavingWastage, setIsSavingWastage] = useState(false);
   const [hasExistingWastage, setHasExistingWastage] = useState(false);
+  const [workerCards, setWorkerCards] = useState<WorkerCardDraft[]>([emptyWorkerCard()]);
+  const [batchHistory, setBatchHistory] = useState<ProductionBatchHistory[]>([]);
+  const [expandedBatchWorker, setExpandedBatchWorker] = useState<number | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -156,28 +189,15 @@ export default function ProductionPage() {
     }
   }
 
-  const selectedProduct = useMemo(
-    () => finalStockOptions.find((item) => item.id === form.product_id),
-    [finalStockOptions, form.product_id],
-  );
-  const packagingOptions = useMemo(
-    () => selectedProduct
-      ? finalStockOptions.filter(
-          (item) =>
-            item.product_size_ml === selectedProduct.product_size_ml
-            && item.variety.trim().toLowerCase() === selectedProduct.variety.trim().toLowerCase(),
-        )
-      : [],
-    [finalStockOptions, selectedProduct],
-  );
-
   async function loadProductionVisibility() {
-    const [summaryResponse, historyResponse] = await Promise.all([
+    const [summaryResponse, historyResponse, batchResponse] = await Promise.all([
       getProductionWorkerSummary(todayDate()),
       getDailyProductionHistory(todayDate()),
+      getDailyProductionBatches(todayDate()),
     ]);
     setSummary(summaryResponse.data);
     setHistory(historyResponse.data);
+    setBatchHistory(batchResponse.data);
   }
 
   async function loadOptions() {
@@ -201,6 +221,7 @@ export default function ProductionPage() {
     setWorkers(cleanWorkers);
     setMachines(Array.from(new Map(cleanMachines.map((machine) => [machine.id, machine])).values()));
     setFinalStockOptions([]);
+    setWorkerCards([emptyWorkerCard(cleanWorkers[0]?.id || 0)]);
     setForm((current) => ({
       ...current,
       worker_id: current.worker_id || cleanWorkers[0]?.id || 0,
@@ -224,6 +245,10 @@ export default function ProductionPage() {
       packaging_size_name: "",
     }));
     setFinalStockOptions([]);
+    setWorkerCards((cards) => cards.map((card) => ({
+      ...card,
+      outputs: [emptyOutput()],
+    })));
     if (!machineId) return;
     try {
       const response = await getFinalStockOptions(undefined, true, { machineId });
@@ -237,54 +262,50 @@ export default function ProductionPage() {
   }
 
   async function submit() {
-    if (!form.machine_id || !form.product_id || !selectedProduct) {
-      setError("Inventory mapping incomplete for this SKU.");
+    if (!form.machine_id) {
+      setError("Select a machine.");
       return;
     }
-    if (!form.worker_id) {
-      setError("Select a worker.");
+    if (!workerCards.length || workerCards.some((card) => !card.worker_id || !card.outputs.length)) {
+      setError("Every worker card needs a worker and at least one output.");
+      return;
+    }
+    if (workerCards.some((card) => card.outputs.some((output) => !output.finished_good_id || (!output.boxes_made && !output.loose_packets_made)))) {
+      setError("Select a finished good and enter production on every output line.");
       return;
     }
     setIsSaving(true);
     setError("");
     try {
       const normalizedDate = dateOnly(form.date);
-      const payload: DailyProductionCreate = {
+      const payload: ProductionBatchCreate = {
         date: normalizedDate,
-        shift: String(form.shift || "Day") as "Day" | "Night",
+        shift: String(form.shift || "Day"),
         machine_id: numberOrDefault(form.machine_id),
-        product_id: numberOrDefault(form.product_id),
-        product_size_ml: numberOrDefault(form.product_size_ml),
-        variety: String(form.variety || "Standard/White").trim(),
-        packaging_size_name: String(form.packaging_size_name || form.packaging_size || "").trim(),
-        pieces_per_packet: numberOrDefault(form.pieces_per_packet, 1) || 1,
-        packets_per_box_limit: numberOrDefault(form.packets_per_box_limit, 1) || 1,
-        worker_id: numberOrDefault(form.worker_id),
-        total_boxes_made: numberOrDefault(form.total_boxes_made),
-        loose_packets_made: numberOrDefault(form.loose_packets_made),
-        blank_used_bori: numberOrDefault(form.blank_used_bori),
-        bottom_used_rolls: numberOrDefault(form.bottom_used_rolls),
-        wastage_kg: 0,
+        worker_cards: workerCards.map((card) => ({
+          worker_id: card.worker_id,
+          blank_used_bora: numberOrDefault(card.blank_used_bora),
+          bottom_used_roll: numberOrDefault(card.bottom_used_roll),
+          note: card.note.trim() || null,
+          outputs: card.outputs.map((output) => ({
+            finished_good_id: output.finished_good_id,
+            boxes_made: numberOrDefault(output.boxes_made),
+            loose_packets_made: numberOrDefault(output.loose_packets_made),
+          })),
+        })),
+        shift_wastage_kg: numberOrDefault(shiftWastageKg),
+        wastage_note: wastageNote.trim() || null,
       };
-      const response = await createDailyProduction(payload);
-      setToast("Production entry saved successfully.");
+      const response = await createDailyProductionBatch(payload);
+      setToast("Shift production saved successfully.");
       window.dispatchEvent(new CustomEvent("production:daily-saved", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("attendance:updated", { detail: response.data }));
       window.dispatchEvent(new CustomEvent("inventory:updated", { detail: response.data }));
       void loadOptions();
       void loadProductionVisibility();
-      setForm({
-        ...initialForm,
-        worker_id: workers[0]?.id || 0,
-        machine_id: machines[0]?.id || 0,
-        product_id: finalStockOptions[0]?.id || null,
-        product_size_ml: finalStockOptions[0]?.product_size_ml || null,
-        variety: finalStockOptions[0]?.variety || initialForm.variety,
-        packaging_size: finalStockOptions[0]?.packaging_size || finalStockOptions[0]?.packaging_size_name || initialForm.packaging_size,
-        packaging_size_name: finalStockOptions[0]?.packaging_size_name || initialForm.packaging_size_name,
-        pieces_per_packet: finalStockOptions[0]?.pieces_per_packet || initialForm.pieces_per_packet,
-        packets_per_box_limit: finalStockOptions[0]?.packets_per_box || finalStockOptions[0]?.packets_per_box_limit || initialForm.packets_per_box_limit
-      });
+      setWorkerCards([emptyWorkerCard(workers[0]?.id || 0)]);
+      setShiftWastageKg(0);
+      setWastageNote("");
     } catch (caught) {
       if (axios.isAxiosError(caught)) {
         console.error("daily production error response", caught.response?.data || caught.message);
@@ -485,11 +506,31 @@ export default function ProductionPage() {
 
       <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today's Entries</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead><tr className="border-b text-zinc-500"><th className="py-2">Worker</th><th>Product</th><th>Production</th><th>Raw Material</th><th>Machine</th><th>Status</th><th /></tr></thead>
-            <tbody>{history.map((entry) => <tr key={entry.id} className="border-b"><td className="py-3">{entry.worker_name}</td><td>{entry.product_size_ml}ml {entry.product_type}</td><td>{entry.quantity_boxes.toLocaleString()} boxes / {entry.loose_packets_made.toLocaleString()} loose</td><td>Blank: {entry.blank_used_bora} bora / {entry.blank_used_kg} KG<br />Bottom: {entry.bottom_used_rolls} roll</td><td>{entry.machine_name}</td><td className={entry.status === "REJECTED" ? "text-red-700" : "text-green-700"}>{entry.status}</td><td className="text-right">{entry.status === "ACTIVE" ? <button className="font-semibold text-red-700" type="button" onClick={() => setRejecting(entry)}>Reject</button> : null}</td></tr>)}</tbody>
-          </table>
+        <div className="space-y-3">
+          {batchHistory.map((batch) => (
+            <div key={batch.id} className="rounded-lg border border-zinc-200">
+              <div className="grid gap-2 bg-zinc-50 px-4 py-3 text-sm md:grid-cols-5">
+                <strong>{batch.shift} Shift</strong>
+                <span>{batch.worker_lines.length} workers</span>
+                <span>{batch.total_boxes} boxes / {batch.total_loose_packets} loose</span>
+                <span>Blank {batch.total_blank_bora} / Bottom {batch.total_bottom_roll}</span>
+                <span>Wastage {batch.shift_wastage_kg} KG</span>
+              </div>
+              {batch.worker_lines.map((worker) => {
+                const open = expandedBatchWorker === worker.id;
+                return (
+                  <div key={worker.id} className="border-t">
+                    <button className="flex w-full items-center justify-between px-4 py-3 text-left" type="button" onClick={() => setExpandedBatchWorker(open ? null : worker.id)}>
+                      <span className="font-semibold">{open ? <ChevronDown className="mr-2 inline h-4 w-4" /> : <ChevronRight className="mr-2 inline h-4 w-4" />}{worker.worker_name}</span>
+                      <span className="text-sm">Blank {worker.blank_used_bora} bora / Bottom {worker.bottom_used_roll} roll</span>
+                    </button>
+                    {open ? <div className="border-t bg-white px-4 py-2">{worker.outputs.map((output) => <div key={output.id} className="flex flex-wrap justify-between gap-2 border-b py-2 text-sm last:border-0"><span>{output.product_size_ml}ml {output.variety} - {output.packaging_size_name}</span><span>{output.boxes_made} boxes / {output.loose_packets_made} loose / {output.carton_type}</span></div>)}</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {!batchHistory.length ? <p className="text-sm text-zinc-500">No shift batches recorded today.</p> : null}
         </div>
       </section>
 
@@ -519,63 +560,6 @@ export default function ProductionPage() {
                 </option>
               ))}
             </SelectField>
-            <ProductSelectField
-              label="Product"
-              value={form.product_id || 0}
-              options={finalStockOptions}
-              disabled={!form.machine_id}
-              onChange={(product_id) => {
-                const selected = finalStockOptions.find((item) => item.id === product_id);
-                const firstPackaging = finalStockOptions.find(
-                  (item) =>
-                    item.product_size_ml === selected?.product_size_ml
-                    && item.variety.trim().toLowerCase() === selected?.variety.trim().toLowerCase(),
-                );
-                setForm({
-                  ...form,
-                  product_id: firstPackaging?.id || product_id,
-                  product_size_ml: selected?.product_size_ml || form.product_size_ml,
-                  variety: selected?.variety || form.variety,
-                  packaging_size: firstPackaging?.packaging_size || firstPackaging?.packaging_size_name || "",
-                  packaging_size_name: firstPackaging?.packaging_size_name || "",
-                  pieces_per_packet: firstPackaging?.pieces_per_packet || form.pieces_per_packet,
-                  packets_per_box_limit: firstPackaging?.packets_per_box || firstPackaging?.packets_per_box_limit || form.packets_per_box_limit
-                });
-              }}
-            />
-            <VariationSelectField
-              label="Packaging Size Variation"
-              value={form.product_id || 0}
-              options={packagingOptions}
-              disabled={!selectedProduct}
-              onChange={(product_id) => {
-                const selected = finalStockOptions.find((item) => item.id === product_id);
-                setForm({
-                  ...form,
-                  product_id,
-                  product_size_ml: selected?.product_size_ml || form.product_size_ml,
-                  variety: selected?.variety || form.variety,
-                  packaging_size: selected?.packaging_size || selected?.packaging_size_name || form.packaging_size,
-                  packaging_size_name: selected?.packaging_size_name || form.packaging_size_name,
-                  pieces_per_packet: selected?.pieces_per_packet || form.pieces_per_packet,
-                  packets_per_box_limit: selected?.packets_per_box || selected?.packets_per_box_limit || form.packets_per_box_limit
-                });
-              }}
-            />
-            <div className="self-end rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-              Carton: <strong>{selectedProduct?.carton_type || "Not configured"}</strong>
-            </div>
-
-            <SelectField label="Worker Name" value={form.worker_id} onChange={(worker_id) => setForm({ ...form, worker_id })}>
-              <option value={0}>Select Worker</option>
-              {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
-            </SelectField>
-
-            <NumberField label="Finished Boxes Made" value={form.total_boxes_made} onChange={(total_boxes_made) => setForm({ ...form, total_boxes_made })} />
-            <NumberField label="Loose Packets Made" value={form.loose_packets_made} onChange={(loose_packets_made) => setForm({ ...form, loose_packets_made })} />
-            <NumberField label="Blank Used / Bora Used" value={form.blank_used_bori} onChange={(blank_used_bori) => setForm({ ...form, blank_used_bori })} />
-            <NumberField label="Bottom Used / Roll Used" value={form.bottom_used_rolls} onChange={(bottom_used_rolls) => setForm({ ...form, bottom_used_rolls })} />
-
             <div className="flex flex-col justify-end">
               <span className="text-sm font-medium text-zinc-700">Need a new variant?</span>
               <button
@@ -602,21 +586,84 @@ export default function ProductionPage() {
             </div>
           </div>
 
-          <BatchPreview
-            boxes={numberOrDefault(form.total_boxes_made)}
-            loose={numberOrDefault(form.loose_packets_made)}
-            packetsPerBox={numberOrDefault(form.packets_per_box_limit, 1)}
-            previousLoose={numberOrDefault(selectedProduct?.loose_packets)}
-            cartonType={selectedProduct?.carton_type || "Carton"}
-            blank={numberOrDefault(form.blank_used_bori)}
-            bottom={numberOrDefault(form.bottom_used_rolls)}
-          />
+          <div className="mt-5 space-y-4">
+            {workerCards.map((card, cardIndex) => (
+              <div key={cardIndex} className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-semibold text-zinc-950">Worker Production {cardIndex + 1}</h3>
+                  {workerCards.length > 1 ? (
+                    <button className="text-sm font-semibold text-red-600" type="button" onClick={() => setWorkerCards((cards) => cards.filter((_, index) => index !== cardIndex))}>
+                      Remove Worker
+                    </button>
+                  ) : null}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <SelectField label="Worker" value={card.worker_id} onChange={(worker_id) => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, worker_id } : item))}>
+                    <option value={0}>Select Worker</option>
+                    {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+                  </SelectField>
+                  <NumberField label="Blank Used (Bora)" value={card.blank_used_bora} onChange={(blank_used_bora) => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, blank_used_bora } : item))} />
+                  <NumberField label="Bottom Used (Roll)" value={card.bottom_used_roll} onChange={(bottom_used_roll) => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, bottom_used_roll } : item))} />
+                </div>
+                <label className="mt-3 block text-sm">
+                  <span className="font-medium text-zinc-700">Worker Note</span>
+                  <input className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-3" value={card.note} onChange={(event) => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, note: event.target.value } : item))} />
+                </label>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-sm">
+                    <thead><tr className="border-b text-zinc-500"><th className="pb-2">Product / Packaging</th><th>Carton</th><th>PCS / Packet</th><th>Packets / Box</th><th>Boxes</th><th>Loose</th><th /></tr></thead>
+                    <tbody>
+                      {card.outputs.map((output, outputIndex) => {
+                        const sku = finalStockOptions.find((item) => item.id === output.finished_good_id);
+                        return (
+                          <tr key={outputIndex} className="border-b border-zinc-200">
+                            <td className="py-2 pr-2">
+                              <select className="h-10 w-full rounded-md border border-zinc-200 bg-white px-2" value={output.finished_good_id} onChange={(event) => {
+                                const finished_good_id = Number(event.target.value);
+                                setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? {
+                                  ...item,
+                                  outputs: item.outputs.map((line, lineIndex) => lineIndex === outputIndex ? { ...line, finished_good_id } : line),
+                                } : item));
+                              }}>
+                                <option value={0}>Select SKU</option>
+                                {finalStockOptions.map((item) => <option key={item.id} value={item.id}>{item.product_size_ml}ml {item.variety} - {item.packaging_size_name}</option>)}
+                              </select>
+                            </td>
+                            <td>{sku?.carton_type || "--"}</td>
+                            <td>{sku?.pieces_per_packet || "--"}</td>
+                            <td>{sku?.packets_per_box || sku?.packets_per_box_limit || "--"}</td>
+                            <td><input className="h-9 w-20 rounded border px-2" min={0} type="number" value={output.boxes_made} onChange={(event) => {
+                              const boxes_made = numberOrDefault(event.target.value);
+                              setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, outputs: item.outputs.map((line, lineIndex) => lineIndex === outputIndex ? { ...line, boxes_made } : line) } : item));
+                            }} /></td>
+                            <td><input className="h-9 w-20 rounded border px-2" min={0} type="number" value={output.loose_packets_made} onChange={(event) => {
+                              const loose_packets_made = numberOrDefault(event.target.value);
+                              setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, outputs: item.outputs.map((line, lineIndex) => lineIndex === outputIndex ? { ...line, loose_packets_made } : line) } : item));
+                            }} /></td>
+                            <td>{card.outputs.length > 1 ? <button className="text-red-600" type="button" onClick={() => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, outputs: item.outputs.filter((_, lineIndex) => lineIndex !== outputIndex) } : item))}>Remove</button> : null}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button className="mt-3 inline-flex items-center gap-2 rounded-md border border-brand-300 px-3 py-2 text-sm font-semibold text-brand-700" type="button" onClick={() => setWorkerCards((cards) => cards.map((item, index) => index === cardIndex ? { ...item, outputs: [...item.outputs, emptyOutput()] } : item))}>
+                  <Plus className="h-4 w-4" /> Add Output Line
+                </button>
+              </div>
+            ))}
+            <button className="inline-flex items-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-semibold text-white" type="button" onClick={() => setWorkerCards((cards) => [...cards, emptyWorkerCard()])}>
+              <Plus className="h-4 w-4" /> Add Worker Production
+            </button>
+          </div>
+
+          <ShiftBatchPreview workerCards={workerCards} options={finalStockOptions} wastage={shiftWastageKg} />
 
           {error ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
           <button className="mt-5 inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-zinc-300" data-test-id="save-production-button" disabled={isSaving} type="button" onClick={submit}>
             <Check className="h-4 w-4" />
-            {isSaving ? "Saving..." : "Save Production"}
+            {isSaving ? "Saving..." : "Save Shift Production"}
           </button>
         </section>
 
@@ -878,37 +925,47 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   );
 }
 
-function BatchPreview({
-  boxes,
-  loose,
-  packetsPerBox,
-  previousLoose,
-  cartonType,
-  blank,
-  bottom,
+function ShiftBatchPreview({
+  workerCards,
+  options,
+  wastage,
 }: {
-  boxes: number;
-  loose: number;
-  packetsPerBox: number;
-  previousLoose: number;
-  cartonType: string;
-  blank: number;
-  bottom: number;
+  workerCards: WorkerCardDraft[];
+  options: FinalStockOption[];
+  wastage: number;
 }) {
-  const converted = Math.floor((previousLoose + loose) / Math.max(packetsPerBox, 1)) - Math.floor(previousLoose / Math.max(packetsPerBox, 1));
-  const remaining = (previousLoose + loose) % Math.max(packetsPerBox, 1);
+  const outputs = workerCards.flatMap((card) => card.outputs);
+  const totalBoxes = outputs.reduce((sum, output) => sum + numberOrDefault(output.boxes_made), 0);
+  const totalLoose = outputs.reduce((sum, output) => sum + numberOrDefault(output.loose_packets_made), 0);
+  const totalBlank = workerCards.reduce((sum, card) => sum + numberOrDefault(card.blank_used_bora), 0);
+  const totalBottom = workerCards.reduce((sum, card) => sum + numberOrDefault(card.bottom_used_roll), 0);
+  const cartons = new Map<string, number>();
+  const finished = new Map<string, string>();
+  for (const output of outputs) {
+    const sku = options.find((item) => item.id === output.finished_good_id);
+    if (!sku) continue;
+    const packetsPerBox = numberOrDefault(sku.packets_per_box || sku.packets_per_box_limit, 1);
+    const converted = Math.floor((numberOrDefault(sku.loose_packets) + output.loose_packets_made) / packetsPerBox)
+      - Math.floor(numberOrDefault(sku.loose_packets) / packetsPerBox);
+    const added = output.boxes_made + converted;
+    const carton = sku.carton_type || "Unmapped carton";
+    cartons.set(carton, (cartons.get(carton) || 0) + added);
+    finished.set(`${sku.product_size_ml}ml ${sku.variety} ${sku.packaging_size_name}`, `${added} boxes`);
+  }
   return (
     <div className="mt-6 rounded-lg border border-brand-200 bg-brand-50 p-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-brand-800">Preview Before Save</h3>
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-brand-800">Shift Preview</h3>
       <div className="mt-3 grid gap-2 text-sm md:grid-cols-3">
-        <p>Total boxes made: <strong>{boxes}</strong></p>
-        <p>Total loose packets: <strong>{loose}</strong></p>
-        <p>Converted loose boxes: <strong>{converted}</strong></p>
-        <p>Remaining loose packets: <strong>{remaining}</strong></p>
-        <p>Finished goods to add: <strong>{boxes + converted} boxes</strong></p>
-        <p>{cartonType} stock to deduct: <strong>{boxes + converted}</strong></p>
-        <p>Blank to deduct: <strong>{blank} bora</strong></p>
-        <p>Bottom to deduct: <strong>{bottom} rolls</strong></p>
+        <p>Total workers: <strong>{workerCards.length}</strong></p>
+        <p>Total boxes: <strong>{totalBoxes}</strong></p>
+        <p>Total loose packets: <strong>{totalLoose}</strong></p>
+        <p>Blank to deduct: <strong>{totalBlank} bora</strong></p>
+        <p>Bottom to deduct: <strong>{totalBottom} rolls</strong></p>
+        <p>Shift wastage: <strong>{numberOrDefault(wastage)} KG</strong></p>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div><p className="font-semibold text-brand-900">Box stock to deduct</p>{Array.from(cartons).map(([name, value]) => <p key={name} className="text-sm">{name}: {value}</p>)}</div>
+        <div><p className="font-semibold text-brand-900">Finished goods to add</p>{Array.from(finished).map(([name, value]) => <p key={name} className="text-sm">{name}: {value}</p>)}</div>
       </div>
     </div>
   );

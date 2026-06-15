@@ -1441,6 +1441,31 @@ class ProductionBatchWorkerLine(TenantMixin, Base):
     note = Column(Text, nullable=True)
 
     batch = relationship("ProductionBatch", back_populates="worker_lines")
+    outputs = relationship("ProductionBatchOutputLine", back_populates="worker_line", cascade="all, delete-orphan")
+
+
+class ProductionBatchOutputLine(TenantMixin, Base):
+    __tablename__ = "production_batch_output_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    worker_line_id = Column(
+        Integer,
+        ForeignKey("production_batch_worker_lines.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    finished_good_id = Column(Integer, ForeignKey("final_product_stock.id"), nullable=False, index=True)
+    daily_production_id = Column(
+        Integer,
+        ForeignKey("daily_productions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    boxes_made = Column(Integer, nullable=False, default=0, server_default="0")
+    loose_packets_made = Column(Integer, nullable=False, default=0, server_default="0")
+    boxes_from_loose = Column(Integer, nullable=False, default=0, server_default="0")
+
+    worker_line = relationship("ProductionBatchWorkerLine", back_populates="outputs")
 
 
 class DailySale(TenantMixin, Base):
