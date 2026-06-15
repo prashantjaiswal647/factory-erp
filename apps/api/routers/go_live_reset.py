@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from db import get_db
 from dependencies import check_permissions
 from models import User
+from services.master_backup import PreRestoreBackupError
 from services.go_live_reset import confirm_go_live_reset, preview_go_live_reset
 
 
@@ -103,6 +104,14 @@ def confirm_reset(
             invoice_starts=payload.invoice_starts.model_dump(),
             opening_outstanding=[item.model_dump() for item in payload.opening_outstanding],
         )
+    except PreRestoreBackupError as exc:
+        db.rollback()
+        logger.exception(
+            "Go-live reset safety backup failed factory_id=%s scope=%s",
+            current_user.factory_id,
+            payload.scope,
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(

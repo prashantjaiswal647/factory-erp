@@ -36,6 +36,11 @@ STAGING_ROOT = BACKUP_ROOT / "restore-staging"
 META_SHEET = "Backup Metadata"
 logger = logging.getLogger(__name__)
 
+
+class PreRestoreBackupError(RuntimeError):
+    """Raised when the mandatory database safety backup cannot be created."""
+
+
 SHEETS = {
     "Factory Profile": Factory,
     "Customers": Customer,
@@ -294,7 +299,12 @@ def _find_existing(db: Session, model, factory_id: int, sheet: str, record: dict
 
 
 def create_pre_restore_backup(db: Session, factory_id: int) -> Path:
-    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        message = f"Backup directory is not writable: {exc}"
+        logger.exception("pre_restore_backup_directory_failed backup_root=%s", BACKUP_ROOT)
+        raise PreRestoreBackupError(message) from exc
     bind = db.get_bind()
     if bind.dialect.name == "postgresql":
         path = BACKUP_ROOT / f"pre_restore_factory_{factory_id}_{datetime.utcnow():%Y%m%d_%H%M%S}.dump"
@@ -319,9 +329,26 @@ def create_pre_restore_backup(db: Session, factory_id: int) -> Path:
                 timeout=300,
                 env=env,
             )
-        except Exception as exc:
+        except FileNotFoundError as exc:
             path.unlink(missing_ok=True)
-            raise RuntimeError("Pre-restore PostgreSQL backup failed; restore aborted") from exc
+            message = "Pre-restore PostgreSQL backup failed: pg_dump executable was not found"
+            logger.exception("pg_dump executable not found command=%s", command[0])
+            raise PreRestoreBackupError(message) from exc
+        except subprocess.CalledProcessError as exc:
+            path.unlink(missing_ok=True)
+            stderr = (exc.stderr or "").strip()
+            message = stderr or f"pg_dump exited with status {exc.returncode}"
+            logger.exception("pg_dump failed stderr=%s", message)
+            raise PreRestoreBackupError(
+                f"Pre-restore PostgreSQL backup failed: {message}"
+            ) from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            path.unlink(missing_ok=True)
+            message = str(exc).strip() or exc.__class__.__name__
+            logger.exception("pg_dump could not create backup path=%s", path)
+            raise PreRestoreBackupError(
+                f"Pre-restore PostgreSQL backup failed: {message}"
+            ) from exc
         return path
     path = BACKUP_ROOT / f"pre_restore_factory_{factory_id}_{datetime.utcnow():%Y%m%d_%H%M%S}.xlsx"
     path.write_bytes(build_master_backup(db, factory_id).getvalue())

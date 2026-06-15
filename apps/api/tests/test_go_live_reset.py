@@ -1,5 +1,7 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+import subprocess
 
 import pytest
 from fastapi import HTTPException
@@ -25,6 +27,7 @@ from models import (
     Worker,
 )
 from services.go_live_reset import confirm_go_live_reset, preview_go_live_reset
+from services.master_backup import PreRestoreBackupError, create_pre_restore_backup
 from routers.go_live_reset import ConfirmRequest, confirm_reset
 
 
@@ -211,6 +214,100 @@ def test_backup_failure_prevents_any_reset(reset_db, monkeypatch):
     assert db.query(InvoiceDocument).count() == 1
     assert db.query(Customer).count() == 1
     assert db.query(DailyProduction).count() == 1
+
+
+def _postgres_db():
+    bind = type(
+        "Bind",
+        (),
+        {
+            "dialect": type("Dialect", (), {"name": "postgresql"})(),
+            "url": "postgresql://erp_admin:secret@ai-erp-postgres:5432/ai_erp",
+        },
+    )()
+    return type("Db", (), {"get_bind": lambda self: bind})()
+
+
+def test_pre_restore_backup_reports_missing_pg_dump(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "services.master_backup.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("pg_dump")),
+    )
+
+    with pytest.raises(PreRestoreBackupError, match="pg_dump executable was not found"):
+        create_pre_restore_backup(_postgres_db(), 1)
+
+
+def test_pre_restore_backup_reports_pg_dump_authentication_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    stderr = 'pg_dump: error: connection to server at "ai-erp-postgres" failed: password authentication failed'
+
+    def fail(command, **kwargs):
+        assert kwargs["env"]["PGPASSWORD"] == "secret"
+        raise subprocess.CalledProcessError(1, command, stderr=stderr)
+
+    monkeypatch.setattr("services.master_backup.subprocess.run", fail)
+
+    with pytest.raises(PreRestoreBackupError, match="password authentication failed"):
+        create_pre_restore_backup(_postgres_db(), 1)
+
+
+def test_pre_restore_backup_reports_directory_permission_failure(tmp_path, monkeypatch):
+    backup_root = tmp_path / "blocked"
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", backup_root)
+
+    def deny_mkdir(self, *args, **kwargs):
+        if self == backup_root:
+            raise PermissionError("Permission denied")
+        return original_mkdir(self, *args, **kwargs)
+
+    original_mkdir = Path.mkdir
+    monkeypatch.setattr(Path, "mkdir", deny_mkdir)
+
+    with pytest.raises(PreRestoreBackupError, match="Backup directory is not writable.*Permission denied"):
+        create_pre_restore_backup(_postgres_db(), 1)
+
+
+def test_successful_backup_runs_before_reset_deletion(reset_db, monkeypatch):
+    db, backup_path = reset_db
+    calls = []
+
+    def successful_backup(*_):
+        calls.append("backup")
+        return backup_path
+
+    def delete_sales(*args):
+        calls.append("delete")
+        return {}
+
+    monkeypatch.setattr("services.go_live_reset.create_pre_restore_backup", successful_backup)
+    monkeypatch.setattr("services.go_live_reset._delete_sales_transactions", delete_sales)
+
+    _confirm(db)
+
+    assert calls[:2] == ["backup", "delete"]
+
+
+def test_confirm_returns_exact_pg_dump_failure_to_owner(reset_db, monkeypatch):
+    db, _ = reset_db
+    detail = "Pre-restore PostgreSQL backup failed: password authentication failed"
+    monkeypatch.setattr(
+        "services.go_live_reset.create_pre_restore_backup",
+        lambda *_: (_ for _ in ()).throw(PreRestoreBackupError(detail)),
+    )
+    payload = ConfirmRequest(
+        scope="sales_only",
+        confirmation="RESET LIVE START",
+        reason="Remove verified test transactions",
+    )
+    owner = type("Owner", (), {"factory_id": 1, "id": 99})()
+
+    with pytest.raises(HTTPException) as caught:
+        confirm_reset(payload, owner, db)
+
+    assert caught.value.status_code == 500
+    assert caught.value.detail == detail
 
 
 def test_preview_works_with_empty_db(reset_db):
