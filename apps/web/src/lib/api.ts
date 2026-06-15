@@ -1492,7 +1492,7 @@ export type AuthorizedSignature = {
 };
 
 export function getAuthorizedSignatures() {
-  return api.get<AuthorizedSignature[]>("/api/onboarding/signatures");
+  return api.get<unknown>("/api/onboarding/signatures");
 }
 
 export function uploadAuthorizedSignature(role: AuthorizedSignatureRole, file: File) {
