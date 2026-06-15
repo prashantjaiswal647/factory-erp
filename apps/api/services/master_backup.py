@@ -17,6 +17,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import make_url
 
+from db import DATABASE_URL
 from models import (
     BillPayment, BlankStock, BottomStock, BoxStock, Customer, CustomerLedgerAdjustment,
     DailyProduction, Employee, ExpenseLog, Factory, FactoryExpense, FinalProductStock,
@@ -39,6 +40,15 @@ logger = logging.getLogger(__name__)
 
 class PreRestoreBackupError(RuntimeError):
     """Raised when the mandatory database safety backup cannot be created."""
+
+
+def _configured_database_url():
+    database_url = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("SQLALCHEMY_DATABASE_URL")
+        or DATABASE_URL
+    )
+    return make_url(database_url)
 
 
 SHEETS = {
@@ -308,18 +318,18 @@ def create_pre_restore_backup(db: Session, factory_id: int) -> Path:
     bind = db.get_bind()
     if bind.dialect.name == "postgresql":
         path = BACKUP_ROOT / f"pre_restore_factory_{factory_id}_{datetime.utcnow():%Y%m%d_%H%M%S}.dump"
-        url = make_url(str(bind.url))
+        url = _configured_database_url()
+        if not all((url.host, url.username, url.password, url.database)):
+            raise PreRestoreBackupError(
+                "Pre-restore PostgreSQL backup failed: configured database URL must include host, username, password, and database"
+            )
         env = os.environ.copy()
-        if url.password:
-            env["PGPASSWORD"] = url.password
+        env["PGPASSWORD"] = url.password
         command = ["pg_dump", "-Fc", "--file", str(path)]
-        if url.host:
-            command.extend(["--host", url.host])
-        if url.port:
-            command.extend(["--port", str(url.port)])
-        if url.username:
-            command.extend(["--username", url.username])
-        command.append(url.database or "")
+        command.extend(["--host", url.host])
+        command.extend(["--port", str(url.port or 5432)])
+        command.extend(["--username", url.username])
+        command.append(url.database)
         try:
             subprocess.run(
                 command,
@@ -349,6 +359,13 @@ def create_pre_restore_backup(db: Session, factory_id: int) -> Path:
             raise PreRestoreBackupError(
                 f"Pre-restore PostgreSQL backup failed: {message}"
             ) from exc
+        if not path.is_file() or path.stat().st_size == 0:
+            path.unlink(missing_ok=True)
+            message = "pg_dump completed without creating a backup file"
+            logger.error("pg_dump output missing or empty path=%s", path)
+            raise PreRestoreBackupError(
+                f"Pre-restore PostgreSQL backup failed: {message}"
+            )
         return path
     path = BACKUP_ROOT / f"pre_restore_factory_{factory_id}_{datetime.utcnow():%Y%m%d_%H%M%S}.xlsx"
     path.write_bytes(build_master_backup(db, factory_id).getvalue())

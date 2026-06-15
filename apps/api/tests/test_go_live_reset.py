@@ -216,13 +216,13 @@ def test_backup_failure_prevents_any_reset(reset_db, monkeypatch):
     assert db.query(DailyProduction).count() == 1
 
 
-def _postgres_db():
+def _postgres_db(masked_url="postgresql://masked:***@masked-host:9999/masked_db"):
     bind = type(
         "Bind",
         (),
         {
             "dialect": type("Dialect", (), {"name": "postgresql"})(),
-            "url": "postgresql://erp_admin:secret@ai-erp-postgres:5432/ai_erp",
+            "url": masked_url,
         },
     )()
     return type("Db", (), {"get_bind": lambda self: bind})()
@@ -230,6 +230,10 @@ def _postgres_db():
 
 def test_pre_restore_backup_reports_missing_pg_dump(tmp_path, monkeypatch):
     monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://configured_user:configured_password@configured-host:5544/configured_db",
+    )
     monkeypatch.setattr(
         "services.master_backup.subprocess.run",
         lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("pg_dump")),
@@ -241,10 +245,23 @@ def test_pre_restore_backup_reports_missing_pg_dump(tmp_path, monkeypatch):
 
 def test_pre_restore_backup_reports_pg_dump_authentication_failure(tmp_path, monkeypatch):
     monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
-    stderr = 'pg_dump: error: connection to server at "ai-erp-postgres" failed: password authentication failed'
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://configured_user:configured_password@configured-host:5544/configured_db",
+    )
+    stderr = 'pg_dump: error: connection to server at "configured-host" failed: password authentication failed'
 
     def fail(command, **kwargs):
-        assert kwargs["env"]["PGPASSWORD"] == "secret"
+        assert kwargs["env"]["PGPASSWORD"] == "configured_password"
+        assert command[:3] == ["pg_dump", "-Fc", "--file"]
+        assert Path(command[3]).parent == tmp_path
+        assert command[4:] == [
+            "--host", "configured-host",
+            "--port", "5544",
+            "--username", "configured_user",
+            "configured_db",
+        ]
+        assert "masked" not in command
         raise subprocess.CalledProcessError(1, command, stderr=stderr)
 
     monkeypatch.setattr("services.master_backup.subprocess.run", fail)
@@ -267,6 +284,80 @@ def test_pre_restore_backup_reports_directory_permission_failure(tmp_path, monke
 
     with pytest.raises(PreRestoreBackupError, match="Backup directory is not writable.*Permission denied"):
         create_pre_restore_backup(_postgres_db(), 1)
+
+
+def test_pre_restore_backup_uses_configured_credentials_and_creates_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://app_user:url_encoded%40password@postgres-service:6432/app_database",
+    )
+    monkeypatch.setenv(
+        "SQLALCHEMY_DATABASE_URL",
+        "postgresql://wrong_user:wrong_password@wrong-host:5432/wrong_database",
+    )
+    captured = {}
+
+    def succeed(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        output_path = Path(command[command.index("--file") + 1])
+        output_path.write_bytes(b"PGDMP test backup")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("services.master_backup.subprocess.run", succeed)
+
+    backup_path = create_pre_restore_backup(_postgres_db(), 1)
+
+    assert backup_path.is_file()
+    assert backup_path.stat().st_size > 0
+    assert captured["env"]["PGPASSWORD"] == "url_encoded@password"
+    assert captured["command"][-9:] == [
+        "--file",
+        str(backup_path),
+        "--host",
+        "postgres-service",
+        "--port",
+        "6432",
+        "--username",
+        "app_user",
+        "app_database",
+    ]
+    assert "wrong_user" not in captured["command"]
+    assert "masked" not in captured["command"]
+
+
+def test_pre_restore_backup_rejects_missing_configured_password(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    monkeypatch.delenv("SQLALCHEMY_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app_user@postgres-service:5432/app_database")
+
+    with pytest.raises(PreRestoreBackupError, match="must include.*password"):
+        create_pre_restore_backup(_postgres_db(), 1)
+
+
+def test_pre_restore_backup_supports_sqlalchemy_database_url_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.master_backup.BACKUP_ROOT", tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "SQLALCHEMY_DATABASE_URL",
+        "postgresql://fallback_user:fallback_password@fallback-host:5433/fallback_db",
+    )
+
+    def succeed(command, **kwargs):
+        assert kwargs["env"]["PGPASSWORD"] == "fallback_password"
+        assert command[-7:] == [
+            "--host", "fallback-host",
+            "--port", "5433",
+            "--username", "fallback_user",
+            "fallback_db",
+        ]
+        Path(command[command.index("--file") + 1]).write_bytes(b"PGDMP fallback")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("services.master_backup.subprocess.run", succeed)
+
+    assert create_pre_restore_backup(_postgres_db(), 1).is_file()
 
 
 def test_successful_backup_runs_before_reset_deletion(reset_db, monkeypatch):
