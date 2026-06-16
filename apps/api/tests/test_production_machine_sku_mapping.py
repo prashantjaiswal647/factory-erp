@@ -48,9 +48,10 @@ def mapped_production_client():
     db = session_factory()
     db.add_all([
         Factory(id=1, name="Mapping Factory", subscription_status="active", active_plan="growth"),
-        User(id=1, factory_id=1, username="owner@test", email="owner@test", role="Owner", password_hash="x", is_verified=True),
-        User(id=2, factory_id=1, username="supervisor@test", email="supervisor@test", role="Supervisor", password_hash="x", is_verified=True),
-        User(id=3, factory_id=1, username="subowner@test", email="subowner@test", role="Sub-Owner", password_hash="x", is_verified=True),
+        User(id=1, factory_id=1, username="owner@test", email="owner@test", full_name="Owner", role="Owner", password_hash="x", is_verified=True),
+        User(id=2, factory_id=1, username="supervisor@test", email="supervisor@test", full_name="Supervisor", role="Supervisor", password_hash="x", is_verified=True),
+        User(id=3, factory_id=1, username="subowner@test", email="subowner@test", full_name="Sub Owner", role="Sub-Owner", password_hash="x", is_verified=True),
+        User(id=4, factory_id=1, username="supervisor2@test", email="supervisor2@test", full_name="Supervisor Two", role="Supervisor", password_hash="x", is_verified=True),
         Worker(id=1, factory_id=1, name="Raju", is_active=True),
         Worker(id=2, factory_id=1, name="Mohan", is_active=True),
         Worker(id=3, factory_id=1, name="Sohan", is_active=True),
@@ -180,6 +181,28 @@ def test_supervisor_cannot_reverse_another_users_or_verified_or_old_entry(mapped
     assert old_reverse.status_code == 403
 
 
+def test_supervisor_cannot_reverse_another_supervisor_entry_and_api_hides_action(mapped_production_client):
+    client, _ = mapped_production_client
+    _as_user(4, "Supervisor", "Supervisor Two")
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-11"))
+    assert created.status_code == 201, created.text
+    production_id = created.json()["production_id"]
+
+    _as_user(2, "Supervisor", "Supervisor")
+    review = client.get("/api/production/review", params={"date": "2026-06-11"})
+    assert review.status_code == 200
+    entry = review.json()["entries"][0]
+    assert entry["created_by"] == "Supervisor Two"
+    assert entry["created_by_role"] == "Supervisor"
+    assert entry["allowed_actions"]["can_reverse"] is False
+
+    reverse = client.post(
+        f"/api/production/daily/{production_id}/reverse",
+        json={"reason": "Trying hidden action"},
+    )
+    assert reverse.status_code == 403
+
+
 def test_owner_can_reverse_unverified_production_with_reason_and_review_lists_stock_impact(mapped_production_client):
     client, session_factory = mapped_production_client
     _as_user(2, "Supervisor", "Supervisor")
@@ -190,11 +213,16 @@ def test_owner_can_reverse_unverified_production_with_reason_and_review_lists_st
     assert created.json()["stock_before_json"]["finished_goods"]["boxes"] == 2
     assert created.json()["stock_after_json"]["finished_goods"]["boxes"] == 3
 
+    _as_user(1, "Owner", "Owner")
     review = client.get("/api/production/review", params={"date": "2026-06-10"})
     assert review.status_code == 200
-    assert review.json()["entries"][0]["stock_before_json"]["finished_goods"]["boxes"] == 2
+    entry = review.json()["entries"][0]
+    assert entry["worker_name"] == "Raju"
+    assert entry["created_by"] == "Supervisor"
+    assert entry["created_by_role"] == "Supervisor"
+    assert entry["stock_before_json"]["finished_goods"]["boxes"] == 2
+    assert entry["allowed_actions"] == {"can_reverse": True, "can_verify": True, "reason_required": True}
 
-    _as_user(1, "Owner", "Owner")
     missing_reason = client.post(f"/api/production/daily/{production_id}/reverse", json={"reason": ""})
     assert missing_reason.status_code == 422
     reversed_response = client.post(
@@ -203,10 +231,54 @@ def test_owner_can_reverse_unverified_production_with_reason_and_review_lists_st
     )
     assert reversed_response.status_code == 200, reversed_response.text
     assert reversed_response.json()["status"] == "reversed"
+    assert reversed_response.json()["reversed_by"] == "Owner"
+    assert reversed_response.json()["reversal_reason"] == "Supervisor entered duplicate production"
 
     db = session_factory()
     assert db.query(DailyProduction).filter_by(id=production_id).one().reversed_by_user_id == 1
     db.close()
+
+
+def test_owner_can_reverse_own_entry(mapped_production_client):
+    client, _ = mapped_production_client
+    _as_user(1, "Owner", "Owner")
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-12"))
+    assert created.status_code == 201, created.text
+    reverse = client.post(
+        f"/api/production/daily/{created.json()['production_id']}/reverse",
+        json={"reason": "Owner correcting own mistake"},
+    )
+    assert reverse.status_code == 200, reverse.text
+    assert reverse.json()["status"] == "reversed"
+
+
+def test_sub_owner_can_reverse_supervisor_but_not_owner_entry(mapped_production_client):
+    client, _ = mapped_production_client
+    _as_user(1, "Owner", "Owner")
+    owner_created = client.post("/api/production/daily", json=_production_payload(date="2026-06-13"))
+    assert owner_created.status_code == 201, owner_created.text
+
+    _as_user(3, "Sub-Owner", "Sub Owner")
+    blocked = client.post(
+        f"/api/production/daily/{owner_created.json()['production_id']}/reverse",
+        json={"reason": "Sub-owner should not reverse owner"},
+    )
+    assert blocked.status_code == 403
+
+    _as_user(2, "Supervisor", "Supervisor")
+    supervisor_created = client.post("/api/production/daily", json=_production_payload(date="2026-06-14"))
+    assert supervisor_created.status_code == 201, supervisor_created.text
+
+    _as_user(3, "Sub-Owner", "Sub Owner")
+    review = client.get("/api/production/review", params={"date": "2026-06-14"})
+    assert review.status_code == 200
+    assert review.json()["entries"][0]["allowed_actions"]["can_reverse"] is True
+    reversed_response = client.post(
+        f"/api/production/daily/{supervisor_created.json()['production_id']}/reverse",
+        json={"reason": "Sub-owner correcting supervisor duplicate"},
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    assert reversed_response.json()["reversed_by"] == "Sub Owner"
 
 
 def test_machine_scoped_options_and_exact_inventory_impact(mapped_production_client):

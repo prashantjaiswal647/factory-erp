@@ -2445,12 +2445,18 @@ export type ProductionReviewEntry = {
   stock_after_json: Record<string, unknown>;
   created_by: string | null;
   created_by_user_id: number | null;
+  created_by_role: string | null;
   created_at: string | null;
   verified_by: string | null;
   verified_at: string | null;
   reversed_by: string | null;
   reversed_at: string | null;
   reversal_reason: string | null;
+  allowed_actions: {
+    can_reverse: boolean;
+    can_verify: boolean;
+    reason_required: boolean;
+  };
 };
 
 export type ProductionReviewResponse = {

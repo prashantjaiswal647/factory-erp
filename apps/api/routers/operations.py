@@ -1140,7 +1140,7 @@ class ProductionRejectRequest(BaseModel):
 
 
 class ProductionReverseRequest(BaseModel):
-    reason: str = Field(default="Supervisor reversed own recent production mistake", max_length=500)
+    reason: str = Field(..., min_length=3, max_length=500)
 
 
 class ProductionUpdateRequest(BaseModel):
@@ -1204,6 +1204,7 @@ def _production_to_dict(db: Session, row: DailyProduction) -> dict:
         "stock_after_json": row.stock_after_json or {},
         "created_by": creator.full_name or creator.username if creator else None,
         "created_by_user_id": row.created_by_user_id,
+        "created_by_role": creator.role if creator else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "verified_by": verifier.full_name or verifier.username if verifier else None,
@@ -1361,9 +1362,14 @@ def reject_daily_production(
     return _production_to_dict(db, row)
 
 
-def _can_supervisor_reverse(row: DailyProduction, user: User, db: Session) -> None:
-    if row.created_by_user_id != user.id:
-        raise HTTPException(status_code=403, detail="Supervisor can reverse only their own production entry.")
+def _entry_creator_role(db: Session, row: DailyProduction) -> str:
+    if not row.created_by_user_id:
+        return ""
+    creator = db.query(User).filter(User.id == row.created_by_user_id).first()
+    return normalized_role(creator) if creator is not None else ""
+
+
+def _supervisor_latest_reverse_blocker(row: DailyProduction, user: User, db: Session) -> str | None:
     latest = (
         db.query(DailyProduction.id)
         .filter(
@@ -1375,16 +1381,59 @@ def _can_supervisor_reverse(row: DailyProduction, user: User, db: Session) -> No
         .first()
     )
     if latest is None or latest[0] != row.id:
-        raise HTTPException(status_code=403, detail="Supervisor can reverse only their latest production entry.")
-    if row.verified_at is not None or row.status == "verified":
-        raise HTTPException(status_code=403, detail="Verified production cannot be reversed by Supervisor.")
+        return "Supervisor can reverse only their latest production entry."
+    return None
+
+
+def _reversal_window_blocker(row: DailyProduction) -> str | None:
     created_at = row.created_at
     if created_at is None:
-        raise HTTPException(status_code=403, detail="Production entry creation time is missing.")
+        return "Production entry creation time is missing."
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) - created_at.astimezone(timezone.utc) > timedelta(minutes=PRODUCTION_REVERSAL_WINDOW_MINUTES):
-        raise HTTPException(status_code=403, detail="Supervisor reversal window has expired.")
+        return "Supervisor reversal window has expired."
+    return None
+
+
+def can_verify_production_entry(user: User, entry: DailyProduction) -> bool:
+    role = normalized_role(user)
+    return (
+        role in {"owner", "sub_owner"}
+        and str(entry.factory_id) == str(user.factory_id)
+        and entry.status in STOCK_EFFECTIVE_PRODUCTION_STATUSES
+        and entry.status != "verified"
+    )
+
+
+def can_reverse_production_entry(user: User, entry: DailyProduction, db: Session) -> bool:
+    if str(entry.factory_id) != str(user.factory_id):
+        return False
+    if entry.status not in STOCK_EFFECTIVE_PRODUCTION_STATUSES or entry.status == "verified":
+        return False
+    role = normalized_role(user)
+    creator_role = _entry_creator_role(db, entry)
+    if role == "owner":
+        return True
+    if role == "sub_owner":
+        return entry.created_by_user_id == user.id or creator_role == "supervisor"
+    if role == "supervisor":
+        return (
+            entry.created_by_user_id == user.id
+            and _supervisor_latest_reverse_blocker(entry, user, db) is None
+            and _reversal_window_blocker(entry) is None
+        )
+    return False
+
+
+def _can_supervisor_reverse(row: DailyProduction, user: User, db: Session) -> None:
+    if row.created_by_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Supervisor can reverse only their own production entry.")
+    if row.verified_at is not None or row.status == "verified":
+        raise HTTPException(status_code=403, detail="Verified production cannot be reversed by Supervisor.")
+    blocker = _supervisor_latest_reverse_blocker(row, user, db) or _reversal_window_blocker(row)
+    if blocker:
+        raise HTTPException(status_code=403, detail=blocker)
 
 
 def _restore_production_stock_effects(db: Session, row: DailyProduction) -> None:
@@ -1452,6 +1501,8 @@ def verify_production_entry(entry_id: int, user_id: int, db: Session, *, current
     if normalized_role(user) not in {"owner", "sub_owner"}:
         raise HTTPException(status_code=403, detail="Only Owner/Sub-owner can verify production.")
     row = _production_row(db, int(user.factory_id), entry_id)
+    if not can_verify_production_entry(user, row) and row.status != "verified":
+        raise HTTPException(status_code=403, detail="User cannot verify this production entry.")
     if row.status == "reversed":
         raise HTTPException(status_code=409, detail="Reversed production cannot be verified.")
     if row.status == "verified":
@@ -1486,17 +1537,23 @@ def reverse_production_entry(entry_id: int, user_id: int, reason: str, db: Sessi
         raise HTTPException(status_code=409, detail="Only stock-effective production can be reversed.")
     role = normalized_role(user)
     clean_reason = (reason or "").strip()
+    if len(clean_reason) < 3:
+        raise HTTPException(status_code=422, detail="Reversal reason is required.")
     if role == "supervisor":
         _can_supervisor_reverse(row, user, db)
-        if not clean_reason:
-            clean_reason = "Supervisor reversed own recent production mistake"
-    elif role in {"owner", "sub_owner"}:
+    elif role == "owner":
         if row.status == "verified":
             raise HTTPException(status_code=409, detail="Verified production is finalized and cannot be reversed.")
-        if len(clean_reason) < 3:
-            raise HTTPException(status_code=422, detail="Reversal reason is required.")
+    elif role == "sub_owner":
+        if row.status == "verified":
+            raise HTTPException(status_code=409, detail="Verified production is finalized and cannot be reversed.")
+        creator_role = _entry_creator_role(db, row)
+        if not (row.created_by_user_id == user.id or creator_role == "supervisor"):
+            raise HTTPException(status_code=403, detail="Sub-owner can reverse only own or Supervisor production entries.")
     else:
         raise HTTPException(status_code=403, detail="User cannot reverse production.")
+    if not can_reverse_production_entry(user, row, db):
+        raise HTTPException(status_code=403, detail="User cannot reverse this production entry.")
 
     _restore_production_stock_effects(db, row)
     row.status = "reversed"
@@ -1535,6 +1592,7 @@ def list_today_production_entries(
     production_date: date_cls,
     shift: str | None,
     db: Session,
+    current_user: User | None = None,
 ) -> list[dict]:
     query = db.query(DailyProduction).filter(
         DailyProduction.factory_id == str(factory_id),
@@ -1543,7 +1601,9 @@ def list_today_production_entries(
     if shift:
         query = query.filter(sql_func.lower(DailyProduction.shift) == shift.strip().lower())
     rows = query.order_by(DailyProduction.created_at.desc(), DailyProduction.id.desc()).all()
-    return [_production_to_dict(db, row) for row in rows]
+    if current_user is None:
+        return [_production_to_dict(db, row) for row in rows]
+    return [_production_review_to_dict(db, row, current_user) for row in rows]
 
 
 @router.post("/production/daily/{production_id}/verify")
@@ -1575,8 +1635,24 @@ def list_production_review_entries(
     return {
         "date": production_date.isoformat(),
         "shift": shift,
-        "entries": list_today_production_entries(int(current_user.factory_id), production_date, shift, db),
+        "entries": list_today_production_entries(
+            int(current_user.factory_id),
+            production_date,
+            shift,
+            db,
+            current_user=current_user,
+        ),
     }
+
+
+def _production_review_to_dict(db: Session, row: DailyProduction, user: User) -> dict:
+    item = _production_to_dict(db, row)
+    item["allowed_actions"] = {
+        "can_reverse": can_reverse_production_entry(user, row, db),
+        "can_verify": can_verify_production_entry(user, row),
+        "reason_required": True,
+    }
+    return item
 
 
 @router.get("/production/alerts")

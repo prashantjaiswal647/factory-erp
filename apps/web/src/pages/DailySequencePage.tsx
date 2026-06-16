@@ -135,9 +135,6 @@ export default function DailySequencePage() {
     }
   }
 
-  const ownerLevel = user?.role === "Owner" || user?.role === "Sub-Owner";
-  const supervisor = user?.role === "Supervisor";
-
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-4 rounded-lg border border-zinc-150 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
@@ -179,7 +176,7 @@ export default function DailySequencePage() {
             <table className="min-w-full divide-y divide-zinc-100 text-sm">
               <thead className="bg-zinc-50 text-left text-xs font-bold uppercase tracking-wide text-zinc-500">
                 <tr>
-                  <th className="px-3 py-2">Entry</th>
+                  <th className="px-3 py-2">Entry Audit</th>
                   <th className="px-3 py-2">Product</th>
                   <th className="px-3 py-2">Qty</th>
                   <th className="px-3 py-2">Raw Used</th>
@@ -196,12 +193,14 @@ export default function DailySequencePage() {
                     <tr key={entry.id} className="align-top">
                       <td className="px-3 py-3">
                         <p className="font-semibold text-zinc-900">#{entry.id} · {entry.shift || "-"}</p>
-                        <p className="text-xs text-zinc-500">{entry.machine_name} · {entry.worker_name}</p>
-                        <p className="text-xs text-zinc-400">{entry.created_by || "Unknown"} · {entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : ""}</p>
+                        <p className="text-xs text-zinc-500">Worker: {entry.worker_name}</p>
+                        <p className="text-xs text-zinc-500">Entered by: {entry.created_by || "Unknown"} ({entry.created_by_role || "Unknown"})</p>
+                        <p className="text-xs text-zinc-400">{entry.created_at ? new Date(entry.created_at).toLocaleString() : ""}</p>
                       </td>
                       <td className="px-3 py-3">
                         <p className="font-semibold text-zinc-900">{entry.product_size_ml}ml {entry.product_type}</p>
-                        <p className="text-xs text-zinc-500">{entry.packaging_size_name}</p>
+                        <p className="text-xs text-zinc-500">Machine: {entry.machine_name}</p>
+                        <p className="text-xs text-zinc-500">Packaging: {entry.packaging_size_name}</p>
                       </td>
                       <td className="px-3 py-3">{entry.quantity_boxes} boxes<br /><span className="text-xs text-zinc-500">{entry.loose_packets_made} loose packets</span></td>
                       <td className="px-3 py-3">{entry.blank_used_bora} bora / {entry.blank_used_kg} kg<br /><span className="text-xs text-zinc-500">{entry.bottom_used_rolls} bottom rolls</span></td>
@@ -212,18 +211,27 @@ export default function DailySequencePage() {
                       </td>
                       <td className="px-3 py-3">
                         <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs font-bold capitalize text-zinc-700">{entry.status.replace("_", " ")}</span>
+                        {entry.verified_by ? (
+                          <p className="mt-2 text-xs text-emerald-700">Verified by {entry.verified_by}<br />{entry.verified_at ? new Date(entry.verified_at).toLocaleString() : ""}</p>
+                        ) : null}
+                        {entry.reversed_by ? (
+                          <p className="mt-2 text-xs text-red-700">Reversed by {entry.reversed_by}<br />{entry.reversed_at ? new Date(entry.reversed_at).toLocaleString() : ""}<br />Reason: {entry.reversal_reason || "-"}</p>
+                        ) : null}
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex flex-wrap gap-2">
-                          {ownerLevel && entry.status !== "verified" && entry.status !== "reversed" ? (
+                          {entry.allowed_actions?.can_verify ? (
                             <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white" type="button" onClick={() => void handleVerify(entry.id)}>Verify</button>
                           ) : null}
-                          {(ownerLevel || supervisor) && entry.status !== "verified" && entry.status !== "reversed" ? (
-                            <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700" type="button" onClick={() => void handleReverse(entry.id)}>Reverse</button>
+                          {entry.allowed_actions?.can_reverse ? (
+                            <button className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700" type="button" onClick={() => void handleReverse(entry.id)}>
+                              {user?.role === "Supervisor" ? "Reverse My Entry" : "Reverse Entry"}
+                            </button>
                           ) : null}
-                          {supervisor && entry.status === "pending_review" ? (
+                          {user?.role === "Supervisor" && entry.status === "pending_review" && entry.allowed_actions?.can_reverse ? (
                             <span className="rounded-md border border-zinc-200 px-3 py-1.5 text-xs font-bold text-zinc-600">Confirm Correct</span>
                           ) : null}
+                          <span className="rounded-md border border-zinc-200 px-3 py-1.5 text-xs font-bold text-zinc-600">View Audit</span>
                         </div>
                       </td>
                     </tr>
