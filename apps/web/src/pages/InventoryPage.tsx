@@ -728,7 +728,7 @@ function groupLabel(row: LiveStockRow) {
 }
 
 function variantName(row: LiveStockRow, bucket: InventoryBucket) {
-  if (bucket === "finished_goods") return `${row.variety || "Plain White"} Cup`;
+  if (bucket === "finished_goods") return `${row.variety || "Unnamed Variant"} Cup`;
   if (bucket === "bottom_reels") return row.item_name || "Cup Bottom";
   if (bucket === "cup_blanks") return row.item_name || "Cup Blank";
   if (bucket === "boxes") return row.box_type || row.packaging_size_name || row.packaging_size || "Box";

@@ -225,6 +225,29 @@ async def test_invoice_pdf_sub_owner_falls_back_to_owner_signature(tmp_path, mon
     assert rendered_paths[0].endswith("owner.webp")
 
 
+def test_invoice_pdf_missing_signature_file_falls_back_to_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db = _session()
+    db.add(Factory(id=1, name="Factory A"))
+    db.add(FactoryAuthorizedSignature(
+        factory_id=1,
+        role="owner",
+        file_path="factory_signatures/1/missing.png",
+        original_filename="missing.png",
+        uploaded_by_user_id=1,
+    ))
+    db.commit()
+    monkeypatch.setattr("services.invoice_pdf.SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        "services.invoice_pdf.Image",
+        lambda *args, **kwargs: pytest.fail("missing signature must not be rendered"),
+    )
+
+    pdf = build_invoice_pdf_bytes(_invoice_payload("Owner"))
+
+    assert pdf.startswith(b"%PDF")
+
+
 def test_invoice_snapshot_passes_factory_and_generated_role(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     db = _session()

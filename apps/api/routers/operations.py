@@ -52,6 +52,8 @@ QTY_QUANT = Decimal("0.001")
 VALID_ACTIVITY_EVENT_TYPES = {"production", "attendance", "expense", "payment", "machine_telemetry"}
 logger = logging.getLogger(__name__)
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
+STOCK_EFFECTIVE_PRODUCTION_STATUSES = ("ACTIVE", "pending_review", "verified")
+PRODUCTION_REVERSAL_WINDOW_MINUTES = 30
 
 
 def to_money(value) -> Decimal:
@@ -64,6 +66,10 @@ def to_qty(value) -> Decimal:
 
 def to_lower(value) -> str:
     return str(value or "").strip().lower()
+
+
+def normalized_role(user: User) -> str:
+    return (getattr(user, "role", "") or "").strip().lower().replace("-", "_")
 
 
 def require_non_empty_work(boxes, loose) -> None:
@@ -527,6 +533,7 @@ def _create_daily_production(
             final_stock = (
                 db.query(FinalProductStock)
                 .filter(FinalProductStock.factory_id == factory_id)
+                .filter(FinalProductStock.product_restore_key.isnot(None))
                 .filter(FinalProductStock.product_size_ml == product_size_ml)
                 .filter(sql_func.lower(FinalProductStock.variety) == to_lower(variety))
                 .filter(sql_func.lower(FinalProductStock.packaging_size_name) == to_lower(packaging_size_name))
@@ -534,19 +541,10 @@ def _create_daily_production(
                 .first()
             )
         if final_stock is None:
-            final_stock = FinalProductStock(
-                factory_id=factory_id,
-                product_size_ml=product_size_ml,
-                variety=variety,
-                packaging_size_name=packaging_size_name.strip(),
-                pieces_per_packet=payload.pieces_per_packet,
-                current_quantity=0,
-                total_boxes=0,
-                loose_packets=0,
-                packets_per_box_limit=payload.packets_per_box_limit,
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Finished good variant is not present in the onboarding workbook.",
             )
-            db.add(final_stock)
-            db.flush()
 
         from routers.inventory import calculate_live_sku_stock
         total_boxes_before, loose_before = calculate_live_sku_stock(
@@ -586,6 +584,35 @@ def _create_daily_production(
         box_stock_available = box_stock.total_boxes if box_stock is not None else 0
         require_available_stock("Box", box_stock_available, boxes_packed_this_entry, "boxes")
         box_stock_after = box_stock_available - boxes_packed_this_entry
+        stock_before_json = {
+            "finished_goods": {
+                "stock_id": final_stock.id,
+                "product_size_ml": product_size_ml,
+                "variety": variety,
+                "packaging_size_name": packaging_size_name.strip(),
+                "boxes": int(total_boxes_before),
+                "loose_packets": int(loose_before),
+            },
+            "blank_stock": {
+                "stock_id": blank_stock.id,
+                "blank_size_ml": blank_stock.blank_size_ml,
+                "variety": blank_stock.variety,
+                "total_qty_kg": float(to_qty(blank_stock.total_qty_kg)),
+                "total_boras": float(to_qty(blank_stock.total_boras)) if blank_stock.total_boras is not None else None,
+            },
+            "bottom_stock": {
+                "stock_id": bottom_stock.id,
+                "bottom_size_mm": bottom_stock.bottom_size_mm,
+                "variety": bottom_stock.variety,
+                "total_qty_kg": float(to_qty(bottom_stock.total_qty_kg)),
+                "total_rolls": int(bottom_stock.total_rolls or 0),
+            },
+            "box_stock": {
+                "stock_id": box_stock.id,
+                "box_type": box_stock.box_type,
+                "total_boxes": int(box_stock_available or 0),
+            },
+        }
         total_raw_material_kg = to_qty(blank_used_kg + bottom_used_kg)
         wastage_kg = to_qty(payload.wastage_kg)
         wastage_limit = to_qty(total_raw_material_kg * Decimal("0.02"))
@@ -644,8 +671,9 @@ def _create_daily_production(
             electricity_cost=electricity_cost,
             production_cost=production_cost,
             shift=payload.shift,
-            status="ACTIVE",
+            status="pending_review",
             created_by_user_id=current_user.id,
+            stock_before_json=stock_before_json,
         )
         db.add(production)
         db.flush()
@@ -666,6 +694,28 @@ def _create_daily_production(
             variety=variety,
             packaging_size_name=packaging_size_name,
         )
+        stock_after_json = {
+            "finished_goods": {
+                **stock_before_json["finished_goods"],
+                "boxes": int(live_boxes),
+                "loose_packets": int(live_loose),
+            },
+            "blank_stock": {
+                **stock_before_json["blank_stock"],
+                "total_qty_kg": float(blank_after),
+                "total_boras": float(blank_boras_after) if blank_boras_after is not None else None,
+            },
+            "bottom_stock": {
+                **stock_before_json["bottom_stock"],
+                "total_qty_kg": float(bottom_after),
+                "total_rolls": int(bottom_rolls_after),
+            },
+            "box_stock": {
+                **stock_before_json["box_stock"],
+                "total_boxes": int(box_stock_after),
+            },
+        }
+        production.stock_after_json = stock_after_json
 
         total_boxes_completed = payload.total_boxes_made + boxes_from_loose
         wastage_percent = Decimal("0.00")
@@ -725,6 +775,9 @@ def _create_daily_production(
 
         return DailyProductionResponse(
             production_id=production.id,
+            status=production.status,
+            stock_before_json=stock_before_json,
+            stock_after_json=stock_after_json,
             product_size_ml=product_size_ml,
             total_boxes_before=total_boxes_before,
             loose_packets_before=loose_before,
@@ -1086,6 +1139,10 @@ class ProductionRejectRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=500)
 
 
+class ProductionReverseRequest(BaseModel):
+    reason: str = Field(default="Supervisor reversed own recent production mistake", max_length=500)
+
+
 class ProductionUpdateRequest(BaseModel):
     date: Optional[date_cls] = None
     worker_id: Optional[int] = Field(default=None, gt=0)
@@ -1115,6 +1172,8 @@ def _production_to_dict(db: Session, row: DailyProduction) -> dict:
     machine = db.query(Machine).filter(Machine.id == row.machine_id).first()
     creator = db.query(User).filter(User.id == row.created_by_user_id).first() if row.created_by_user_id else None
     rejector = db.query(User).filter(User.id == row.rejected_by_user_id).first() if row.rejected_by_user_id else None
+    verifier = db.query(User).filter(User.id == row.verified_by_user_id).first() if row.verified_by_user_id else None
+    reverser = db.query(User).filter(User.id == row.reversed_by_user_id).first() if row.reversed_by_user_id else None
     quantity_pieces = (
         (int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0))
         * int(row.packets_per_box_limit or 0)
@@ -1141,9 +1200,19 @@ def _production_to_dict(db: Session, row: DailyProduction) -> dict:
         ),
         "shift": row.shift,
         "status": row.status,
+        "stock_before_json": row.stock_before_json or {},
+        "stock_after_json": row.stock_after_json or {},
         "created_by": creator.full_name or creator.username if creator else None,
+        "created_by_user_id": row.created_by_user_id,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "verified_by": verifier.full_name or verifier.username if verifier else None,
+        "verified_by_user_id": row.verified_by_user_id,
+        "verified_at": row.verified_at.isoformat() if row.verified_at else None,
+        "reversed_by": reverser.full_name or reverser.username if reverser else None,
+        "reversed_by_user_id": row.reversed_by_user_id,
+        "reversed_at": row.reversed_at.isoformat() if row.reversed_at else None,
+        "reversal_reason": row.reversal_reason,
         "rejected_by": rejector.full_name or rejector.username if rejector else None,
         "rejected_at": row.rejected_at.isoformat() if row.rejected_at else None,
         "rejection_reason": row.rejection_reason,
@@ -1177,7 +1246,7 @@ def production_worker_summary(
         .filter(
             DailyProduction.factory_id == current_user.factory_id,
             DailyProduction.date == production_date,
-            DailyProduction.status == "ACTIVE",
+            DailyProduction.status.in_(STOCK_EFFECTIVE_PRODUCTION_STATUSES),
         )
         .order_by(DailyProduction.worker_id.asc(), DailyProduction.product_size_ml.asc())
         .all()
@@ -1215,8 +1284,8 @@ def update_daily_production(
     db: Session = Depends(get_db),
 ):
     row = _production_row(db, int(current_user.factory_id), production_id)
-    if row.status != "ACTIVE":
-        raise HTTPException(status_code=409, detail="Rejected production cannot be edited")
+    if row.status not in STOCK_EFFECTIVE_PRODUCTION_STATUSES or row.status == "verified":
+        raise HTTPException(status_code=409, detail="Only unverified active production can be edited")
 
     old_sku = (row.product_size_ml, row.variety, row.packaging_size_name)
     updates = payload.model_dump(exclude_unset=True)
@@ -1259,6 +1328,8 @@ def reject_daily_production(
     row = _production_row(db, int(current_user.factory_id), production_id)
     if row.status == "REJECTED":
         return _production_to_dict(db, row)
+    if row.status == "verified":
+        raise HTTPException(status_code=409, detail="Verified production is finalized and cannot be rejected")
 
     row.status = "REJECTED"
     row.rejected_by_user_id = current_user.id
@@ -1288,6 +1359,224 @@ def reject_daily_production(
     db.commit()
     db.refresh(row)
     return _production_to_dict(db, row)
+
+
+def _can_supervisor_reverse(row: DailyProduction, user: User, db: Session) -> None:
+    if row.created_by_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Supervisor can reverse only their own production entry.")
+    latest = (
+        db.query(DailyProduction.id)
+        .filter(
+            DailyProduction.factory_id == row.factory_id,
+            DailyProduction.created_by_user_id == user.id,
+            DailyProduction.status.in_(STOCK_EFFECTIVE_PRODUCTION_STATUSES),
+        )
+        .order_by(DailyProduction.created_at.desc(), DailyProduction.id.desc())
+        .first()
+    )
+    if latest is None or latest[0] != row.id:
+        raise HTTPException(status_code=403, detail="Supervisor can reverse only their latest production entry.")
+    if row.verified_at is not None or row.status == "verified":
+        raise HTTPException(status_code=403, detail="Verified production cannot be reversed by Supervisor.")
+    created_at = row.created_at
+    if created_at is None:
+        raise HTTPException(status_code=403, detail="Production entry creation time is missing.")
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - created_at.astimezone(timezone.utc) > timedelta(minutes=PRODUCTION_REVERSAL_WINDOW_MINUTES):
+        raise HTTPException(status_code=403, detail="Supervisor reversal window has expired.")
+
+
+def _restore_production_stock_effects(db: Session, row: DailyProduction) -> None:
+    stock_before = row.stock_before_json or {}
+    blank_info = stock_before.get("blank_stock") or {}
+    bottom_info = stock_before.get("bottom_stock") or {}
+    box_info = stock_before.get("box_stock") or {}
+
+    blank_stock = db.query(BlankStock).filter(
+        BlankStock.factory_id == row.factory_id,
+        BlankStock.id == blank_info.get("stock_id"),
+    ).with_for_update().first()
+    if blank_stock is not None:
+        blank_stock.total_qty_kg = to_qty(blank_stock.total_qty_kg) + to_qty(row.blank_used_kg)
+        if blank_stock.total_boras is not None:
+            blank_stock.total_boras = to_qty(blank_stock.total_boras) + to_qty(row.blank_used_bora)
+
+    bottom_stock = db.query(BottomStock).filter(
+        BottomStock.factory_id == row.factory_id,
+        BottomStock.id == bottom_info.get("stock_id"),
+    ).with_for_update().first()
+    if bottom_stock is not None:
+        bottom_stock.total_qty_kg = to_qty(bottom_stock.total_qty_kg) + to_qty(row.bottom_used_kg)
+        bottom_stock.total_weight_kg = to_qty(bottom_stock.total_weight_kg) + to_qty(row.bottom_used_kg)
+        bottom_stock.total_rolls = int(bottom_stock.total_rolls or 0) + int(row.bottom_used_rolls or 0)
+
+    box_stock = db.query(BoxStock).filter(
+        BoxStock.factory_id == row.factory_id,
+        BoxStock.id == box_info.get("stock_id"),
+    ).with_for_update().first()
+    if box_stock is not None:
+        boxes_to_restore = int(row.total_boxes_made or 0) + int(row.boxes_from_loose or 0)
+        box_stock.total_boxes = int(box_stock.total_boxes or 0) + boxes_to_restore
+        box_stock.quantity = int(box_stock.quantity or 0) + boxes_to_restore
+
+
+def _adjust_auto_attendance_after_reversal(db: Session, row: DailyProduction) -> None:
+    if not row.worker_id:
+        return
+    other_count = db.query(DailyProduction.id).filter(
+        DailyProduction.factory_id == row.factory_id,
+        DailyProduction.worker_id == row.worker_id,
+        DailyProduction.date == row.date,
+        DailyProduction.id != row.id,
+        DailyProduction.status.in_(STOCK_EFFECTIVE_PRODUCTION_STATUSES),
+    ).count()
+    if other_count:
+        return
+    attendance = db.query(AttendanceLog).filter(
+        AttendanceLog.factory_id == row.factory_id,
+        AttendanceLog.worker_id == row.worker_id,
+        AttendanceLog.date == row.date,
+        AttendanceLog.status == "Present",
+    ).with_for_update().first()
+    if attendance is not None and Decimal(str(attendance.production_qty or 0)) > 0:
+        attendance.status = "Absent"
+        attendance.is_present = False
+        attendance.production_qty = Decimal("0")
+
+
+def verify_production_entry(entry_id: int, user_id: int, db: Session, *, current_user: User | None = None) -> dict:
+    user = current_user or db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if normalized_role(user) not in {"owner", "sub_owner"}:
+        raise HTTPException(status_code=403, detail="Only Owner/Sub-owner can verify production.")
+    row = _production_row(db, int(user.factory_id), entry_id)
+    if row.status == "reversed":
+        raise HTTPException(status_code=409, detail="Reversed production cannot be verified.")
+    if row.status == "verified":
+        return _production_to_dict(db, row)
+    row.status = "verified"
+    row.verified_by_user_id = user.id
+    row.verified_at = datetime.now(timezone.utc)
+    log_audit_trail(
+        db=db,
+        factory_id=int(user.factory_id),
+        user_id=user.id,
+        user_role=user.role,
+        action_type="VERIFY",
+        entity_name="Production",
+        short_statement=f"Verified production #{row.id}",
+        event_type="production",
+        log_date=row.date,
+    )
+    db.commit()
+    db.refresh(row)
+    return _production_to_dict(db, row)
+
+
+def reverse_production_entry(entry_id: int, user_id: int, reason: str, db: Session, *, current_user: User | None = None) -> dict:
+    user = current_user or db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    row = _production_row(db, int(user.factory_id), entry_id)
+    if row.status == "reversed":
+        return _production_to_dict(db, row)
+    if row.status not in STOCK_EFFECTIVE_PRODUCTION_STATUSES:
+        raise HTTPException(status_code=409, detail="Only stock-effective production can be reversed.")
+    role = normalized_role(user)
+    clean_reason = (reason or "").strip()
+    if role == "supervisor":
+        _can_supervisor_reverse(row, user, db)
+        if not clean_reason:
+            clean_reason = "Supervisor reversed own recent production mistake"
+    elif role in {"owner", "sub_owner"}:
+        if row.status == "verified":
+            raise HTTPException(status_code=409, detail="Verified production is finalized and cannot be reversed.")
+        if len(clean_reason) < 3:
+            raise HTTPException(status_code=422, detail="Reversal reason is required.")
+    else:
+        raise HTTPException(status_code=403, detail="User cannot reverse production.")
+
+    _restore_production_stock_effects(db, row)
+    row.status = "reversed"
+    row.reversed_by_user_id = user.id
+    row.reversed_at = datetime.now(timezone.utc)
+    row.reversal_reason = clean_reason
+    _adjust_auto_attendance_after_reversal(db, row)
+    db.flush()
+
+    from routers.inventory import recalculate_and_sync_sku_stock
+    recalculate_and_sync_sku_stock(
+        db,
+        str(user.factory_id),
+        row.product_size_ml,
+        row.variety,
+        row.packaging_size_name,
+    )
+    log_audit_trail(
+        db=db,
+        factory_id=int(user.factory_id),
+        user_id=user.id,
+        user_role=user.role,
+        action_type="REVERSE",
+        entity_name="Production",
+        short_statement=f"Reversed production #{row.id}: {clean_reason}",
+        event_type="production",
+        log_date=row.date,
+    )
+    db.commit()
+    db.refresh(row)
+    return _production_to_dict(db, row)
+
+
+def list_today_production_entries(
+    factory_id: int,
+    production_date: date_cls,
+    shift: str | None,
+    db: Session,
+) -> list[dict]:
+    query = db.query(DailyProduction).filter(
+        DailyProduction.factory_id == str(factory_id),
+        DailyProduction.date == production_date,
+    )
+    if shift:
+        query = query.filter(sql_func.lower(DailyProduction.shift) == shift.strip().lower())
+    rows = query.order_by(DailyProduction.created_at.desc(), DailyProduction.id.desc()).all()
+    return [_production_to_dict(db, row) for row in rows]
+
+
+@router.post("/production/daily/{production_id}/verify")
+def verify_daily_production(
+    production_id: int,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner"])),
+    db: Session = Depends(get_db),
+):
+    return verify_production_entry(production_id, current_user.id, db, current_user=current_user)
+
+
+@router.post("/production/daily/{production_id}/reverse")
+def reverse_daily_production(
+    production_id: int,
+    payload: ProductionReverseRequest,
+    current_user: User = Depends(check_permissions(["Owner", "Sub-Owner", "Supervisor"])),
+    db: Session = Depends(get_db),
+):
+    return reverse_production_entry(production_id, current_user.id, payload.reason, db, current_user=current_user)
+
+
+@router.get("/production/review")
+def list_production_review_entries(
+    production_date: date_cls = Query(default_factory=lambda: datetime.now(LOCAL_TZ).date(), alias="date"),
+    shift: Optional[str] = Query(default=None),
+    current_user: User = Depends(check_permissions(PRODUCTION_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return {
+        "date": production_date.isoformat(),
+        "shift": shift,
+        "entries": list_today_production_entries(int(current_user.factory_id), production_date, shift, db),
+    }
 
 
 @router.get("/production/alerts")
@@ -1349,6 +1638,7 @@ def create_daily_sale(
             stock = (
                 db.query(FinalProductStock)
                 .filter(FinalProductStock.factory_id == factory_id)
+                .filter(FinalProductStock.product_restore_key.isnot(None))
                 .filter(FinalProductStock.product_size_ml == item.product_size_ml)
                 .filter(sql_func.lower(FinalProductStock.variety) == item.variety.lower())
                 .filter(sql_func.lower(FinalProductStock.packaging_size_name) == item.packaging_size_name.lower())
@@ -1356,19 +1646,10 @@ def create_daily_sale(
                 .first()
             )
             if stock is None:
-                packets_per_box_limit = 1
-                stock = FinalProductStock(
-                    factory_id=factory_id,
-                    product_size_ml=item.product_size_ml,
-                    variety=item.variety.strip(),
-                    packaging_size_name=item.packaging_size_name.strip(),
-                    current_quantity=0,
-                    total_boxes=0,
-                    loose_packets=0,
-                    packets_per_box_limit=packets_per_box_limit,
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Finished good variant is not present in the onboarding workbook.",
                 )
-                db.add(stock)
-                db.flush()
 
             # Resolve exact live dynamic stock balance
             from routers.inventory import calculate_live_sku_stock

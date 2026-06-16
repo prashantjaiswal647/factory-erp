@@ -4,7 +4,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +14,9 @@ from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Tabl
 
 from db import SessionLocal
 from models import Factory, FactoryAuthorizedSignature
+from services.media_paths import API_ROOT, authorized_signature_root, legacy_signature_root, media_root
 
 logger = logging.getLogger(__name__)
-MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "volumes/media"))
-AUTHORIZED_SIGNATURE_ROOT = Path(
-    os.getenv("AUTHORIZED_SIGNATURE_ROOT", str(MEDIA_ROOT / "factory_signatures"))
-)
-LEGACY_SIGNATURE_ROOT = Path(
-    os.getenv("LEGACY_SIGNATURE_ROOT", str(MEDIA_ROOT / "signatures"))
-)
 
 
 def _normalized_role(role: str | None) -> str:
@@ -37,24 +30,27 @@ def _safe_existing_signature_path(value: str | Path | None) -> Path | None:
     raw = str(value).strip().replace("\\", "/")
     if not raw:
         return None
+    current_media_root = media_root()
+    current_authorized_root = authorized_signature_root()
+    current_legacy_root = legacy_signature_root()
     if raw.startswith("/media/"):
-        candidate = MEDIA_ROOT / raw.removeprefix("/media/")
+        candidate = current_media_root / raw.removeprefix("/media/")
     else:
         stored = Path(raw)
         if stored.is_absolute():
             candidate = stored
         elif raw.startswith("volumes/media/"):
-            candidate = Path(raw)
+            candidate = API_ROOT / raw
         elif raw.startswith("factory_signatures/") or raw.startswith("signatures/"):
-            candidate = MEDIA_ROOT / raw
+            candidate = current_media_root / raw
         else:
-            candidate = AUTHORIZED_SIGNATURE_ROOT / raw
+            candidate = current_authorized_root / raw
 
     try:
         resolved = candidate.resolve(strict=False)
         allowed_roots = (
-            AUTHORIZED_SIGNATURE_ROOT.resolve(strict=False),
-            LEGACY_SIGNATURE_ROOT.resolve(strict=False),
+            current_authorized_root,
+            current_legacy_root,
         )
         if not any(resolved.is_relative_to(root) for root in allowed_roots):
             return None
@@ -568,7 +564,22 @@ def build_invoice_pdf_bytes(payload: dict[str, Any]) -> bytes:
         Paragraph("Digitally authorized" if signature_path else "", sig_style),
     ]
     if signature_path is not None:
-        sig_block.extend([Spacer(1, 4), Image(str(signature_path), width=90, height=40, kind="proportional")])
+        try:
+            signature_image = Image(
+                str(signature_path),
+                width=90,
+                height=40,
+                kind="proportional",
+                hAlign="RIGHT",
+            )
+            sig_block.extend([Spacer(1, 4), signature_image])
+        except Exception:
+            logger.warning(
+                "Invoice signature image could not be rendered: path=%s",
+                signature_path,
+                exc_info=True,
+            )
+            signature_path = None
     sig_block.extend([Spacer(1, 8 if signature_path else 30), Paragraph("Authorized Signatory", sig_style)])
     sig_table = Table([["", sig_block]], colWidths=[320, 200])
     sig_table.setStyle(

@@ -41,7 +41,9 @@ from models import (
     DailySale,
     Factory,
     FinalProductStock,
+    FinishedGoodsStock,
     Machine,
+    PackagingProfile,
     SalesInvoice,
     User,
     BoxStock,
@@ -234,9 +236,131 @@ def test_bulk_uploaded_finished_goods_appear_in_final_stock_api(app_factory):
     }
 
 
-def test_create_new_packing_variant_from_production_page(app_factory):
+def test_onboarding_finished_goods_are_exact_visible_baseline(app_factory):
+    from routers.onboarding import apply_bulk_rows, reset_active_onboarding_master_data
+
     client, db = app_factory(factory_id=1)
     seed_factory(db, 1)
+    user = SimpleNamespace(id=1, factory_id=1)
+    db.add_all([
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=55,
+            variety="Plain White",
+            packaging_size_name="55ML Plain White Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            current_quantity=0,
+            total_boxes=0,
+            loose_packets=0,
+        ),
+        FinalProductStock(
+            factory_id=1,
+            product_restore_key="OLD-PLAIN-WHITE-65",
+            product_size_ml=65,
+            variety="Plain White Cup",
+            packaging_size_name="65ML Plain White Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            current_quantity=0,
+            total_boxes=0,
+            loose_packets=0,
+        ),
+    ])
+    db.commit()
+
+    rows = [
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 210,
+            "variety_design": "Lovely Day",
+            "packaging_size_name": "210 Lovely Day 48x62",
+            "carton_type": "Big Box",
+            "pcs_per_packet": 48,
+            "packets_per_box": 62,
+            "initial_stock_boxes": 20,
+            "initial_loose_packets": 0,
+        },
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 250,
+            "variety_design": "Spectra",
+            "packaging_size_name": "250 Spectra 45x62",
+            "carton_type": "Big Box",
+            "pcs_per_packet": 45,
+            "packets_per_box": 62,
+            "initial_stock_boxes": 23,
+            "initial_loose_packets": 0,
+        },
+    ]
+
+    reset_active_onboarding_master_data(db, factory_id=1)
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == 2
+    db.commit()
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == 2
+    db.commit()
+
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == len(rows)
+    assert all(
+        "plain white" not in " ".join(
+            str(row.get(field) or "")
+            for field in ("item_name", "product_name", "variant_name", "variety", "packaging_size_name")
+        ).lower()
+        for row in payload
+    )
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == len(rows)
+
+
+def test_finished_goods_stock_listener_does_not_auto_create_visible_white_variant(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    profile = PackagingProfile(
+        factory_id=1,
+        profile_name="55ML Plain White Cup",
+        product_name="55ml Paper Cup",
+        product_name_ml=55,
+        cup_size_ml=55,
+        print_design_name="",
+        cups_per_poly=50,
+        polys_per_box=20,
+    )
+    db.add(profile)
+    db.flush()
+    db.add(FinishedGoodsStock(
+        factory_id=1,
+        cup_size_ml=55,
+        packaging_profile_id=profile.id,
+        boxes_available=10,
+        category="CUP_FINISHED",
+        variant_name=None,
+    ))
+    db.commit()
+
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == 0
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_production_page_can_reuse_uploaded_variant(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    db.add(FinalProductStock(
+        factory_id=1,
+        product_restore_key="SKU-100-PRINTED",
+        product_size_ml=100,
+        variety="Printed",
+        packaging_size_name="100ML - Printed",
+        pieces_per_packet=40,
+        packets_per_box_limit=10,
+        current_quantity=5,
+        total_boxes=5,
+        loose_packets=0,
+    ))
+    db.commit()
     response = client.post(
         "/api/inventory/finished-goods/variants",
         json={
@@ -258,7 +382,7 @@ def test_create_new_packing_variant_from_production_page(app_factory):
     assert data["packets_per_box_limit"] == 20
     assert data["current_quantity"] == 5
     assert data["total_boxes"] == 5
-    assert data["created_existing"] is False
+    assert data["created_existing"] is True
 
     # Verify it is now selectable
     list_response = client.get("/api/inventory/final-stock")

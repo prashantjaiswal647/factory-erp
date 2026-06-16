@@ -619,6 +619,9 @@ class DailyProductionResponse(BaseModel):
     production_id: int
     attendance_auto_marked: bool = False
     attendance_log_id: Optional[int] = None
+    status: str = "pending_review"
+    stock_before_json: dict = Field(default_factory=dict)
+    stock_after_json: dict = Field(default_factory=dict)
     product_size_ml: int
     total_boxes_before: int
     loose_packets_before: int
@@ -887,6 +890,9 @@ class DailyProductionResponse(BaseModel):
     production_id: int
     attendance_auto_marked: bool = False
     attendance_log_id: Optional[int] = None
+    status: str = "pending_review"
+    stock_before_json: dict = Field(default_factory=dict)
+    stock_after_json: dict = Field(default_factory=dict)
     product_size_ml: int
     total_boxes_before: int
     loose_packets_before: int

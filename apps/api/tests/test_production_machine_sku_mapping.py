@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from models import (
     BlankStock,
     BottomStock,
     BoxStock,
+    DailyProduction,
     Factory,
     FinalProductStock,
     Machine,
@@ -47,6 +49,8 @@ def mapped_production_client():
     db.add_all([
         Factory(id=1, name="Mapping Factory", subscription_status="active", active_plan="growth"),
         User(id=1, factory_id=1, username="owner@test", email="owner@test", role="Owner", password_hash="x", is_verified=True),
+        User(id=2, factory_id=1, username="supervisor@test", email="supervisor@test", role="Supervisor", password_hash="x", is_verified=True),
+        User(id=3, factory_id=1, username="subowner@test", email="subowner@test", role="Sub-Owner", password_hash="x", is_verified=True),
         Worker(id=1, factory_id=1, name="Raju", is_active=True),
         Worker(id=2, factory_id=1, name="Mohan", is_active=True),
         Worker(id=3, factory_id=1, name="Sohan", is_active=True),
@@ -68,6 +72,141 @@ def mapped_production_client():
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+def _production_payload(**overrides):
+    payload = {
+        "date": "2026-06-03",
+        "worker_id": 1,
+        "machine_id": 1,
+        "product_id": 2101,
+        "product_size_ml": 210,
+        "variety": "White",
+        "packaging_size_name": "210-48",
+        "pieces_per_packet": 48,
+        "packets_per_box_limit": 10,
+        "total_boxes_made": 1,
+        "loose_packets_made": 0,
+        "blank_used_bori": 1,
+        "bottom_used_rolls": 1,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _as_user(user_id: int, role: str, username: str):
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=user_id,
+        factory_id=1,
+        role=role,
+        username=username,
+        full_name=username,
+    )
+
+
+def test_supervisor_reverses_own_latest_production_without_hard_delete(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(2, "Supervisor", "Supervisor")
+
+    created = client.post("/api/production/daily", json=_production_payload())
+    assert created.status_code == 201, created.text
+    production_id = created.json()["production_id"]
+
+    db = session_factory()
+    assert db.get(FinalProductStock, 2101).current_quantity == 3
+    assert db.query(BlankStock).filter_by(blank_size_ml=210, variety="White").one().total_boras == Decimal("9")
+    assert db.query(BottomStock).filter_by(bottom_size_mm=47, variety="White").one().total_rolls == 9
+    db.close()
+
+    reversed_response = client.post(
+        f"/api/production/daily/{production_id}/reverse",
+        json={"reason": "Duplicate entry"},
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    assert reversed_response.json()["status"] == "reversed"
+
+    db = session_factory()
+    row = db.query(DailyProduction).filter_by(id=production_id).one()
+    assert row.status == "reversed"
+    assert row.reversal_reason == "Duplicate entry"
+    assert db.query(DailyProduction).count() == 1
+    assert db.get(FinalProductStock, 2101).current_quantity == 2
+    assert db.query(BlankStock).filter_by(blank_size_ml=210, variety="White").one().total_boras == Decimal("10.000")
+    assert db.query(BottomStock).filter_by(bottom_size_mm=47, variety="White").one().total_rolls == 10
+    db.close()
+
+
+def test_supervisor_cannot_reverse_another_users_or_verified_or_old_entry(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(1, "Owner", "Owner")
+    owner_created = client.post("/api/production/daily", json=_production_payload(date="2026-06-07"))
+    assert owner_created.status_code == 201, owner_created.text
+
+    _as_user(2, "Supervisor", "Supervisor")
+    forbidden = client.post(
+        f"/api/production/daily/{owner_created.json()['production_id']}/reverse",
+        json={"reason": "Not mine"},
+    )
+    assert forbidden.status_code == 403
+
+    supervisor_created = client.post("/api/production/daily", json=_production_payload(date="2026-06-08"))
+    assert supervisor_created.status_code == 201, supervisor_created.text
+    supervisor_id = supervisor_created.json()["production_id"]
+
+    _as_user(1, "Owner", "Owner")
+    verify = client.post(f"/api/production/daily/{supervisor_id}/verify")
+    assert verify.status_code == 200, verify.text
+
+    _as_user(2, "Supervisor", "Supervisor")
+    verified_reverse = client.post(
+        f"/api/production/daily/{supervisor_id}/reverse",
+        json={"reason": "Verified"},
+    )
+    assert verified_reverse.status_code == 403
+
+    old_created = client.post("/api/production/daily", json=_production_payload(date="2026-06-09"))
+    assert old_created.status_code == 201, old_created.text
+    old_id = old_created.json()["production_id"]
+    db = session_factory()
+    row = db.query(DailyProduction).filter_by(id=old_id).one()
+    row.created_at = datetime.now(timezone.utc) - timedelta(minutes=31)
+    db.commit()
+    db.close()
+
+    old_reverse = client.post(
+        f"/api/production/daily/{old_id}/reverse",
+        json={"reason": "Too late"},
+    )
+    assert old_reverse.status_code == 403
+
+
+def test_owner_can_reverse_unverified_production_with_reason_and_review_lists_stock_impact(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(2, "Supervisor", "Supervisor")
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-10"))
+    assert created.status_code == 201, created.text
+    production_id = created.json()["production_id"]
+    assert created.json()["status"] == "pending_review"
+    assert created.json()["stock_before_json"]["finished_goods"]["boxes"] == 2
+    assert created.json()["stock_after_json"]["finished_goods"]["boxes"] == 3
+
+    review = client.get("/api/production/review", params={"date": "2026-06-10"})
+    assert review.status_code == 200
+    assert review.json()["entries"][0]["stock_before_json"]["finished_goods"]["boxes"] == 2
+
+    _as_user(1, "Owner", "Owner")
+    missing_reason = client.post(f"/api/production/daily/{production_id}/reverse", json={"reason": ""})
+    assert missing_reason.status_code == 422
+    reversed_response = client.post(
+        f"/api/production/daily/{production_id}/reverse",
+        json={"reason": "Supervisor entered duplicate production"},
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    assert reversed_response.json()["status"] == "reversed"
+
+    db = session_factory()
+    assert db.query(DailyProduction).filter_by(id=production_id).one().reversed_by_user_id == 1
+    db.close()
 
 
 def test_machine_scoped_options_and_exact_inventory_impact(mapped_production_client):

@@ -20,6 +20,7 @@ from routers.onboarding import (
     onboarding_step3_materials,
     read_master_bulk_excel,
     reset_active_onboarding_master_data,
+    cleanup_stale_plain_white_rows,
     validate_bulk_cross_sheet,
 )
 from schemas import Step3Request
@@ -416,6 +417,46 @@ def test_master_replacement_removes_old_active_machines_and_inventory_rows():
         db.commit()
         assert db.query(BlankStock).filter_by(factory_id=1).count() == 1
         assert db.query(Machine).filter_by(factory_id=1, is_active=True).count() == 1
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_plain_white_cleanup_preserves_uploaded_identities_and_removes_stale_rows():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    db = session_factory()
+    try:
+        db.add_all([
+            FinalProductStock(factory_id=1, product_size_ml=55, variety="Plain White", packaging_size_name="55 White", pieces_per_packet=50, packets_per_box_limit=20),
+            FinalProductStock(factory_id=1, product_size_ml=65, variety="Plain White Cup", packaging_size_name="65 White", pieces_per_packet=50, packets_per_box_limit=20),
+            FinalProductStock(factory_id=1, product_size_ml=100, variety="Ice Cup ITC", packaging_size_name="100ml Ice Cup White Cup", pieces_per_packet=50, packets_per_box_limit=20),
+            BlankStock(factory_id=1, blank_size_ml=55, variety="Plain White", linked_bottom_size_mm=65, total_qty_kg=0),
+            BlankStock(factory_id=1, blank_size_ml=65, variety="Plain White", linked_bottom_size_mm=75, total_qty_kg=0),
+            BlankStock(factory_id=1, blank_size_ml=100, material_name="Plain White Cup Blank", variety="Ice Cup ITC", linked_bottom_size_mm=85, total_qty_kg=0),
+            BottomStock(factory_id=1, bottom_size_mm=65, variety="Plain White", total_rolls=0, total_weight_kg=0, total_qty_kg=0),
+            BottomStock(factory_id=1, bottom_size_mm=75, variety="Plain White", total_rolls=0, total_weight_kg=0, total_qty_kg=0),
+            BottomStock(factory_id=1, bottom_size_mm=85, variety="White Cup", total_rolls=0, total_weight_kg=0, total_qty_kg=0),
+        ])
+        db.commit()
+
+        result = cleanup_stale_plain_white_rows(
+            db,
+            factory_id=1,
+            valid_by_type={
+                "finished_goods": [{"product_size_ml": 55, "variety_design": "Plain White", "packaging_size_name": "55 White"}],
+                "blank_stock": [{"size_ml": 55, "variety_design": "Plain White"}],
+                "bottom_reel": [{"bottom_size_mm": 65, "variety_design": "Plain White"}],
+            },
+        )
+        db.commit()
+
+        assert result == {"finished_goods_deleted": 2, "raw_materials_deleted": 4}
+        assert [(row.product_size_ml, row.variety) for row in db.query(FinalProductStock).all()] == [(55, "Plain White")]
+        assert [(row.blank_size_ml, row.variety) for row in db.query(BlankStock).all()] == [(55, "Plain White")]
+        assert [(row.bottom_size_mm, row.variety) for row in db.query(BottomStock).all()] == [(65, "Plain White")]
     finally:
         db.close()
         Base.metadata.drop_all(engine)

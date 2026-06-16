@@ -65,7 +65,7 @@ def calculate_live_sku_stock(
         .filter(DailyProduction.product_size_ml == product_size_ml)
         .filter(func.lower(DailyProduction.variety) == variety.strip().lower())
         .filter(func.lower(DailyProduction.packaging_size_name) == packaging_size_name.strip().lower())
-        .filter(DailyProduction.status == "ACTIVE")
+        .filter(DailyProduction.status.in_(("ACTIVE", "pending_review", "verified")))
         .scalar()
     ) or 0
 
@@ -75,7 +75,7 @@ def calculate_live_sku_stock(
         .filter(DailyProduction.product_size_ml == product_size_ml)
         .filter(func.lower(DailyProduction.variety) == variety.strip().lower())
         .filter(func.lower(DailyProduction.packaging_size_name) == packaging_size_name.strip().lower())
-        .filter(DailyProduction.status == "ACTIVE")
+        .filter(DailyProduction.status.in_(("ACTIVE", "pending_review", "verified")))
         .scalar()
     ) or 0
 

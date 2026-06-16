@@ -196,6 +196,8 @@ Security hardening status:
 - Raw Materials vertical sections must remain marker-driven, not fixed-position only.
 - Finished Goods blank `packaging_size_name` must keep the fallback format: `{product_size_ml}ML - {variety_design}`.
 - Finished Goods carton mapping uses explicit `carton_type` matched to Box Stock `carton_type`; `packaging_size_name` is only the SKU variation label. Box Stock `size_for_finished_product` is the comma-separated allowlist for product sizes, and production deducts cartons only from that matched Box Stock row.
+- Master onboarding Finished Goods rows are the visible inventory source of truth. Each explicit row receives a stable restore key when omitted; replacement upload deletes stale `FinalProductStock` and compatibility `FinishedGoodsStock` rows before rebuilding exactly from the sheet.
+- Packaging metrics, machine mappings, production, and sales must never auto-create a visible finished-good SKU. Production and sales reject an unknown SKU; they may only update a SKU already created by onboarding or an explicit inventory action.
 
 ## 10. UI/RBAC Route Alignment Rules
 
@@ -355,7 +357,10 @@ Follow this sequence unless a P0 incident overrides it.
 
 ## 18A. Production Lifecycle
 
-- `daily_productions.status` is the canonical lifecycle flag: `ACTIVE` or `REJECTED`.
+- `daily_productions.status` is the canonical lifecycle flag. Stock-effective states are `ACTIVE`, `pending_review`, and `verified`; non-effective states are `REJECTED` and `reversed`.
+- Production entries are never hard-deleted for user mistakes. Reversal marks the original entry `reversed`, stores actor/time/reason, restores raw/carton stock, recalculates finished goods, and leaves audit history intact.
+- Supervisors may create production and reverse only their own latest unverified entry within the configured 30-minute window. Owner/Sub-owner may verify production or reverse any unverified entry with a reason.
+- Production save stores `stock_before_json` and `stock_after_json` for review panels, Daily Sequence, audit, and future Telegram actions.
 - Shift production entry is batch-based: one `ProductionBatchWorkerLine` stores each worker's shared blank/bottom consumption, and child `ProductionBatchOutputLine` rows store multiple finished-good outputs for that worker.
 - Each output creates a compatibility `DailyProduction` row; only the first output per worker carries explicit blank/bottom consumption, so raw material is never multiplied by output count.
 - `POST /api/production/daily-batch` accepts `worker_cards[].outputs[]`, validates every worker/SKU/machine/carton mapping in the authenticated factory, and saves shift wastage once.

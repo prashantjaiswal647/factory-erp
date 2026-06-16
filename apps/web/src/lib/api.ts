@@ -2424,6 +2424,41 @@ export type DailySequenceLogItem = {
   relative_day: string;
 };
 
+export type ProductionReviewEntry = {
+  id: number;
+  date: string;
+  worker_id: number | null;
+  worker_name: string;
+  product_size_ml: number;
+  product_type: string;
+  packaging_size_name: string;
+  quantity_boxes: number;
+  loose_packets_made: number;
+  blank_used_bora: number;
+  blank_used_kg: number;
+  bottom_used_rolls: number;
+  machine_id: number;
+  machine_name: string;
+  shift: string | null;
+  status: string;
+  stock_before_json: Record<string, unknown>;
+  stock_after_json: Record<string, unknown>;
+  created_by: string | null;
+  created_by_user_id: number | null;
+  created_at: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
+  reversed_by: string | null;
+  reversed_at: string | null;
+  reversal_reason: string | null;
+};
+
+export type ProductionReviewResponse = {
+  date: string;
+  shift: string | null;
+  entries: ProductionReviewEntry[];
+};
+
 export type DailySequenceGroup = {
   date: string;
   logs: DailySequenceLogItem[];
@@ -2433,6 +2468,23 @@ export async function getDailySequenceLogs(date?: string) {
   const response = await api.get<DailySequenceLogItem[]>("/api/daily-sequence", {
     params: date ? { date } : undefined,
   });
+  return response.data;
+}
+
+export async function getProductionReviewEntries(date?: string, shift?: string) {
+  const response = await api.get<ProductionReviewResponse>("/api/production/review", {
+    params: { ...(date ? { date } : {}), ...(shift ? { shift } : {}) },
+  });
+  return response.data;
+}
+
+export async function verifyProductionEntry(productionId: number) {
+  const response = await api.post<ProductionReviewEntry>(`/api/production/daily/${productionId}/verify`);
+  return response.data;
+}
+
+export async function reverseProductionEntry(productionId: number, reason: string) {
+  const response = await api.post<ProductionReviewEntry>(`/api/production/daily/${productionId}/reverse`, { reason });
   return response.data;
 }
 

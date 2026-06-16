@@ -1381,6 +1381,14 @@ class DailyProduction(TenantMixin, Base):
     rejected_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejection_reason = Column(Text, nullable=True)
+    reversed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reversed_at = Column(DateTime(timezone=True), nullable=True)
+    reversal_reason = Column(Text, nullable=True)
+    reversal_of_entry_id = Column(Integer, ForeignKey("daily_productions.id", ondelete="SET NULL"), nullable=True, index=True)
+    verified_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    stock_before_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    stock_after_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -1400,7 +1408,10 @@ class DailyProduction(TenantMixin, Base):
         CheckConstraint("labor_cost >= 0", name="ck_daily_productions_labor_cost_non_negative"),
         CheckConstraint("electricity_cost >= 0", name="ck_daily_productions_electricity_cost_non_negative"),
         CheckConstraint("production_cost >= 0", name="ck_daily_productions_cost_non_negative"),
-        CheckConstraint("status IN ('ACTIVE', 'REJECTED')", name="ck_daily_productions_status"),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'REJECTED', 'pending_review', 'verified', 'reversed')",
+            name="ck_daily_productions_status",
+        ),
     )
 
 
@@ -1725,7 +1736,9 @@ def before_session_flush(session, flush_context, instances):
         elif isinstance(obj, FinishedGoodsStock):
             profile = session.query(PackagingProfile).filter(PackagingProfile.id == obj.packaging_profile_id).first()
             if profile:
-                variety = obj.variant_name or "Standard/White"
+                variety = (obj.variant_name or "").strip()
+                if not variety:
+                    continue
                 existing = session.query(FinalProductStock).filter(
                     FinalProductStock.factory_id == obj.factory_id,
                     FinalProductStock.product_size_ml == obj.cup_size_ml,
@@ -1746,19 +1759,6 @@ def before_session_flush(session, flush_context, instances):
                     existing.total_boxes = obj.boxes_available
                     existing.pieces_per_packet = profile.cups_per_poly or 1
                     existing.packets_per_box_limit = profile.polys_per_box or 1
-                else:
-                    fp = FinalProductStock(
-                        factory_id=obj.factory_id,
-                        product_size_ml=obj.cup_size_ml,
-                        variety=variety,
-                        packaging_size_name=profile.profile_name,
-                        pieces_per_packet=profile.cups_per_poly or 1,
-                        current_quantity=obj.boxes_available,
-                        total_boxes=obj.boxes_available,
-                        loose_packets=0,
-                        packets_per_box_limit=profile.polys_per_box or 1
-                    )
-                    session.add(fp)
         elif isinstance(obj, DailySale):
             profile = session.query(PackagingProfile).filter(
                 PackagingProfile.factory_id == obj.factory_id,
@@ -1832,7 +1832,9 @@ def before_session_flush(session, flush_context, instances):
         elif isinstance(obj, FinishedGoodsStock):
             profile = session.query(PackagingProfile).filter(PackagingProfile.id == obj.packaging_profile_id).first()
             if profile:
-                variety = obj.variant_name or "Standard/White"
+                variety = (obj.variant_name or "").strip()
+                if not variety:
+                    continue
                 existing = session.query(FinalProductStock).filter(
                     FinalProductStock.factory_id == obj.factory_id,
                     FinalProductStock.product_size_ml == obj.cup_size_ml,
@@ -1853,19 +1855,6 @@ def before_session_flush(session, flush_context, instances):
                     existing.total_boxes = obj.boxes_available
                     existing.pieces_per_packet = profile.cups_per_poly or 1
                     existing.packets_per_box_limit = profile.polys_per_box or 1
-                else:
-                    fp = FinalProductStock(
-                        factory_id=obj.factory_id,
-                        product_size_ml=obj.cup_size_ml,
-                        variety=variety,
-                        packaging_size_name=profile.profile_name,
-                        pieces_per_packet=profile.cups_per_poly or 1,
-                        current_quantity=obj.boxes_available,
-                        total_boxes=obj.boxes_available,
-                        loose_packets=0,
-                        packets_per_box_limit=profile.polys_per_box or 1
-                    )
-                    session.add(fp)
 
     # 3. Handle deletes (session.deleted)
     for obj in list(session.deleted):

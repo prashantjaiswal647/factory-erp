@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, status, BackgroundT
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image as PILImage, UnidentifiedImageError
-from sqlalchemy import func as sql_func
+from sqlalchemy import func as sql_func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -81,6 +81,7 @@ from services.bulk_validation import (
     make_report,
 )
 from services.accounting import create_outstanding_bill
+from services.media_paths import authorized_signature_root
 from subscription_limits import check_machine_limit, get_machine_limit_usage
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -1649,7 +1650,9 @@ def sync_finished_goods_to_final_product_stock(
             f"does not belong to factory {factory_id}"
         )
 
-    variety = (stock.variant_name or "Standard/White").strip() or "Standard/White"
+    variety = (stock.variant_name or "").strip()
+    if not variety:
+        raise ValueError("Finished Goods variety/design is required")
     packaging_size_name = profile.profile_name.strip()
     final_stock = (
         db.query(FinalProductStock)
@@ -2099,12 +2102,17 @@ def apply_bulk_rows(db: Session, current_user: User, sub_tab_type: str, valid_ro
             fg_debug_info["rows_read"] = len(valid_rows)
         for row in valid_rows:
             product_size_ml = int(row["product_size_ml"])
-            restore_key = (row.get("product_restore_key") or "").strip() or None
-            variety = (row.get("variety_design") or "Standard/White").strip() or "Standard/White"
+            variety = (row.get("variety_design") or "").strip()
+            if not variety:
+                raise ValueError("Finished Goods variety/design is required")
             packaging_size_name = (row.get("packaging_size_name") or "").strip()
             carton_type = (row.get("carton_type") or "").strip()
             if not packaging_size_name:
                 packaging_size_name = f"{product_size_ml}ML - {variety}"
+            restore_key = (row.get("product_restore_key") or "").strip() or (
+                f"SKU-{product_size_ml}-{variety}-{packaging_size_name}"
+            )
+            restore_key = re.sub(r"[^A-Za-z0-9_-]+", "-", restore_key).strip("-")[:100]
             pieces_per_packet = max(int(row["pcs_per_packet"]), 1)
             packets_per_box = max(int(row["packets_per_box"]), 1)
             initial_stock_boxes = max(int(row["initial_stock_boxes"]), 0)
@@ -2229,7 +2237,14 @@ def reset_active_onboarding_master_data(
     )
 
     removed_count = 0
-    for model in (BlankStock, BottomStock, BoxStock, PlasticStock, FinalProductStock):
+    for model in (
+        BlankStock,
+        BottomStock,
+        BoxStock,
+        PlasticStock,
+        FinishedGoodsStock,
+        FinalProductStock,
+    ):
         removed_count += (
             db.query(model)
             .filter(model.factory_id == factory_id)
@@ -2237,6 +2252,194 @@ def reset_active_onboarding_master_data(
         )
     db.flush()
     return archived_count + removed_count
+
+
+def cleanup_stale_plain_white_rows(
+    db: Session,
+    *,
+    factory_id: int,
+    valid_by_type: dict[str, list[dict]],
+) -> dict[str, int]:
+    uploaded_finished_goods = {
+        (
+            int(row["product_size_ml"]),
+            normalized_identity(row.get("variety_design")),
+            normalized_identity(
+                row.get("packaging_size_name")
+                or f"{int(row['product_size_ml'])}ML - {(row.get('variety_design') or '').strip()}"
+            ),
+        )
+        for row in valid_by_type.get("finished_goods", [])
+    }
+    uploaded_blanks = {
+        (int(row["size_ml"]), normalized_identity(row.get("variety_design")))
+        for row in valid_by_type.get("blank_stock", [])
+    }
+    uploaded_bottoms = {
+        (int(row["bottom_size_mm"]), normalized_identity(row.get("variety_design")))
+        for row in valid_by_type.get("bottom_reel", [])
+    }
+
+    fallback_finished_goods_filter = or_(
+        sql_func.lower(FinalProductStock.variety).like("%plain white%"),
+        sql_func.lower(FinalProductStock.variety).like("%white cup%"),
+        sql_func.lower(FinalProductStock.packaging_size_name).like("%plain white%"),
+        sql_func.lower(FinalProductStock.packaging_size_name).like("%white cup%"),
+    )
+    fallback_blank_filter = or_(
+        sql_func.lower(BlankStock.variety).like("%plain white%"),
+        sql_func.lower(BlankStock.variety).like("%white cup%"),
+        sql_func.lower(sql_func.coalesce(BlankStock.material_name, "")).like("%plain white%"),
+        sql_func.lower(sql_func.coalesce(BlankStock.material_name, "")).like("%white cup%"),
+    )
+    fallback_bottom_filter = or_(
+        sql_func.lower(BottomStock.variety).like("%plain white%"),
+        sql_func.lower(BottomStock.variety).like("%white cup%"),
+    )
+
+    removed_finished_goods = 0
+    for row in db.query(FinalProductStock).filter(
+        FinalProductStock.factory_id == factory_id,
+        fallback_finished_goods_filter,
+    ).all():
+        identity = (
+            int(row.product_size_ml),
+            normalized_identity(row.variety),
+            normalized_identity(row.packaging_size_name),
+        )
+        if identity not in uploaded_finished_goods:
+            db.delete(row)
+            removed_finished_goods += 1
+
+    removed_raw_materials = 0
+    for row in db.query(BlankStock).filter(
+        BlankStock.factory_id == factory_id,
+        fallback_blank_filter,
+    ).all():
+        if (int(row.blank_size_ml), normalized_identity(row.variety)) not in uploaded_blanks:
+            db.delete(row)
+            removed_raw_materials += 1
+
+    for row in db.query(BottomStock).filter(
+        BottomStock.factory_id == factory_id,
+        fallback_bottom_filter,
+    ).all():
+        if (int(row.bottom_size_mm), normalized_identity(row.variety)) not in uploaded_bottoms:
+            db.delete(row)
+            removed_raw_materials += 1
+
+    db.flush()
+    logger.info(
+        "Stale Plain White cleanup: factory_id=%s finished_goods_deleted=%s raw_materials_deleted=%s",
+        factory_id,
+        removed_finished_goods,
+        removed_raw_materials,
+    )
+    return {
+        "finished_goods_deleted": removed_finished_goods,
+        "raw_materials_deleted": removed_raw_materials,
+    }
+
+
+def finished_goods_upload_identities(valid_rows: list[dict]) -> set[tuple[int, str, str]]:
+    return {
+        (
+            int(row["product_size_ml"]),
+            normalized_identity(row.get("variety_design")),
+            normalized_identity(
+                row.get("packaging_size_name")
+                or f"{int(row['product_size_ml'])}ML - {(row.get('variety_design') or '').strip()}"
+            ),
+        )
+        for row in valid_rows
+    }
+
+
+def final_product_identity(row: FinalProductStock) -> tuple[int, str, str]:
+    return (
+        int(row.product_size_ml),
+        normalized_identity(row.variety),
+        normalized_identity(row.packaging_size_name),
+    )
+
+
+def final_product_display_name(row: FinalProductStock) -> str:
+    return " ".join(
+        part for part in (
+            f"{row.product_size_ml}ml",
+            row.variety,
+            row.packaging_size_name,
+        )
+        if part
+    )
+
+
+def audit_finished_goods_source(
+    db: Session,
+    *,
+    factory_id: int,
+    uploaded_rows: list[dict],
+) -> dict[str, object]:
+    uploaded_identities = finished_goods_upload_identities(uploaded_rows)
+    db_rows = (
+        db.query(FinalProductStock)
+        .filter(FinalProductStock.factory_id == factory_id)
+        .with_for_update()
+        .all()
+    )
+    auto_generated_rows = [
+        row for row in db_rows
+        if final_product_identity(row) not in uploaded_identities
+    ]
+    auto_generated_names = [final_product_display_name(row) for row in auto_generated_rows]
+    logger.info(
+        "Finished Goods Source Audit: excel_imported_rows=%s db_rows_count=%s auto_generated_rows_count=%s auto_generated_row_names=%s",
+        len(uploaded_rows),
+        len(db_rows),
+        len(auto_generated_rows),
+        auto_generated_names,
+    )
+    for row in auto_generated_rows:
+        db.delete(row)
+    if auto_generated_rows:
+        db.flush()
+
+    remaining_count = (
+        db.query(FinalProductStock)
+        .filter(FinalProductStock.factory_id == factory_id)
+        .count()
+    )
+    if remaining_count != len(uploaded_rows):
+        logger.error(
+            "Finished Goods Source Audit failed: factory_id=%s excel_imported_rows=%s db_rows_count_after_cleanup=%s",
+            factory_id,
+            len(uploaded_rows),
+            remaining_count,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "Finished Goods upload could not be reconciled exactly. "
+                    "Check duplicate Finished Goods business keys in the workbook."
+                ),
+                "overall_status": "failed",
+                "failed_rows": [{
+                    "sheet": "Finished Goods",
+                    "row": None,
+                    "error": (
+                        f"Expected {len(uploaded_rows)} visible Finished Goods rows, "
+                        f"found {remaining_count} after cleanup."
+                    ),
+                }],
+            },
+        )
+    return {
+        "excel_imported_rows": len(uploaded_rows),
+        "db_rows_count": remaining_count,
+        "auto_generated_rows_count": len(auto_generated_rows),
+        "auto_generated_row_names": auto_generated_names,
+    }
 
 
 def _log_onboarding_change(db: Session, factory_id: int, action: str, subject: str) -> None:
@@ -2385,6 +2588,24 @@ async def bulk_upload_master_onboarding(
     }
     sheet_stats = {}
     try:
+        plain_white_cleanup = cleanup_stale_plain_white_rows(
+            db,
+            factory_id=int(current_user.factory_id),
+            valid_by_type=valid_by_type,
+        )
+        prior_finished_goods_identities = {
+            (
+                int(row.product_size_ml),
+                normalized_identity(row.variety),
+                normalized_identity(row.packaging_size_name),
+            )
+            for row in (
+            db.query(FinalProductStock)
+            .filter(FinalProductStock.factory_id == int(current_user.factory_id))
+            .all()
+            )
+        }
+        uploaded_finished_goods_identities = finished_goods_upload_identities(valid_by_type.get("finished_goods", []))
         operation_counts["skipped"] = reset_active_onboarding_master_data(
             db,
             factory_id=int(current_user.factory_id),
@@ -2408,6 +2629,25 @@ async def bulk_upload_master_onboarding(
             for k in ["inserted", "updated", "unchanged", "skipped", "failed"]:
                 operation_counts[k] += sub_stats[k]
             sheet_stats[sub_tab_type] = sub_stats
+
+        explicit_finished_goods_count = len(valid_by_type.get("finished_goods", []))
+        finished_goods_source_audit = audit_finished_goods_source(
+            db,
+            factory_id=int(current_user.factory_id),
+            uploaded_rows=valid_by_type.get("finished_goods", []),
+        )
+        logger.info(
+            "Finished goods explicit rows imported: %s",
+            explicit_finished_goods_count,
+        )
+        logger.info(
+            "Finished goods archived because missing from upload: %s",
+            len(prior_finished_goods_identities - uploaded_finished_goods_identities),
+        )
+        logger.info(
+            "Auto-created finished goods rows: %s",
+            finished_goods_source_audit["auto_generated_rows_count"],
+        )
 
         operation_counts["warnings"] = len([
             issue for issue in issues if issue.severity == ValidationSeverity.WARNING
@@ -2465,7 +2705,9 @@ async def bulk_upload_master_onboarding(
                 "unchanged_count": sheet_stats.get("blank_stock", {}).get("unchanged", 0),
                 "total_boras_imported": total_boras_imported,
                 "total_kg_imported": total_kg_imported,
-            }
+            },
+            "plain_white_cleanup": plain_white_cleanup,
+            "finished_goods_source_audit": finished_goods_source_audit,
         }
 
         return {
@@ -2478,6 +2720,12 @@ async def bulk_upload_master_onboarding(
             "archived_skipped_count": operation_counts["skipped"],
             "inserted_counts": inserted_counts,
             "operation_counts": operation_counts,
+            "created": operation_counts["inserted"],
+            "updated": operation_counts["updated"],
+            "archived": operation_counts["skipped"],
+            "deleted": plain_white_cleanup["finished_goods_deleted"] + plain_white_cleanup["raw_materials_deleted"],
+            "unchanged": operation_counts["unchanged"],
+            "warnings": operation_counts["warnings"],
             "validation_report": report.to_dict(),
             "summary": summary_payload,
             "fg_debug_info": fg_debug_info,
@@ -2491,22 +2739,36 @@ async def bulk_upload_master_onboarding(
         raise
     except IntegrityError as exc:
         db.rollback()
+        constraint_text = str(getattr(exc, "orig", exc))
+        logger.exception(
+            "Onboarding master replace conflict: model=master_data business_key=unknown existing_row_id=unknown incoming_row_values=%s reason=%s",
+            {
+                sheet: rows[:5]
+                for sheet, rows in valid_by_type.items()
+                if rows
+            },
+            constraint_text,
+        )
+        actionable_error = (
+            "Existing master data conflicted with this replace upload and could not be reconciled. "
+            f"Database reason: {constraint_text}"
+        )
         db_issues = enrich_failed_rows([{
             "sheet": "Database",
             "row": None,
-            "error": "A conflicting master-data identity could not be resolved automatically.",
+            "error": actionable_error,
         }])
         report = make_report(db_issues, successful_rows=0, total_rows_attempted=total_attempted)
         raise HTTPException(
-            status_code=409,
+            status_code=422,
             detail={
-                "message": "A master-data conflict could not be resolved automatically. Review the workbook for ambiguous identities.",
+                "message": actionable_error,
                 "overall_status": "failed",
                 "validation_report": report.to_dict(),
                 "failed_rows": [{
                     "sheet": "Database",
                     "row": None,
-                    "error": "A conflicting master-data identity could not be resolved automatically.",
+                    "error": actionable_error,
                 }],
             },
         ) from exc
@@ -2913,10 +3175,12 @@ def get_authorized_signature_file(
     if row is None:
         raise HTTPException(status_code=404, detail="Signature not found")
 
-    allowed_root = (
-        Path("volumes/media/factory_signatures") / str(factory_id)
+    allowed_root = (authorized_signature_root() / str(factory_id)).resolve()
+    file_path = (
+        authorized_signature_root().parent / row.file_path
+        if row.file_path.startswith("factory_signatures/")
+        else Path(row.file_path)
     ).resolve()
-    file_path = Path(row.file_path).resolve()
     if allowed_root not in file_path.parents or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Signature file not found")
 
@@ -2953,7 +3217,7 @@ async def upload_authorized_signature(
 
     extension = SIGNATURE_MIME_TYPES[mime_type]
     factory_id = int(current_user.factory_id)
-    signature_dir = Path("volumes/media/factory_signatures") / str(factory_id)
+    signature_dir = authorized_signature_root() / str(factory_id)
     signature_dir.mkdir(parents=True, exist_ok=True)
     target = signature_dir / f"{role}{extension}"
     row = (
@@ -2965,19 +3229,25 @@ async def upload_authorized_signature(
         .with_for_update()
         .first()
     )
-    old_path = Path(row.file_path) if row is not None else None
+    old_path = None
+    if row is not None:
+        old_path = (
+            authorized_signature_root().parent / row.file_path
+            if row.file_path.startswith("factory_signatures/")
+            else Path(row.file_path)
+        )
     target.write_bytes(content)
     if row is None:
         row = FactoryAuthorizedSignature(
             factory_id=factory_id,
             role=role,
-            file_path=target.as_posix(),
+            file_path=f"factory_signatures/{factory_id}/{target.name}",
             original_filename=file.filename or target.name,
             uploaded_by_user_id=current_user.id,
         )
         db.add(row)
     else:
-        row.file_path = target.as_posix()
+        row.file_path = f"factory_signatures/{factory_id}/{target.name}"
         row.original_filename = file.filename or target.name
         row.uploaded_by_user_id = current_user.id
     if role == "owner":
@@ -3009,7 +3279,11 @@ def delete_authorized_signature(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Signature not found")
-    file_path = Path(row.file_path)
+    file_path = (
+        authorized_signature_root().parent / row.file_path
+        if row.file_path.startswith("factory_signatures/")
+        else Path(row.file_path)
+    )
     db.delete(row)
     if role == "owner":
         factory = db.query(Factory).filter(Factory.id == factory_id).first()
@@ -4079,25 +4353,6 @@ def onboarding_step3_materials(
                 )
             )
 
-        final_stock = (
-            db.query(FinalProductStock)
-            .filter(FinalProductStock.factory_id == factory_id)
-            .filter(FinalProductStock.product_size_ml == item.cup_size_ml)
-            .filter(sql_func.lower(FinalProductStock.packaging_size_name) == packaging_size_name.lower())
-            .first()
-        )
-        if final_stock is None:
-            db.add(
-                FinalProductStock(
-                    factory_id=factory_id,
-                    product_size_ml=item.cup_size_ml,
-                    packaging_size_name=packaging_size_name,
-                    current_quantity=0,
-                    total_boxes=0,
-                    loose_packets=0,
-                    packets_per_box_limit=item.cups_per_box,
-                )
-            )
         pack_saved += 1
 
     db.commit()
