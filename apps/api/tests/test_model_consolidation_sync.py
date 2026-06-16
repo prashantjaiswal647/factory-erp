@@ -257,7 +257,23 @@ def test_finished_goods_final_product_synchronization():
         db.add(profile)
         db.commit()
 
-        # 1. Insert FinishedGoodsStock
+        # 1. Seed explicit visible stock, then insert FinishedGoodsStock compatibility row.
+        # Compatibility listeners may update explicit visible SKUs but must not create
+        # fallback/plain-white visible inventory on their own.
+        fp = FinalProductStock(
+            factory_id=1,
+            product_size_ml=250,
+            variety="Special Design",
+            packaging_size_name="250ML Special Packing",
+            pieces_per_packet=50,
+            packets_per_box_limit=10,
+            total_boxes=0,
+            current_quantity=0,
+            loose_packets=0,
+        )
+        db.add(fp)
+        db.commit()
+
         fg = FinishedGoodsStock(
             factory_id=1,
             cup_size_ml=250,
@@ -268,7 +284,7 @@ def test_finished_goods_final_product_synchronization():
         db.add(fg)
         db.commit()
 
-        # Verify FinalProductStock created
+        # Verify explicit FinalProductStock updated
         fp = db.query(FinalProductStock).filter(
             FinalProductStock.factory_id == 1,
             FinalProductStock.product_size_ml == 250,

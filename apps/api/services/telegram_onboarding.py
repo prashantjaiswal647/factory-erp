@@ -402,18 +402,15 @@ def render_callback_response(db: Session, binding: TelegramUserBinding, callback
 
     if callback_data.endswith("briefing_history"):
         from models import BriefingSnapshot
-        from datetime import timedelta
-        cutoff = today - timedelta(days=7)
         # Fetch last 7 briefings for this factory & user's role
         query = db.query(BriefingSnapshot).filter(
             BriefingSnapshot.factory_id == factory_id,
             BriefingSnapshot.role == user.role,
-            BriefingSnapshot.briefing_date >= cutoff
         )
         if user.role == "Sub-Owner":
             query = query.filter(BriefingSnapshot.user_id == user.id)
             
-        snapshots = query.order_by(BriefingSnapshot.briefing_date.desc()).all()
+        snapshots = query.order_by(BriefingSnapshot.briefing_date.desc()).limit(7).all()
         if not snapshots:
             return "📜 Briefing History\n\nAbhi is section ka data available nahi hai."
             

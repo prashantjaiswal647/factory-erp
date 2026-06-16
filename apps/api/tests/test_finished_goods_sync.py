@@ -42,6 +42,7 @@ from models import (
     Factory,
     FinalProductStock,
     FinishedGoodsStock,
+    Inventory,
     Machine,
     PackagingProfile,
     SalesInvoice,
@@ -317,6 +318,10 @@ def test_onboarding_finished_goods_are_exact_visible_baseline(app_factory):
 def test_finished_goods_stock_listener_does_not_auto_create_visible_white_variant(app_factory):
     client, db = app_factory(factory_id=1)
     seed_factory(db, 1)
+    box_inventory = Inventory(factory_id=1, item_name="55ML Plain White Cup", category="Packaging", unit="pieces")
+    poly_inventory = Inventory(factory_id=1, item_name="55ml Polybag", category="Packaging", unit="pieces")
+    db.add_all([box_inventory, poly_inventory])
+    db.flush()
     profile = PackagingProfile(
         factory_id=1,
         profile_name="55ML Plain White Cup",
@@ -326,6 +331,8 @@ def test_finished_goods_stock_listener_does_not_auto_create_visible_white_varian
         print_design_name="",
         cups_per_poly=50,
         polys_per_box=20,
+        box_inventory_id=box_inventory.id,
+        poly_inventory_id=poly_inventory.id,
     )
     db.add(profile)
     db.flush()
