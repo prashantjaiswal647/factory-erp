@@ -290,7 +290,7 @@ def production_mapping_issue(db: Session, factory_id: str, stock: FinalProductSt
 class FinalStockCreate(BaseModel):
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: Optional[int] = Field(default=None, gt=0)
-    variety: str = "Standard/White"
+    variety: str = Field(..., min_length=1, max_length=100)
     packaging_size: Optional[str] = Field(default=None, max_length=100)
     packaging_size_name: Optional[str] = Field(default=None, max_length=100)
     initial_quantity: int = Field(default=0, ge=0)
@@ -700,7 +700,7 @@ class FinishedGoodVariantCreate(BaseModel):
     duplicate prevention at the API layer.
     """
     product_size_ml: int = Field(..., gt=0)
-    variety: str = Field(default="Standard/White", min_length=1, max_length=100)
+    variety: str = Field(..., min_length=1, max_length=100)
     packaging_size_name: str = Field(..., min_length=1, max_length=100)
     pieces_per_packet: int = Field(..., gt=0)
     packets_per_box_limit: int = Field(..., gt=0)
@@ -771,7 +771,7 @@ def create_finished_good_variant(
         from services.carton_mapping import parse_allowed_sizes
         
         factory_id = str(current_user.factory_id)
-        variety = (payload.variety or "Standard/White").strip() or "Standard/White"
+        variety = payload.variety.strip()
         packaging_size_name = payload.packaging_size_name.strip()
 
         # Database unique constraint is on (factory_id, product_size_ml, variety, packaging_size_name).

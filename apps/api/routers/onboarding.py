@@ -2907,7 +2907,7 @@ def _packaging_metric_summary(metric: PackagingMetrics) -> dict:
 class FinalProductOpeningStockRequest(BaseModel):
     product_id: Optional[int] = Field(default=None, gt=0)
     product_size_ml: Optional[int] = Field(default=None, gt=0)
-    variety: str = Field(default="Standard/White", max_length=100)
+    variety: str = Field(..., min_length=1, max_length=100)
     packaging_size: Optional[str] = Field(default=None, max_length=100)
     packaging_size_name: Optional[str] = Field(default=None, max_length=100)
     initial_quantity: int = Field(default=0, ge=0)
@@ -3355,7 +3355,7 @@ def save_final_product_opening_stock(
     try:
         product_size_ml = payload.product_size_ml
         packaging_size_name = (payload.packaging_size_name or payload.packaging_size or "").strip()
-        variety = (payload.variety or "Standard/White").strip() or "Standard/White"
+        variety = payload.variety.strip()
         pieces_per_packet = int(payload.pieces_per_packet or 1)
         packets_per_box_limit = int(payload.packets_per_box_limit or payload.packets_per_box or 1)
         quantity = payload.current_quantity
@@ -3377,8 +3377,8 @@ def save_final_product_opening_stock(
             if stock is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Final product stock item not found")
             product_size_ml = product_size_ml if "product_size_ml" in provided_fields else stock.product_size_ml
-            packaging_size_name = packaging_size_name if ("packaging_size_name" in provided_fields or "packaging_size" in provided_fields) else (stock.packaging_size_name or f"{product_size_ml or 210}ml Standard Box")
-            variety = variety.strip() if "variety" in provided_fields else (stock.variety or "Standard/White")
+            packaging_size_name = packaging_size_name if ("packaging_size_name" in provided_fields or "packaging_size" in provided_fields) else stock.packaging_size_name
+            variety = variety.strip() if "variety" in provided_fields else stock.variety
             pieces_per_packet = int(pieces_per_packet if "pieces_per_packet" in provided_fields else (stock.pieces_per_packet or 1))
             packets_per_box_limit = int(
                 packets_per_box_limit
@@ -3387,7 +3387,8 @@ def save_final_product_opening_stock(
             )
         else:
             product_size_ml = int(product_size_ml or 210)
-            packaging_size_name = packaging_size_name or f"{product_size_ml}ml Standard Box"
+            if not packaging_size_name:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="packaging_size_name is required")
             stock = (
                 db.query(FinalProductStock)
                 .filter(FinalProductStock.factory_id == factory_id)

@@ -315,6 +315,131 @@ def test_onboarding_finished_goods_are_exact_visible_baseline(app_factory):
     assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == len(rows)
 
 
+def test_onboarding_import_does_not_create_plain_white_variants(app_factory):
+    from routers.onboarding import apply_bulk_rows, reset_active_onboarding_master_data
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    user = SimpleNamespace(id=1, factory_id=1)
+    rows = [
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 55,
+            "variety_design": "Nescafe Cup",
+            "packaging_size_name": "55ml Nescafe Cup",
+            "carton_type": "Small Box",
+            "pcs_per_packet": 50,
+            "packets_per_box": 20,
+            "initial_stock_boxes": 3,
+            "initial_loose_packets": 0,
+        },
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": 65,
+            "variety_design": "Black Cup",
+            "packaging_size_name": "65ml Black Cup",
+            "carton_type": "Small Box",
+            "pcs_per_packet": 50,
+            "packets_per_box": 20,
+            "initial_stock_boxes": 4,
+            "initial_loose_packets": 0,
+        },
+    ]
+
+    reset_active_onboarding_master_data(db, factory_id=1)
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == 2
+    db.commit()
+
+    variants = [
+        (row.product_size_ml, row.variety, row.packaging_size_name)
+        for row in db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).all()
+    ]
+    assert variants == [
+        (55, "Nescafe Cup", "55ml Nescafe Cup"),
+        (65, "Black Cup", "65ml Black Cup"),
+    ]
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+    assert "plain white" not in response.text.lower()
+
+
+def test_replace_mode_removes_old_variants(app_factory):
+    from routers.onboarding import apply_bulk_rows, reset_active_onboarding_master_data
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    user = SimpleNamespace(id=1, factory_id=1)
+    db.add(FinalProductStock(
+        factory_id=1,
+        product_size_ml=55,
+        variety="Plain White Cup",
+        packaging_size_name="55ml Plain White Cup",
+        pieces_per_packet=50,
+        packets_per_box_limit=20,
+        total_boxes=1,
+        current_quantity=1,
+    ))
+    db.commit()
+
+    reset_active_onboarding_master_data(db, factory_id=1)
+    assert apply_bulk_rows(db, user, "finished_goods", [{
+        "row_type": "ACTUAL",
+        "product_size_ml": 100,
+        "variety_design": "Ice Cup ITC Cup",
+        "packaging_size_name": "100ml Ice Cup ITC Cup",
+        "carton_type": "Big Box",
+        "pcs_per_packet": 40,
+        "packets_per_box": 25,
+        "initial_stock_boxes": 7,
+        "initial_loose_packets": 0,
+    }]) == 1
+    db.commit()
+
+    rows = client.get("/api/inventory/final-stock").json()
+    assert [(row["product_size_ml"], row["variety"], row["packaging_size_name"]) for row in rows] == [
+        (100, "Ice Cup ITC Cup", "100ml Ice Cup ITC Cup")
+    ]
+
+
+def test_inventory_matches_uploaded_sheet(app_factory):
+    from routers.onboarding import apply_bulk_rows, reset_active_onboarding_master_data
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    user = SimpleNamespace(id=1, factory_id=1)
+    uploaded = [
+        (55, "Nescafe Cup", "55ml Nescafe Cup", 3),
+        (65, "Black Cup", "65ml Black Cup", 4),
+        (100, "Ice Cup ITC Cup", "100ml Ice Cup ITC Cup", 5),
+    ]
+    rows = [
+        {
+            "row_type": "ACTUAL",
+            "product_size_ml": size,
+            "variety_design": variety,
+            "packaging_size_name": packaging,
+            "carton_type": "Box",
+            "pcs_per_packet": 50,
+            "packets_per_box": 20,
+            "initial_stock_boxes": boxes,
+            "initial_loose_packets": 0,
+        }
+        for size, variety, packaging, boxes in uploaded
+    ]
+
+    reset_active_onboarding_master_data(db, factory_id=1)
+    assert apply_bulk_rows(db, user, "finished_goods", rows) == len(rows)
+    db.commit()
+
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200
+    assert {
+        (row["product_size_ml"], row["variety"], row["packaging_size_name"], row["current_quantity"])
+        for row in response.json()
+    } == set(uploaded)
+
+
 def test_finished_goods_stock_listener_does_not_auto_create_visible_white_variant(app_factory):
     client, db = app_factory(factory_id=1)
     seed_factory(db, 1)
@@ -350,6 +475,162 @@ def test_finished_goods_stock_listener_does_not_auto_create_visible_white_varian
     response = client.get("/api/inventory/final-stock")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_finished_goods_sync_does_not_auto_generate_variants(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    box_inventory = Inventory(factory_id=1, item_name="65ML Plain White Cup", category="Packaging", unit="pieces")
+    poly_inventory = Inventory(factory_id=1, item_name="65ml Polybag", category="Packaging", unit="pieces")
+    db.add_all([box_inventory, poly_inventory])
+    db.flush()
+    profile = PackagingProfile(
+        factory_id=1,
+        profile_name="65ML Plain White Cup",
+        cup_size_ml=65,
+        cups_per_poly=50,
+        polys_per_box=20,
+        box_inventory_id=box_inventory.id,
+        poly_inventory_id=poly_inventory.id,
+    )
+    db.add(profile)
+    db.flush()
+    db.add(FinishedGoodsStock(
+        factory_id=1,
+        cup_size_ml=65,
+        packaging_profile_id=profile.id,
+        boxes_available=12,
+        category="CUP_FINISHED",
+        variant_name="",
+    ))
+    db.commit()
+
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == 0
+    assert client.get("/api/inventory/final-stock").json() == []
+
+
+def test_production_does_not_create_hidden_variants(app_factory):
+    from routers.inventory import recalculate_and_sync_sku_stock
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    assert recalculate_and_sync_sku_stock(
+        db=db,
+        factory_id="1",
+        product_size_ml=55,
+        variety="Plain White Cup",
+        packaging_size_name="55ml Plain White Cup",
+    ) == (0, 0)
+    db.commit()
+
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == 0
+    assert client.get("/api/inventory/final-stock").json() == []
+
+
+def test_inventory_contains_only_defined_variants(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    db.add_all([
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=55,
+            variety="Nescafe Cup",
+            packaging_size_name="55ml Nescafe Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            current_quantity=1,
+            total_boxes=1,
+        ),
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=65,
+            variety="Black Cup",
+            packaging_size_name="65ml Black Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            current_quantity=2,
+            total_boxes=2,
+        ),
+    ])
+    db.commit()
+
+    response = client.get("/api/inventory/final-stock")
+    assert response.status_code == 200
+    assert [(row["product_size_ml"], row["variety"]) for row in response.json()] == [
+        (55, "Nescafe Cup"),
+        (65, "Black Cup"),
+    ]
+
+
+def test_manual_variant_creation_still_works(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+
+    response = client.post("/api/inventory/finished-goods/variants", json={
+        "product_size_ml": 75,
+        "variety": "Manual Printed",
+        "packaging_size_name": "75ml Manual Printed",
+        "pieces_per_packet": 50,
+        "packets_per_box_limit": 20,
+        "opening_stock_boxes": 2,
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["variety"] == "Manual Printed"
+    assert db.query(FinalProductStock).filter_by(factory_id="1", variety="Manual Printed").count() == 1
+
+
+def test_manual_variant_creation_requires_explicit_variant(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+
+    response = client.post("/api/inventory/finished-goods/variants", json={
+        "product_size_ml": 75,
+        "packaging_size_name": "75ml Missing Variant",
+        "pieces_per_packet": 50,
+        "packets_per_box_limit": 20,
+    })
+
+    assert response.status_code == 422
+    assert db.query(FinalProductStock).filter(FinalProductStock.factory_id == 1).count() == 0
+
+
+def test_auto_generated_finished_goods_cleanup_dry_run_and_remove(app_factory):
+    from services.finished_goods_cleanup import (
+        dry_run_auto_generated_finished_goods,
+        remove_auto_generated_finished_goods,
+    )
+
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    keep = FinalProductStock(
+        factory_id=1,
+        product_size_ml=55,
+        variety="Nescafe Cup",
+        packaging_size_name="55ml Nescafe Cup",
+        pieces_per_packet=50,
+        packets_per_box_limit=20,
+    )
+    orphan = FinalProductStock(
+        factory_id=1,
+        product_size_ml=55,
+        variety="Plain White Cup",
+        packaging_size_name="55ml Plain White Cup",
+        pieces_per_packet=50,
+        packets_per_box_limit=20,
+    )
+    db.add_all([keep, orphan])
+    db.commit()
+
+    report = dry_run_auto_generated_finished_goods(db, factory_id=1)
+    assert [(row.variant_name, row.safe_to_remove) for row in report] == [
+        ("55ml Plain White Cup 55ml Plain White Cup", True)
+    ]
+
+    remove_auto_generated_finished_goods(db, factory_id=1)
+    db.commit()
+    rows = client.get("/api/inventory/final-stock").json()
+    assert [(row["product_size_ml"], row["variety"]) for row in rows] == [(55, "Nescafe Cup")]
 
 
 def test_production_page_can_reuse_uploaded_variant(app_factory):
