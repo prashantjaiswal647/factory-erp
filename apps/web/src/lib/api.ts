@@ -2465,6 +2465,43 @@ export type ProductionReviewResponse = {
   entries: ProductionReviewEntry[];
 };
 
+export type ActionEventReview = {
+  id: number;
+  action_type: string;
+  module: string;
+  entity_type: string;
+  entity_id: number | null;
+  created_by_user_id: number | null;
+  created_by_name: string | null;
+  created_by_role: string | null;
+  created_at: string | null;
+  status: "pending" | "verified" | "rolled_back";
+  shift: string | null;
+  before_payload_json: Record<string, any>;
+  after_payload_json: Record<string, any>;
+  impact_summary_json: Record<string, any>;
+  rollback_payload_json: Record<string, any>;
+  verified_by_user_id: number | null;
+  verified_by_name: string | null;
+  verified_at: string | null;
+  rolled_back_by_user_id: number | null;
+  rolled_back_by_name: string | null;
+  rolled_back_at: string | null;
+  rollback_reason: string | null;
+  allowed_actions: {
+    can_verify: boolean;
+    can_rollback: boolean;
+    reason_required: boolean;
+  };
+};
+
+export type ActionEventReviewResponse = {
+  date: string;
+  shift: string | null;
+  status: string;
+  events: ActionEventReview[];
+};
+
 export type DailySequenceGroup = {
   date: string;
   logs: DailySequenceLogItem[];
@@ -2474,6 +2511,23 @@ export async function getDailySequenceLogs(date?: string) {
   const response = await api.get<DailySequenceLogItem[]>("/api/daily-sequence", {
     params: date ? { date } : undefined,
   });
+  return response.data;
+}
+
+export async function getDailySequenceActionEvents(date?: string, shift?: string, status = "active") {
+  const response = await api.get<ActionEventReviewResponse>("/api/daily-sequence/actions", {
+    params: { ...(date ? { date } : {}), ...(shift ? { shift } : {}), status },
+  });
+  return response.data;
+}
+
+export async function verifyActionEvent(eventId: number) {
+  const response = await api.post<ActionEventReview>(`/api/daily-sequence/actions/${eventId}/verify`);
+  return response.data;
+}
+
+export async function rollbackActionEvent(eventId: number, reason: string) {
+  const response = await api.post<ActionEventReview>(`/api/daily-sequence/actions/${eventId}/rollback`, { reason });
   return response.data;
 }
 

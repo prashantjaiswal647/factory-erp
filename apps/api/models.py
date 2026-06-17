@@ -1337,6 +1337,11 @@ class FinalProductStock(TenantMixin, Base):
     total_boxes = Column(Integer, nullable=False, default=0, server_default="0")
     loose_packets = Column(Integer, nullable=False, default=0, server_default="0")
     packets_per_box_limit = Column(Integer, nullable=False)
+    source = Column(String(50), nullable=False, default="unknown", server_default="unknown", index=True)
+    is_auto_created = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -1573,6 +1578,37 @@ class ActivityLog(TenantMixin, Base):
     short_statement = Column(Text, nullable=True)
     committed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
+
+
+class ActionEvent(TenantMixin, Base):
+    __tablename__ = "action_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    action_type = Column(String(100), nullable=False, index=True)
+    module = Column(String(100), nullable=False, index=True)
+    entity_type = Column(String(100), nullable=False, index=True)
+    entity_id = Column(Integer, nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_role = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    status = Column(String(20), nullable=False, default="pending", server_default="pending", index=True)
+    shift = Column(String(50), nullable=True, index=True)
+    before_payload_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    after_payload_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    impact_summary_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    rollback_payload_json = Column(MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql")), nullable=True)
+    verified_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    rolled_back_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    rolled_back_at = Column(DateTime(timezone=True), nullable=True)
+    rollback_reason = Column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'verified', 'rolled_back')", name="ck_action_events_status"),
+        Index("idx_action_events_factory_created", "factory_id", "created_at"),
+        Index("idx_action_events_factory_status", "factory_id", "status"),
+        Index("idx_action_events_entity", "entity_type", "entity_id"),
+    )
 
 
 class UnifiedAlert(TenantMixin, Base):

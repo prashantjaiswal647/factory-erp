@@ -369,6 +369,15 @@ Follow this sequence unless a P0 incident overrides it.
 - Owner rejection requires a reason, records actor/timestamp, writes an ActivityLog, and reverses finished-goods impact through deterministic stock recalculation.
 - Shift production batches are persisted in `production_batches` with worker detail in `production_batch_worker_lines`; each worker line also creates a compatibility `DailyProduction` row so existing worker summaries, briefing, costing, and historical reports remain intact.
 
+## 18B. Daily Sequence Action Review
+
+- `action_events` is the canonical Daily Sequence review/audit table for reversible business actions.
+- New reversible actions must create an `ActionEvent` at write time with factory scope, actor role, before/after payloads, impact summary, and entity reference.
+- Daily Sequence action review APIs live under `/api/daily-sequence/actions` and return `allowed_actions` from server-side role checks; frontend buttons are advisory only.
+- Phase 1 live rollback handler is production only: production rollback delegates to the controlled production reversal service and never hard deletes the original production row.
+- Supervisor can view/verify/rollback only own pending actions; Sub Owner can act on own and Supervisor pending actions, but not Owner actions; Owner can act on all pending actions.
+- Rolled-back action events stay audit-visible through explicit `status=rolled_back` or `status=all`; default active views hide rolled-back events.
+
 ## 19. Profit Intelligence
 
 - `daily_profit_snapshot` is the canonical deterministic daily profitability summary, unique by factory and date.

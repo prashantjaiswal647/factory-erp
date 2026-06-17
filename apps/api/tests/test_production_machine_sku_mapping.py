@@ -12,6 +12,7 @@ from auth import get_current_user
 from db import Base, get_db
 from main import app
 from models import (
+    ActionEvent,
     BlankStock,
     BottomStock,
     BoxStock,
@@ -105,6 +106,17 @@ def _as_user(user_id: int, role: str, username: str):
     )
 
 
+def _set_action_event_created_date(session_factory, date_text: str) -> int:
+    db = session_factory()
+    event = db.query(ActionEvent).order_by(ActionEvent.id.desc()).first()
+    assert event is not None
+    event.created_at = datetime.fromisoformat(f"{date_text}T10:00:00+00:00")
+    event_id = event.id
+    db.commit()
+    db.close()
+    return event_id
+
+
 def test_supervisor_reverses_own_latest_production_without_hard_delete(mapped_production_client):
     client, session_factory = mapped_production_client
     _as_user(2, "Supervisor", "Supervisor")
@@ -134,6 +146,119 @@ def test_supervisor_reverses_own_latest_production_without_hard_delete(mapped_pr
     assert db.get(FinalProductStock, 2101).current_quantity == 2
     assert db.query(BlankStock).filter_by(blank_size_ml=210, variety="White").one().total_boras == Decimal("10.000")
     assert db.query(BottomStock).filter_by(bottom_size_mm=47, variety="White").one().total_rolls == 10
+    db.close()
+
+
+def test_production_save_creates_daily_sequence_action_event(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(2, "Supervisor", "Supervisor")
+
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-15"))
+    assert created.status_code == 201, created.text
+    production_id = created.json()["production_id"]
+
+    db = session_factory()
+    event = db.query(ActionEvent).one()
+    assert event.action_type == "PRODUCTION_ADDED"
+    assert event.module == "production"
+    assert event.entity_type == "daily_production"
+    assert event.entity_id == production_id
+    assert event.created_by_user_id == 2
+    assert event.created_by_role == "Supervisor"
+    assert event.status == "pending"
+    assert event.before_payload_json["finished_goods"]["boxes"] == 2
+    assert event.after_payload_json["finished_goods"]["boxes"] == 3
+    assert event.impact_summary_json["worker_name"] == "Raju"
+    db.close()
+
+
+def test_daily_sequence_action_rollback_restores_stock_and_hides_from_active(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(2, "Supervisor", "Supervisor")
+
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-16"))
+    assert created.status_code == 201, created.text
+    production_id = created.json()["production_id"]
+    _set_action_event_created_date(session_factory, "2026-06-16")
+
+    active = client.get("/api/daily-sequence/actions", params={"date": "2026-06-16"})
+    assert active.status_code == 200, active.text
+    event = active.json()["events"][0]
+    assert event["entity_id"] == production_id
+    assert event["created_by_name"] == "Supervisor"
+    assert event["created_by_role"] == "Supervisor"
+    assert event["allowed_actions"]["can_rollback"] is True
+    assert event["allowed_actions"]["can_verify"] is True
+
+    rollback = client.post(
+        f"/api/daily-sequence/actions/{event['id']}/rollback",
+        json={"reason": "Duplicate production entry"},
+    )
+    assert rollback.status_code == 200, rollback.text
+    assert rollback.json()["status"] == "rolled_back"
+    assert rollback.json()["rollback_reason"] == "Duplicate production entry"
+
+    db = session_factory()
+    row = db.query(DailyProduction).filter_by(id=production_id).one()
+    assert row.status == "reversed"
+    assert db.get(FinalProductStock, 2101).current_quantity == 2
+    assert db.query(BlankStock).filter_by(blank_size_ml=210, variety="White").one().total_boras == Decimal("10.000")
+    db.close()
+
+    active_after = client.get("/api/daily-sequence/actions", params={"date": "2026-06-16"})
+    assert active_after.status_code == 200
+    assert active_after.json()["events"] == []
+
+    rolled_back = client.get("/api/daily-sequence/actions", params={"date": "2026-06-16", "status": "rolled_back"})
+    assert rolled_back.status_code == 200
+    assert rolled_back.json()["events"][0]["rolled_back_by_name"] == "Supervisor"
+
+
+def test_daily_sequence_action_permissions_block_hidden_rollback(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(4, "Supervisor", "Supervisor Two")
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-17"))
+    assert created.status_code == 201, created.text
+    _set_action_event_created_date(session_factory, "2026-06-17")
+
+    _as_user(2, "Supervisor", "Supervisor")
+    hidden = client.get("/api/daily-sequence/actions", params={"date": "2026-06-17"})
+    assert hidden.status_code == 200
+    assert hidden.json()["events"] == []
+
+    _as_user(1, "Owner", "Owner")
+    owner_view = client.get("/api/daily-sequence/actions", params={"date": "2026-06-17"})
+    assert owner_view.status_code == 200
+    event = owner_view.json()["events"][0]
+    assert event["allowed_actions"]["can_rollback"] is True
+
+    _as_user(2, "Supervisor", "Supervisor")
+    blocked = client.post(
+        f"/api/daily-sequence/actions/{event['id']}/rollback",
+        json={"reason": "Trying hidden action"},
+    )
+    assert blocked.status_code == 403
+
+
+def test_daily_sequence_action_verify_marks_event_and_production_verified(mapped_production_client):
+    client, session_factory = mapped_production_client
+    _as_user(2, "Supervisor", "Supervisor")
+    created = client.post("/api/production/daily", json=_production_payload(date="2026-06-18"))
+    assert created.status_code == 201, created.text
+    _set_action_event_created_date(session_factory, "2026-06-18")
+
+    _as_user(1, "Owner", "Owner")
+    action_list = client.get("/api/daily-sequence/actions", params={"date": "2026-06-18"})
+    assert action_list.status_code == 200
+    event_id = action_list.json()["events"][0]["id"]
+    verified = client.post(f"/api/daily-sequence/actions/{event_id}/verify")
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["status"] == "verified"
+    assert verified.json()["verified_by_name"] == "Owner"
+
+    db = session_factory()
+    assert db.query(ActionEvent).filter_by(id=event_id).one().status == "verified"
+    assert db.query(DailyProduction).filter_by(id=created.json()["production_id"]).one().status == "verified"
     db.close()
 
 

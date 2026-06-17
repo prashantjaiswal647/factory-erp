@@ -3,10 +3,14 @@ import { AlertCircle, CalendarDays, History } from "lucide-react";
 import axios from "axios";
 
 import {
+  getDailySequenceActionEvents,
   getDailySequenceLogs,
   getProductionReviewEntries,
+  rollbackActionEvent,
   reverseProductionEntry,
+  verifyActionEvent,
   verifyProductionEntry,
+  type ActionEventReview,
   type ProductionReviewEntry,
 } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -72,9 +76,14 @@ export default function DailySequencePage() {
   const { user } = useAuth();
   const [selectedDate, setSelectedDate] = useState(todayInputValue);
   const [logs, setLogs] = useState<DailySequenceLogItem[]>([]);
+  const [actionEvents, setActionEvents] = useState<ActionEventReview[]>([]);
+  const [actionStatusFilter, setActionStatusFilter] = useState("active");
+  const [rollbackTarget, setRollbackTarget] = useState<ActionEventReview | null>(null);
+  const [rollbackReason, setRollbackReason] = useState("");
   const [productionEntries, setProductionEntries] = useState<ProductionReviewEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [productionError, setProductionError] = useState("");
 
   useEffect(() => {
@@ -82,20 +91,24 @@ export default function DailySequencePage() {
     async function loadLogs() {
       setIsLoading(true);
       setError("");
+      setActionError("");
       setProductionError("");
       try {
-        const [logData, productionData] = await Promise.all([
+        const [logData, actionData, productionData] = await Promise.all([
           getDailySequenceLogs(selectedDate),
+          getDailySequenceActionEvents(selectedDate, undefined, actionStatusFilter),
           getProductionReviewEntries(selectedDate),
         ]);
         if (active) {
           setLogs(logData);
+          setActionEvents(actionData.events);
           setProductionEntries(productionData.entries);
         }
       } catch (caught) {
         if (active) {
           setError(errorMessage(caught));
           setLogs([]);
+          setActionEvents([]);
           setProductionEntries([]);
         }
       } finally {
@@ -106,7 +119,37 @@ export default function DailySequencePage() {
     return () => {
       active = false;
     };
-  }, [selectedDate]);
+  }, [selectedDate, actionStatusFilter]);
+
+  async function refreshActionEvents() {
+    const data = await getDailySequenceActionEvents(selectedDate, undefined, actionStatusFilter);
+    setActionEvents(data.events);
+  }
+
+  async function handleActionVerify(eventId: number) {
+    setActionError("");
+    try {
+      await verifyActionEvent(eventId);
+      await refreshActionEvents();
+      await refreshProductionReview();
+    } catch (caught) {
+      setActionError(errorMessage(caught));
+    }
+  }
+
+  async function submitActionRollback() {
+    if (!rollbackTarget) return;
+    setActionError("");
+    try {
+      await rollbackActionEvent(rollbackTarget.id, rollbackReason);
+      setRollbackTarget(null);
+      setRollbackReason("");
+      await refreshActionEvents();
+      await refreshProductionReview();
+    } catch (caught) {
+      setActionError(errorMessage(caught));
+    }
+  }
 
   async function refreshProductionReview() {
     const data = await getProductionReviewEntries(selectedDate);
@@ -157,6 +200,115 @@ export default function DailySequencePage() {
           />
         </label>
       </header>
+
+      <section className="rounded-lg border border-zinc-150 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-bold text-zinc-900">Action Review & Rollback</h2>
+            <p className="text-xs text-zinc-500">Universal daily action cards. Phase 1 rollback is live for production entries.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {["active", "pending", "verified", "rolled_back", "all"].map((statusValue) => (
+              <button
+                key={statusValue}
+                type="button"
+                className={`rounded-full border px-3 py-1.5 text-xs font-bold capitalize ${
+                  actionStatusFilter === statusValue
+                    ? "border-purple-600 bg-purple-50 text-purple-700"
+                    : "border-zinc-200 bg-white text-zinc-600"
+                }`}
+                onClick={() => setActionStatusFilter(statusValue)}
+              >
+                {statusValue.replace("_", " ")}
+              </button>
+            ))}
+          </div>
+        </div>
+        {actionError ? (
+          <div className="mb-3 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{actionError}</div>
+        ) : null}
+        {!isLoading && actionEvents.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-500">No reviewable actions for this date.</p>
+        ) : null}
+        {actionEvents.length > 0 ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {actionEvents.map((event) => {
+              const impact = event.impact_summary_json || {};
+              const before = event.before_payload_json || {};
+              const after = event.after_payload_json || {};
+              return (
+                <article key={event.id} className="rounded-lg border border-zinc-100 bg-zinc-50/60 p-4 shadow-sm">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-purple-700">{event.module}</p>
+                      <h3 className="mt-1 text-sm font-bold text-zinc-950">{event.action_type.replace(/_/g, " ")}</h3>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        Entered by: {event.created_by_name || "Unknown"} ({event.created_by_role || "Unknown"})
+                      </p>
+                      <p className="text-xs text-zinc-400">{event.created_at ? new Date(event.created_at).toLocaleString() : ""}</p>
+                    </div>
+                    <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-bold capitalize text-zinc-700 ring-1 ring-zinc-200">
+                      {event.status.replace("_", " ")}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 text-xs text-zinc-600 sm:grid-cols-2">
+                    <div className="rounded-md bg-white p-3 ring-1 ring-zinc-100">
+                      <p className="font-bold text-zinc-900">Action Details</p>
+                      <p>Worker: {impact.worker_name || "-"}</p>
+                      <p>Machine: {impact.machine_name || "-"}</p>
+                      <p>Product: {impact.product_name || "-"}</p>
+                      <p>Packaging: {impact.packaging_size_name || "-"}</p>
+                      <p>Made: {impact.boxes_made ?? 0} boxes + {impact.loose_packets_made ?? 0} loose</p>
+                      <p>Raw used: {impact.blank_used_bora ?? 0} bora, {impact.bottom_used_rolls ?? 0} roll</p>
+                    </div>
+                    <div className="rounded-md bg-white p-3 ring-1 ring-zinc-100">
+                      <p className="font-bold text-zinc-900">Stock Impact</p>
+                      <p>Finished: {before.finished_goods?.boxes ?? "-"} to {after.finished_goods?.boxes ?? "-"} boxes</p>
+                      <p>Blank: {before.blank_stock?.total_boras ?? "-"} to {after.blank_stock?.total_boras ?? "-"} bora</p>
+                      <p>Bottom: {before.bottom_stock?.total_rolls ?? "-"} to {after.bottom_stock?.total_rolls ?? "-"} rolls</p>
+                      <p>Box: {before.box_stock?.total_boxes ?? "-"} to {after.box_stock?.total_boxes ?? "-"} cartons</p>
+                    </div>
+                  </div>
+
+                  {event.status === "rolled_back" ? (
+                    <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3 text-xs text-red-700">
+                      Rolled back by {event.rolled_back_by_name || "Unknown"} on {event.rolled_back_at ? new Date(event.rolled_back_at).toLocaleString() : "-"}.
+                      <br />Reason: {event.rollback_reason || "-"}
+                    </div>
+                  ) : null}
+                  {event.status === "verified" ? (
+                    <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-xs text-emerald-700">
+                      Verified by {event.verified_by_name || "Unknown"} on {event.verified_at ? new Date(event.verified_at).toLocaleString() : "-"}.
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {event.allowed_actions?.can_verify ? (
+                      <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white" type="button" onClick={() => void handleActionVerify(event.id)}>
+                        Confirm Correct
+                      </button>
+                    ) : null}
+                    {event.allowed_actions?.can_rollback ? (
+                      <button
+                        className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700"
+                        type="button"
+                        onClick={() => {
+                          setRollbackTarget(event);
+                          setRollbackReason("");
+                        }}
+                      >
+                        {user?.role === "Supervisor" ? "Reverse My Entry" : "Rollback Action"}
+                      </button>
+                    ) : null}
+                    <span className="rounded-md border border-zinc-200 px-3 py-1.5 text-xs font-bold text-zinc-600">View Audit</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
 
       <section className="rounded-lg border border-zinc-150 bg-white p-5 shadow-sm">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -287,6 +439,46 @@ export default function DailySequencePage() {
           </div>
         ) : null}
       </section>
+
+      {rollbackTarget ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-zinc-950/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+            <h2 className="text-base font-bold text-zinc-950">Confirm Rollback</h2>
+            <p className="mt-2 text-sm text-zinc-600">
+              This will reverse the stock impact for action #{rollbackTarget.id}. The original record is kept for audit.
+            </p>
+            <label className="mt-4 block text-xs font-bold text-zinc-700">
+              Reason
+              <textarea
+                className="mt-2 min-h-[100px] w-full rounded-md border border-zinc-200 p-3 text-sm font-normal outline-none focus:border-red-500"
+                value={rollbackReason}
+                onChange={(event) => setRollbackReason(event.target.value)}
+                placeholder="Explain why this action is being rolled back"
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-zinc-200 px-4 py-2 text-sm font-bold text-zinc-700"
+                onClick={() => {
+                  setRollbackTarget(null);
+                  setRollbackReason("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={rollbackReason.trim().length < 3}
+                onClick={() => void submitActionRollback()}
+              >
+                Rollback
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

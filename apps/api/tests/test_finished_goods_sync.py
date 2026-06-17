@@ -618,19 +618,83 @@ def test_auto_generated_finished_goods_cleanup_dry_run_and_remove(app_factory):
         packaging_size_name="55ml Plain White Cup",
         pieces_per_packet=50,
         packets_per_box_limit=20,
+        source="unknown",
     )
-    db.add_all([keep, orphan])
+    manual = FinalProductStock(
+        factory_id=1,
+        product_size_ml=65,
+        variety="Plain White Cup",
+        packaging_size_name="65ml Plain White Cup",
+        pieces_per_packet=50,
+        packets_per_box_limit=20,
+        source="manual",
+    )
+    db.add_all([keep, orphan, manual])
     db.commit()
 
     report = dry_run_auto_generated_finished_goods(db, factory_id=1)
-    assert [(row.variant_name, row.safe_to_remove) for row in report] == [
-        ("55ml Plain White Cup 55ml Plain White Cup", True)
-    ]
+    assert {(row.variant_name, row.source, row.safe_to_remove) for row in report} == {
+        ("55ml Plain White Cup 55ml Plain White Cup", "unknown", True),
+        ("65ml Plain White Cup 65ml Plain White Cup", "manual", False),
+    }
 
     remove_auto_generated_finished_goods(db, factory_id=1)
     db.commit()
+    db.refresh(orphan)
+    assert orphan.is_active is False
+    assert orphan.is_auto_created is True
+    assert orphan.archived_at is not None
+    rows = client.get("/api/inventory/final-stock").json()
+    assert [(row["product_size_ml"], row["variety"]) for row in rows] == [
+        (55, "Nescafe Cup"),
+        (65, "Plain White Cup"),
+    ]
+
+
+def test_inventory_api_hides_inactive_and_auto_created_variants(app_factory):
+    client, db = app_factory(factory_id=1)
+    seed_factory(db, 1)
+    db.add_all([
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=55,
+            variety="Nescafe Cup",
+            packaging_size_name="55ml Nescafe Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            source="onboarding",
+            is_active=True,
+            is_auto_created=False,
+        ),
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=65,
+            variety="Plain White Cup",
+            packaging_size_name="65ml Plain White Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            source="legacy_auto_generated",
+            is_active=False,
+            is_auto_created=True,
+        ),
+        FinalProductStock(
+            factory_id=1,
+            product_size_ml=100,
+            variety="White Cup",
+            packaging_size_name="100ml White Cup",
+            pieces_per_packet=50,
+            packets_per_box_limit=20,
+            source="legacy_auto_generated",
+            is_active=True,
+            is_auto_created=True,
+        ),
+    ])
+    db.commit()
+
     rows = client.get("/api/inventory/final-stock").json()
     assert [(row["product_size_ml"], row["variety"]) for row in rows] == [(55, "Nescafe Cup")]
+    live_rows = client.get("/api/inventory/").json()
+    assert all("plain white" not in str(row).lower() and "white cup" not in str(row).lower() for row in live_rows)
 
 
 def test_production_page_can_reuse_uploaded_variant(app_factory):

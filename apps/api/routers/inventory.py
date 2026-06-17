@@ -620,6 +620,8 @@ def list_live_stock(
             final_stock_items = (
                 db.query(FinalProductStock)
                 .filter(FinalProductStock.factory_id == factory_id)
+                .filter(FinalProductStock.is_active.is_(True))
+                .filter(FinalProductStock.is_auto_created.is_(False))
                 .order_by(FinalProductStock.product_size_ml.asc(), FinalProductStock.packaging_size_name.asc())
                 .all()
             )
@@ -841,6 +843,10 @@ def create_finished_good_variant(
             total_boxes=payload.opening_stock_boxes,
             loose_packets=payload.opening_stock_loose_packets,
             current_quantity=payload.opening_stock_boxes,
+            source="manual",
+            is_auto_created=False,
+            is_active=True,
+            archived_at=None,
         )
         db.add(stock)
         db.flush()
@@ -921,6 +927,8 @@ def export_finished_goods_snapshot(
         stocks = (
             db.query(FinalProductStock)
             .filter(FinalProductStock.factory_id == factory_id)
+            .filter(FinalProductStock.is_active.is_(True))
+            .filter(FinalProductStock.is_auto_created.is_(False))
             .order_by(
                 FinalProductStock.product_size_ml.asc(),
                 FinalProductStock.variety.asc(),
@@ -1160,6 +1168,10 @@ def save_final_stock(
                     packaging_size_name=packaging_size_name,
                     pieces_per_packet=payload.pieces_per_packet,
                     packets_per_box_limit=packets_per_box_limit,
+                    source="manual",
+                    is_auto_created=False,
+                    is_active=True,
+                    archived_at=None,
                 )
                 db.add(stock)
 
@@ -1242,7 +1254,9 @@ def list_final_stock(
     """
     try:
         query = db.query(FinalProductStock).filter(
-            FinalProductStock.factory_id == str(current_user.factory_id)
+            FinalProductStock.factory_id == str(current_user.factory_id),
+            FinalProductStock.is_active.is_(True),
+            FinalProductStock.is_auto_created.is_(False),
         )
         machine = None
         if machine_id is not None:
@@ -1485,6 +1499,10 @@ def onboard_finished_goods(
                     current_quantity=initial_quantity_boxes,
                     total_boxes=initial_quantity_boxes,
                     loose_packets=0,
+                    source="manual",
+                    is_auto_created=False,
+                    is_active=True,
+                    archived_at=None,
                 )
                 db.add(stock)
                 db.flush()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy import func, or_
@@ -24,9 +25,12 @@ AUTO_GENERATED_VARIANT_PATTERNS = (
 @dataclass(frozen=True)
 class FinishedGoodsCleanupRow:
     id: int
+    table_name: str
+    factory_id: str
     variant_name: str
     created_by: str
     source: str
+    created_at: str | None
     last_updated_at: str | None
     safe_to_remove: bool
 
@@ -72,17 +76,23 @@ def dry_run_auto_generated_finished_goods(
     report: list[FinishedGoodsCleanupRow] = []
     for row in rows:
         identity = _identity(row)
-        safe_to_remove = identity not in keep
+        source = getattr(row, "source", None) or "unknown"
+        is_auto_created = bool(getattr(row, "is_auto_created", False))
+        is_manual_or_onboarding = source in {"manual", "onboarding"}
+        safe_to_remove = identity not in keep and (is_auto_created or not is_manual_or_onboarding)
         report.append(
             FinishedGoodsCleanupRow(
                 id=int(row.id),
+                table_name="final_product_stock",
+                factory_id=str(row.factory_id),
                 variant_name=" ".join(
                     part
                     for part in (f"{row.product_size_ml}ml", row.variety, row.packaging_size_name)
                     if part
                 ),
                 created_by="unknown",
-                source="legacy_finished_goods_auto_sync_or_default_payload",
+                source=source,
+                created_at=row.created_at.isoformat() if getattr(row, "created_at", None) else None,
                 last_updated_at=row.updated_at.isoformat() if row.updated_at else None,
                 safe_to_remove=safe_to_remove,
             )
@@ -103,11 +113,18 @@ def remove_auto_generated_finished_goods(
     )
     removable_ids = [row.id for row in report if row.safe_to_remove]
     if removable_ids:
-        (
+        now = datetime.now(timezone.utc)
+        for row in (
             db.query(FinalProductStock)
             .filter(FinalProductStock.factory_id == str(factory_id))
             .filter(FinalProductStock.id.in_(removable_ids))
-            .delete(synchronize_session=False)
-        )
+            .all()
+        ):
+            row.is_active = False
+            row.archived_at = now
+            row.is_auto_created = True
+            if not row.source or row.source == "unknown":
+                row.source = "legacy_auto_generated"
+            db.add(row)
         db.flush()
     return report

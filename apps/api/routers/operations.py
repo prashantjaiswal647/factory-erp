@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from routers.payments import customer_phone, send_n8n_whatsapp_event
 from schemas import DailyProductionCreate, DailyProductionResponse, DailySaleCreate, DailySaleResponse
 from services.activity_logger import log_activity
+from services.action_event_service import create_action_event
 from services.carton_mapping import normalize_carton_type, parse_allowed_sizes
 from services.n8n_sync import sync_data_to_n8n_bg
 from services.telegram_action_alerts import (
@@ -716,6 +717,42 @@ def _create_daily_production(
             },
         }
         production.stock_after_json = stock_after_json
+
+        create_action_event(
+            db,
+            factory_id=int(factory_id),
+            action_type="PRODUCTION_ADDED",
+            module="production",
+            entity_type="daily_production",
+            entity_id=production.id,
+            created_by_user_id=current_user.id,
+            created_by_role=current_user.role,
+            shift=payload.shift,
+            before_payload_json=stock_before_json,
+            after_payload_json=stock_after_json,
+            impact_summary_json={
+                "worker_id": worker.id,
+                "worker_name": worker.name,
+                "machine_id": machine.id,
+                "machine_name": getattr(machine, "machine_name", None) or getattr(machine, "name", None) or f"Machine #{machine.id}",
+                "product_size_ml": int(product_size_ml),
+                "product_name": f"{product_size_ml}ml {variety}",
+                "packaging_size_name": packaging_size_name.strip(),
+                "boxes_made": int(payload.total_boxes_made or 0),
+                "loose_packets_made": int(payload.loose_packets_made or 0),
+                "boxes_from_loose": int(boxes_from_loose or 0),
+                "blank_used_bora": float(blank_used_bori),
+                "blank_used_kg": float(blank_used_kg),
+                "bottom_used_rolls": int(bottom_used_rolls or 0),
+                "bottom_used_kg": float(bottom_used_kg),
+                "finished_goods_before_boxes": int(total_boxes_before),
+                "finished_goods_after_boxes": int(live_boxes),
+                "blank_before_kg": float(stock_before_json["blank_stock"]["total_qty_kg"]),
+                "blank_after_kg": float(blank_after),
+                "bottom_before_kg": float(stock_before_json["bottom_stock"]["total_qty_kg"]),
+                "bottom_after_kg": float(bottom_after),
+            },
+        )
 
         total_boxes_completed = payload.total_boxes_made + boxes_from_loose
         wastage_percent = Decimal("0.00")

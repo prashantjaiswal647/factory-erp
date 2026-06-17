@@ -1677,6 +1677,10 @@ def sync_finished_goods_to_final_product_stock(
             current_quantity=stock.boxes_available or 0,
             total_boxes=stock.boxes_available or 0,
             loose_packets=0,
+            source="onboarding",
+            is_auto_created=False,
+            is_active=True,
+            archived_at=None,
         )
         db.add(final_stock)
         db.flush()
@@ -1688,6 +1692,10 @@ def sync_finished_goods_to_final_product_stock(
         final_stock.packets_per_box_limit = profile.polys_per_box or 1
         final_stock.current_quantity = stock.boxes_available or 0
         final_stock.total_boxes = stock.boxes_available or 0
+        final_stock.source = "onboarding"
+        final_stock.is_auto_created = False
+        final_stock.is_active = True
+        final_stock.archived_at = None
         db.flush()
         if fg_debug_info is not None:
             fg_debug_info["matched_existing_final_product_stock_ids"].append(final_stock.id)
@@ -3409,6 +3417,10 @@ def save_final_product_opening_stock(
                     current_quantity=0,
                     total_boxes=0,
                     loose_packets=0,
+                    source="manual",
+                    is_auto_created=False,
+                    is_active=True,
+                    archived_at=None,
                 )
                 db.add(stock)
 
